@@ -1,0 +1,53 @@
+{
+    "name": "c2c",
+    "version": "1.0.0",
+    "description": "C2C System - Invoice processing with OCR and vendor dues tracking",
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build",
+        "preview": "vite preview",
+        "server": "node --env-file=.env server/index.js",
+        "start": "concurrently \"npm run server\" \"npm run dev\"",
+        "test": "node --test server/tests/*.test.js"
+    },
+    "dependencies": {
+        "bcryptjs": "^2.4.3",
+        "chart.js": "^4.4.0",
+        "cors": "^2.8.5",
+        "date-fns": "^3.0.6",
+        "express": "^4.18.2",
+        "express-rate-limit": "^8.3.1",
+        "helmet": "^8.1.0",
+        "jsonwebtoken": "^9.0.2",
+        "jspdf": "^2.5.1",
+        "jspdf-autotable": "^3.7.1",
+        "lucide-react": "^0.562.0",
+        "multer": "^1.4.5-lts.1",
+        "nodemailer": "^7.0.12",
+        "pdf-parse": "^2.4.5",
+        "pdfjs-dist": "^3.11.174",
+        "pdfkit": "^0.17.2",
+        "qrcode": "^1.5.4",
+        "react": "^18.2.0",
+        "react-chartjs-2": "^5.2.0",
+        "react-dom": "^18.2.0",
+        "react-router-dom": "^6.20.0",
+        "sql.js": "^1.8.0",
+        "tesseract.js": "^5.1.1",
+        "uuid": "^13.0.0",
+        "xlsx": "^0.18.5",
+        "zod": "^4.3.6"
+    },
+    "devDependencies": {
+        "@types/react": "^18.2.43",
+        "@types/react-dom": "^18.2.17",
+        "@vitejs/plugin-react": "^4.7.0",
+        "autoprefixer": "^10.4.27",
+        "concurrently": "^8.2.2",
+        "postcss": "^8.5.8",
+        "supertest": "^7.2.2",
+        "tailwindcss": "^3.4.17",
+        "vite": "^5.4.21"
+    }
+}

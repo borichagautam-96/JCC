@@ -1,0 +1,273 @@
+.th-page-shell {
+  max-width: 1280px;
+}
+
+.th-header {
+  margin-bottom: 16px;
+}
+
+.th-empty-state {
+  min-height: 68vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #6b7280;
+}
+
+.th-empty-icon {
+  width: 46px;
+  height: 46px;
+  color: #6b7280;
+  margin-bottom: 10px;
+}
+
+.th-empty-title {
+  margin: 0;
+  font-size: 31px;
+  font-weight: 700;
+  color: #374151;
+}
+
+.th-empty-subtitle {
+  margin: 8px 0 0;
+  font-size: 20px;
+}
+
+.th-empty-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.th-empty-btn {
+  width: auto;
+  min-width: 160px;
+}
+
+.th-empty-btn-outline {
+  width: auto;
+  min-width: 180px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #111827;
+  font-weight: 700;
+  padding: 0.75rem 1rem;
+}
+
+.th-empty-btn-outline:hover:not(:disabled) {
+  background: #f9fafb;
+}
+
+.th-header h2 {
+  font-size: 42px;
+  line-height: 1.1;
+  margin: 0;
+  color: #0f172a;
+  font-weight: 800;
+}
+
+.th-unsorted-card {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.th-left-panel,
+.th-right-panel {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+}
+
+.th-dropzone {
+  border: 2px dashed #c7d2e1;
+  border-radius: 14px;
+  padding: var(--spacing-2xl);
+  text-align: center;
+  cursor: pointer;
+  transition: all var(--transition-base);
+  background: #f8fafc;
+}
+
+.th-dropzone:hover {
+  border-color: #94a3b8;
+  background: #f1f5f9;
+}
+
+.th-file-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.th-add-files-btn {
+  width: auto;
+  min-width: 132px;
+  margin-top: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #334155;
+  padding: 0.45rem 0.85rem;
+  font-weight: 700;
+  font-size: 0.92rem;
+  cursor: pointer;
+}
+
+.th-add-files-btn:hover {
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+
+.th-files-count {
+  color: #4b5563;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.th-file-list {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.th-file-item-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.th-file-item {
+  flex: 1;
+  text-align: left;
+  border: 1px solid #dbe3ee;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #0f172a;
+  padding: 0.65rem 0.75rem;
+  font-weight: 600;
+}
+
+.th-file-item:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.th-file-item-active {
+  border: 1px solid #2563eb;
+  border-radius: 10px;
+  background: #eff6ff;
+  padding: 2px;
+}
+
+.th-file-item-active .th-file-item {
+  border-color: transparent;
+  background: transparent;
+}
+
+.th-file-delete-btn {
+  width: auto;
+  border: 1px solid #fecaca;
+  background: #fff1f2;
+  color: #b91c1c;
+  border-radius: 8px;
+  padding: 0.45rem 0.65rem;
+  font-weight: 700;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.th-file-delete-btn:hover {
+  background: #ffe4e6;
+  border-color: #fda4af;
+}
+
+.th-btn {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: none;
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 1rem;
+  transition: opacity 0.2s ease;
+}
+
+.th-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.th-btn-dark {
+  margin-top: 0.75rem;
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.th-btn-accent {
+  margin-top: 1rem;
+  background: #b91c1c;
+  color: #ffffff;
+}
+
+.th-btn-accent:hover:not(:disabled) {
+  background: #991b1b;
+}
+
+.th-btn-dark:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.th-analyze-form {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 16px;
+}
+
+.th-items-box {
+  background: rgba(37, 99, 235, 0.06);
+  border: 1px solid rgba(37, 99, 235, 0.24);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+@media (max-width: 1024px) {
+  .th-unsorted-card {
+    grid-template-columns: 1fr;
+  }
+
+  .th-header h2 {
+    font-size: 32px;
+  }
+
+  .th-empty-actions {
+    flex-direction: column;
+    width: 100%;
+    max-width: 280px;
+  }
+
+  .th-empty-btn,
+  .th-empty-btn-outline {
+    width: 100%;
+  }
+
+  .th-file-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .th-add-files-btn {
+    width: 100%;
+  }
+}

@@ -1,0 +1,19 @@
+services:
+  c2c:
+    image: c2c:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: c2c
+    restart: unless-stopped
+    ports:
+      - "8033:8033"
+    env_file:
+      - .env
+    volumes:
+      - jcc_data:/app/data
+      - jcc_uploads:/app/uploads
+
+volumes:
+  jcc_data:
+  jcc_uploads:

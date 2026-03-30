@@ -1,0 +1,11 @@
+Customer Code,Customer Name,Contact Person,Email,Phone,Address,City,State,Pincode,GST Number,PAN Number
+CUST001,Larsen & Toubro Limited,Rajesh Kumar,rajesh.kumar@lntsystems.com,9876543210,"123 Industrial Area, Sector 5",Mumbai,Maharashtra,400001,27AAAAA0000A1Z5,AAAAA0000A
+CUST002,Tata Consultancy Services,Priya Sharma,priya.sharma@tcs.com,9876543211,"456 Tech Park, Phase 2",Pune,Maharashtra,411001,27BBBBB1111B2Z6,BBBBB1111B
+CUST003,Reliance Industries Ltd,Amit Patel,amit.patel@ril.com,9876543212,"789 Corporate Tower, Andheri East",Mumbai,Maharashtra,400069,27CCCCC2222C3Z7,CCCCC2222C
+CUST004,Infosys Technologies,Sneha Reddy,sneha.reddy@infosys.com,9876543213,"Electronics City, Phase 1",Bangalore,Karnataka,560100,29DDDDD3333D4Z8,DDDDD3333D
+CUST005,Wipro Limited,Vikram Singh,vikram.singh@wipro.com,9876543214,"Sarjapur Road, Bellandur",Bangalore,Karnataka,560103,29EEEEE4444E5Z9,EEEEE4444E
+CUST006,Hindustan Unilever Ltd,Anjali Mehta,anjali.mehta@hul.com,9876543215,Andheri Link Road,Mumbai,Maharashtra,400053,27FFFFF5555F6Z0,FFFFF5555F
+CUST007,HDFC Bank Limited,Deepak Joshi,deepak.joshi@hdfcbank.com,9876543216,"Lower Parel, Mumbai Central",Mumbai,Maharashtra,400013,27GGGGG6666G7Z1,GGGGG6666G
+CUST008,Bharti Airtel Limited,Kavita Nair,kavita.nair@airtel.com,9876543217,"Airtel Center, Manesar",Gurugram,Haryana,122051,06HHHHH7777H8Z2,HHHHH7777H
+CUST009,Mahindra & Mahindra Ltd,Rohit Desai,rohit.desai@mahindra.com,9876543218,"Gateway Building, Apollo Bunder",Mumbai,Maharashtra,400001,27IIIII8888I9Z3,IIIII8888I
+CUST010,Asian Paints Limited,Meera Iyer,meera.iyer@asianpaints.com,9876543219,Santacruz East,Mumbai,Maharashtra,400055,27JJJJJ9999J0Z4,JJJJJ9999J
