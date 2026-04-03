@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 
 const AssignedInvoicesPage = () => {
     const { user, getToken } = useAuth();
+    const isAdmin = String(user?.role || '').toLowerCase() === 'admin';
     const navigate = useNavigate();
     const location = useLocation();
     const [assignedInvoices, setAssignedInvoices] = useState([]);
@@ -75,15 +76,27 @@ const AssignedInvoicesPage = () => {
 
     const fetchAssignedInvoices = async () => {
         try {
-            const response = await fetch('/api/invoices/assigned?scope=dashboard', {
+            setError('');
+            const response = await fetch('/api/invoices/assigned', {
                 headers: { 'Authorization': `Bearer ${getToken()}`, 'X-Device-ID': getDeviceId() }
             });
             if (response.ok) {
                 const data = await response.json();
                 setAssignedInvoices(data);
+            } else {
+                let message = 'Failed to load assigned invoices';
+                try {
+                    const errorData = await response.json();
+                    message = errorData?.error || message;
+                } catch {
+                    // Keep fallback message when backend response is not JSON.
+                }
+                setAssignedInvoices([]);
+                setError(message);
             }
         } catch (error) {
             console.error('Error fetching assigned invoices', error);
+            setAssignedInvoices([]);
             setError('Failed to load assigned invoices');
         } finally {
             setLoading(false);
@@ -225,6 +238,8 @@ const AssignedInvoicesPage = () => {
                                 <th>PO Number</th>
                                 <th>Amount</th>
                                 <th>Time Assigned</th>
+                                <th>Assigned By</th>
+                                {isAdmin && <th>Assigned To</th>}
                                 <th>Accepted Status</th>
                                 <th>Action</th>
                             </tr>
@@ -232,8 +247,8 @@ const AssignedInvoicesPage = () => {
                         <tbody>
                             {assignedInvoices.length === 0 ? (
                                 <tr>
-                                    <td colSpan="5" className="text-center" style={{ color: '#64748B', padding: '1.5rem' }}>
-                                        No assigned invoices found. Assign an invoice to see lifecycle tracking here.
+                                    <td colSpan={isAdmin ? 7 : 6} className="text-center" style={{ color: '#64748B', padding: '1.5rem' }}>
+                                        No assigned invoices found.
                                     </td>
                                 </tr>
                             ) : assignedInvoices.map((invoice) => {
@@ -247,6 +262,8 @@ const AssignedInvoicesPage = () => {
                                             <td>{invoice.po_number || '-'}</td>
                                             <td>₹{Number.parseFloat(invoice.amount || 0).toLocaleString()}</td>
                                             <td>{formatDateTime(invoice.assigned_at || invoice.created_at)}</td>
+                                            <td>{invoice.assigned_by_name || invoice.uploader_name || '-'}</td>
+                                            {isAdmin && <td>{invoice.assigned_to_name || invoice.assigned_to || '-'}</td>}
                                             <td>
                                                 <span className={`status-badge ${invoice.accepted_at ? 'status-approved' : 'status-pending'}`}>
                                                     {acceptedStatus}
@@ -303,7 +320,11 @@ const AssignedInvoicesPage = () => {
                 <div className="page-header">
                     <div>
                         <h1 className="page-title">Assigned Invoices</h1>
-                        <p className="page-subtitle">Track invoices assigned to you and invoices assigned by you</p>
+                        <p className="page-subtitle">
+                            {isAdmin
+                                ? 'Track all assigned invoices and assignees'
+                                : 'Track invoices assigned to you and who assigned them'}
+                        </p>
                     </div>
                 </div>
 

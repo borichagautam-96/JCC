@@ -13,6 +13,8 @@ const LoginPage = () => {
 
     const { login } = useAuth();
     const navigate = useNavigate();
+    const loginThemeRaw = String(import.meta.env.VITE_LOGIN_THEME || 'corporate').toLowerCase();
+    const loginTheme = ['corporate', 'dark', 'colorful'].includes(loginThemeRaw) ? loginThemeRaw : 'corporate';
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -20,7 +22,6 @@ const LoginPage = () => {
         setLoading(true);
 
         try {
-            // Login with PS number (sent as email to backend for compatibility)
             const user = await login(formData.psNumber, formData.password);
 
             // Check if password change is required
@@ -42,81 +43,59 @@ const LoginPage = () => {
     };
 
     return (
-        <div style={{
-            minHeight: '100vh',
-            display: 'flex',
-            flexDirection: 'column',
-            background: '#F5F5F5'
-        }}>
-            {/* Main content - centered login form */}
-            <div className="flex items-center justify-center" style={{ flex: 1, padding: 'var(--spacing-lg)' }}>
-                <div style={{ maxWidth: '450px', width: '100%', background: 'white', borderRadius: 'var(--radius-lg)', padding: 'var(--spacing-2xl)', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
+        <div className={`jcc-login-shell jcc-login-theme-${loginTheme}`}>
+            <div className="jcc-login-ambient jcc-login-ambient-one" aria-hidden="true"></div>
+            <div className="jcc-login-ambient jcc-login-ambient-two" aria-hidden="true"></div>
+            <div className="jcc-login-grid" aria-hidden="true"></div>
+
+            <div className="jcc-login-main">
+                <div className="jcc-login-card">
                     <div className="text-center mb-xl">
-                        <h1 style={{
-                            color: '#0066CC',
-                            marginBottom: 'var(--spacing-sm)',
-                            fontSize: '2rem'
-                        }}>
-                            C2C
+                        <div className="jcc-login-mark">
+                            <img src="/infloai-mark.svg" alt="InFloAI logo" className="jcc-login-logo-img" />
+                        </div>
+                        <h1 className="jcc-login-title">
+                            InFloAI
                         </h1>
-                        <p style={{ color: '#666', fontSize: '0.95rem' }}>Login with your PS Number and Password</p>
+                        <p className="jcc-login-subtitle">Sign in with username, email, or PS Number</p>
                     </div>
 
                     {error && (
-                        <div style={{
-                            padding: '1rem',
-                            background: 'rgba(239, 68, 68, 0.1)',
-                            border: '1px solid #EF4444',
-                            borderRadius: 'var(--radius-md)',
-                            marginBottom: 'var(--spacing-lg)',
-                            color: '#EF4444'
-                        }}>
+                        <div className="jcc-login-error">
                             {error}
                         </div>
                     )}
 
                     <form onSubmit={handleSubmit}>
                         <div className="input-group">
-                            <label style={{ display: 'block', marginBottom: 'var(--spacing-sm)', color: '#0066CC', fontWeight: 500, fontSize: '0.875rem' }}>
-                                PS Number *
+                            <label className="jcc-login-label" htmlFor="jcc-ps-number">
+                                Username / Email / PS Number *
                             </label>
-                            <input
-                                type="text"
-                                name="psNumber"
-                                style={{
-                                    width: '100%',
-                                    padding: '0.75rem 1rem',
-                                    background: 'white',
-                                    border: '1px solid #CCCCCC',
-                                    borderRadius: 'var(--radius-md)',
-                                    color: '#333333',
-                                    fontSize: '1rem'
-                                }}
-                                placeholder="Enter your PS Number"
-                                value={formData.psNumber}
-                                onChange={handleChange}
-                                required
-                            />
+                            <div className="jcc-login-input-wrap">
+                                <input
+                                    id="jcc-ps-number"
+                                    type="text"
+                                    name="psNumber"
+                                    className="input-field jcc-login-input"
+                                    placeholder="Enter username, email, or PS Number"
+                                    value={formData.psNumber}
+                                    onChange={handleChange}
+                                    required
+                                />
+                            </div>
                         </div>
 
                         <div className="input-group">
-                            <label style={{ display: 'block', marginBottom: 'var(--spacing-sm)', color: '#0066CC', fontWeight: 500, fontSize: '0.875rem' }}>
+                            <label className="jcc-login-label" htmlFor="jcc-password">
                                 Password *
                             </label>
-                            <div style={{ position: 'relative' }}>
+                            <div className="jcc-login-input-wrap" style={{ position: 'relative' }}>
                                 <input
+                                    id="jcc-password"
                                     type={showPassword ? 'text' : 'password'}
                                     name="password"
-                                    style={{
-                                        width: '100%',
-                                        padding: '0.75rem 3rem 0.75rem 1rem',
-                                        background: 'white',
-                                        border: '1px solid #CCCCCC',
-                                        borderRadius: 'var(--radius-md)',
-                                        color: '#333333',
-                                        fontSize: '1rem',
-                                        boxSizing: 'border-box'
-                                    }}
+                                    className="input-field jcc-login-input"
+                                    style={{ paddingRight: '3rem' }}
                                     placeholder="••••••••"
                                     value={formData.password}
                                     onChange={handleChange}
@@ -125,19 +104,7 @@ const LoginPage = () => {
                                 <button
                                     type="button"
                                     onClick={() => setShowPassword(!showPassword)}
-                                    style={{
-                                        position: 'absolute',
-                                        right: '0.75rem',
-                                        top: '50%',
-                                        transform: 'translateY(-50%)',
-                                        background: 'none',
-                                        border: 'none',
-                                        cursor: 'pointer',
-                                        color: '#888',
-                                        padding: '0',
-                                        display: 'flex',
-                                        alignItems: 'center'
-                                    }}
+                                    className="jcc-login-eye-btn"
                                     tabIndex={-1}
                                     title={showPassword ? 'Hide password' : 'Show password'}
                                 >
@@ -157,24 +124,14 @@ const LoginPage = () => {
                             </div>
                         </div>
 
+                        <div className="jcc-login-helper-row">
+                            <span>Secure enterprise login</span>
+                        </div>
+
                         <button
                             type="submit"
-                            style={{
-                                width: '100%',
-                                marginTop: 'var(--spacing-md)',
-                                padding: '0.875rem',
-                                background: '#0078D4',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: 'var(--radius-md)',
-                                fontSize: '1rem',
-                                fontWeight: 600,
-                                cursor: 'pointer',
-                                transition: 'background 0.2s'
-                            }}
+                            className="jcc-login-submit"
                             disabled={loading}
-                            onMouseOver={(e) => e.target.style.background = '#0066CC'}
-                            onMouseOut={(e) => e.target.style.background = '#0078D4'}
                         >
                             {loading ? (
                                 <div className="flex items-center justify-center gap-sm">
@@ -189,29 +146,6 @@ const LoginPage = () => {
                 </div>
             </div>
 
-            {/* Footer */}
-            <footer style={{
-                padding: '1rem 2rem',
-                background: 'rgba(255,255,255,0.95)',
-                borderTop: '1px solid #E0E0E0',
-                textAlign: 'center'
-            }}>
-                <p style={{
-                    margin: 0,
-                    fontSize: '0.875rem',
-                    color: '#64748b',
-                    fontWeight: '500',
-                    letterSpacing: '0.025em'
-                }}>
-                    <span style={{ color: '#94a3b8' }}>©</span>{' '}
-                    <span style={{
-                        color: '#0066CC',
-                        fontWeight: '600'
-                    }}>
-                        Developed by Development Team
-                    </span>
-                </p>
-            </footer>
         </div>
     );
 };

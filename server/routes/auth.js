@@ -10,6 +10,7 @@ import { env } from '../config/env.js';
 import { getIntSetting } from '../utils/appSettings.js';
 import { buildSessionConfig } from '../utils/sessionConfig.js';
 import { logUserActivity } from '../utils/activityLogger.js';
+import { authenticateWithLdap } from '../utils/ldapAuth.js';
 import { loginSchema, registerSchema } from '../validation/authSchemas.js';
 
 const router = express.Router();
@@ -70,11 +71,262 @@ const logLoginFailure = ({ user, statusCode, reason, metadata = {}, deviceId, ip
 };
 
 const findUserByIdentifier = (identifier) => {
-    let user = db.prepare('SELECT * FROM users WHERE ps_number = ?').get(identifier);
-    if (!user) {
-        user = db.prepare('SELECT * FROM users WHERE email = ?').get(identifier);
+    const normalized = normalizeIdentifier(identifier);
+
+    if (!normalized) {
+        return null;
     }
+
+    // Allow sign-in with PS number, full email, or email username (before @).
+    return db.prepare(`
+        SELECT *
+        FROM users
+        WHERE ps_number = ?
+           OR lower(email) = lower(?)
+           OR (
+                instr(email, '@') > 1
+                AND lower(substr(email, 1, instr(email, '@') - 1)) = lower(?)
+           )
+        LIMIT 1
+    `).get(normalized, normalized, normalized);
+};
+
+const canUseLocalDbLogin = (user) => Boolean(user) && env.ldapAllowLocalDbLogin;
+
+const normalizeIdentifier = (identifier) => String(identifier || '').trim();
+
+const normalizeOptionalEmail = (email) => {
+    if (typeof email !== 'string') {
+        return '';
+    }
+    const normalized = email.trim().toLowerCase();
+    return normalized || '';
+};
+
+const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+
+const upsertLdapUser = ({ psNumber, profile }) => {
+    const normalizedPsNumber = normalizeIdentifier(psNumber);
+    const fullName = String(profile?.fullName || normalizedPsNumber).trim() || normalizedPsNumber;
+    const ldapEmail = normalizeOptionalEmail(profile?.email);
+
+    if (!ldapEmail) {
+        return {
+            user: null,
+            errorCode: 'LDAP_EMAIL_MISSING',
+            errorMessage: 'LDAP email attribute (mail) is missing. Please update the LDAP profile with a valid email.',
+        };
+    }
+
+    if (!isValidEmail(ldapEmail)) {
+        return {
+            user: null,
+            errorCode: 'LDAP_EMAIL_INVALID',
+            errorMessage: 'LDAP email attribute is invalid. Please update the LDAP profile with a valid email.',
+        };
+    }
+
+    let user = db.prepare('SELECT * FROM users WHERE ps_number = ?').get(normalizedPsNumber);
+    if (!user) {
+        user = db.prepare('SELECT * FROM users WHERE email = ?').get(ldapEmail);
+    }
+
+    if (!user) {
+        if (!env.ldapAutoProvisionUsers) {
+            return {
+                user: null,
+                errorCode: 'USER_NOT_PROVISIONED',
+                errorMessage: 'User is not provisioned for this application.',
+            };
+        }
+
+        const emailConflict = db.prepare('SELECT id FROM users WHERE email = ?').get(ldapEmail);
+        if (emailConflict) {
+            return {
+                user: null,
+                errorCode: 'LDAP_EMAIL_CONFLICT',
+                errorMessage: 'LDAP email is already linked to another account. Contact administrator.',
+            };
+        }
+
+        const placeholderPassword = bcrypt.hashSync(`ldap:${uuidv4()}`, 10);
+
+        const result = db.prepare(`
+            INSERT INTO users (ps_number, name, email, password, role, must_change_password)
+            VALUES (?, ?, ?, ?, ?, 0)
+        `).run(normalizedPsNumber, fullName, ldapEmail, placeholderPassword, env.ldapDefaultRole);
+
+        return {
+            user: db.prepare('SELECT * FROM users WHERE id = ?').get(result.lastInsertRowid),
+            errorCode: null,
+            errorMessage: null,
+        };
+    }
+
+    const emailConflict = db.prepare('SELECT id FROM users WHERE email = ? AND id != ?').get(ldapEmail, user.id);
+    if (emailConflict) {
+        return {
+            user: null,
+            errorCode: 'LDAP_EMAIL_CONFLICT',
+            errorMessage: 'LDAP email is already linked to another account. Contact administrator.',
+        };
+    }
+
+    const persistedPsNumber = user.ps_number || normalizedPsNumber;
+
+    db.prepare(`
+        UPDATE users
+        SET ps_number = ?,
+            name = ?,
+            email = ?,
+            must_change_password = 0
+        WHERE id = ?
+    `).run(persistedPsNumber, fullName, ldapEmail, user.id);
+
+    return {
+        user: db.prepare('SELECT * FROM users WHERE id = ?').get(user.id),
+        errorCode: null,
+        errorMessage: null,
+    };
+};
+
+const getLdapProvisioningStatusCode = (errorCode) => {
+    if (errorCode === 'USER_NOT_PROVISIONED') {
+        return 403;
+    }
+    if (errorCode === 'LDAP_EMAIL_CONFLICT') {
+        return 409;
+    }
+    return 422;
+};
+
+const handleLdapProvisioningFailure = ({ errorCode, errorMessage, identifier, deviceId, ipAddress, userAgent, res }) => {
+    const statusCode = getLdapProvisioningStatusCode(errorCode);
+
+    logLoginFailure({
+        statusCode,
+        reason: String(errorCode || 'ldap_user_upsert_failed').toLowerCase(),
+        metadata: { identifier, errorCode },
+        deviceId,
+        ipAddress,
+        userAgent,
+    });
+
+    res.status(statusCode).json({
+        error: errorMessage || 'Unable to sync LDAP profile.',
+        code: errorCode || 'LDAP_USER_UPSERT_FAILED',
+    });
+
+    return null;
+};
+
+const authenticateWithLocalPassword = ({ user, password, identifier, deviceId, ipAddress, userAgent, res }) => {
+    if (!user) {
+        logLoginFailure({ statusCode: 400, reason: 'user_not_found', metadata: { identifier }, deviceId, ipAddress, userAgent });
+        res.status(400).json({ error: 'Invalid credentials' });
+        return null;
+    }
+
+    if (!enforceAccountLockPolicy({ user, deviceId, ipAddress, userAgent, identifier, res })) {
+        return null;
+    }
+
+    const validPassword = bcrypt.compareSync(password, user.password);
+    if (!validPassword) {
+        handleInvalidPassword({ user, identifier, deviceId, ipAddress, userAgent, res });
+        return null;
+    }
+
     return user;
+};
+
+const authenticateWithLdapMode = async ({ identifier, password, user, deviceId, ipAddress, userAgent, res }) => {
+    if (user && !enforceAccountLockPolicy({ user, deviceId, ipAddress, userAgent, identifier, res })) {
+        return null;
+    }
+
+    const ldapResult = await authenticateWithLdap({
+        username: identifier,
+        password,
+    });
+
+    if (ldapResult.authenticated) {
+        const { user: ldapUser, errorCode, errorMessage } = upsertLdapUser({ psNumber: identifier, profile: ldapResult.profile });
+        if (!ldapUser) {
+            return handleLdapProvisioningFailure({
+                errorCode,
+                errorMessage,
+                identifier,
+                deviceId,
+                ipAddress,
+                userAgent,
+                res,
+            });
+        }
+
+        return ldapUser;
+    }
+
+    if (ldapResult.errorCode === 'USER_NOT_FOUND') {
+        if (canUseLocalDbLogin(user)) {
+            return authenticateWithLocalPassword({ user, password, identifier, deviceId, ipAddress, userAgent, res });
+        }
+
+        logLoginFailure({
+            statusCode: 400,
+            reason: 'ldap_user_not_found',
+            metadata: { identifier },
+            deviceId,
+            ipAddress,
+            userAgent,
+        });
+
+        res.status(400).json({ error: 'Invalid credentials' });
+        return null;
+    }
+
+    if (ldapResult.errorCode === 'INVALID_CREDENTIALS') {
+        if (canUseLocalDbLogin(user)) {
+            return authenticateWithLocalPassword({ user, password, identifier, deviceId, ipAddress, userAgent, res });
+        }
+
+        logLoginFailure({
+            statusCode: 400,
+            reason: 'ldap_invalid_credentials',
+            metadata: { identifier },
+            deviceId,
+            ipAddress,
+            userAgent,
+        });
+
+        res.status(400).json({ error: 'Invalid credentials' });
+        return null;
+    }
+
+    if (canUseLocalDbLogin(user) && env.ldapAllowLocalFallback) {
+        return authenticateWithLocalPassword({ user, password, identifier, deviceId, ipAddress, userAgent, res });
+    }
+
+    logLoginFailure({
+        user,
+        statusCode: 503,
+        reason: 'ldap_unavailable',
+        metadata: {
+            identifier,
+            ldapErrorCode: ldapResult.errorCode,
+            ldapMessage: ldapResult.message,
+        },
+        deviceId,
+        ipAddress,
+        userAgent,
+    });
+
+    res.status(503).json({
+        error: 'LDAP authentication is currently unavailable. Please try again later.',
+        code: 'LDAP_UNAVAILABLE',
+    });
+
+    return null;
 };
 
 const enforceAccountLockPolicy = ({ user, deviceId, ipAddress, userAgent, identifier, res }) => {
@@ -274,18 +526,18 @@ router.post('/register', authLimiter, validateRequest(registerSchema), (req, res
 });
 
 // Login with Device Binding + Single Session enforcement
-router.post('/login', loginLimiter, validateRequest(loginSchema), (req, res) => {
+router.post('/login', loginLimiter, validateRequest(loginSchema), async (req, res) => {
     try {
-        const { email, psNumber, ps_number, password } = req.body;
+        const { identifier: rawIdentifier, psNumber, ps_number, password } = req.body;
         const sessionConfig = getSessionConfig();
-        const identifier = email || psNumber || ps_number;
+        const identifier = normalizeIdentifier(rawIdentifier || psNumber || ps_number);
         const deviceId = req.headers['x-device-id'];
         const userAgent = req.headers['user-agent'] || '';
         const ipAddress = req.ip || req.connection?.remoteAddress || '';
 
         if (!identifier) {
             logLoginFailure({ statusCode: 400, reason: 'missing_identifier', deviceId, ipAddress, userAgent });
-            return res.status(400).json({ error: 'Email or PS Number is required' });
+            return res.status(400).json({ error: 'Username, email, or PS Number is required' });
         }
 
         if (!deviceId) {
@@ -293,23 +545,34 @@ router.post('/login', loginLimiter, validateRequest(loginSchema), (req, res) => 
             return res.status(400).json({ error: 'Device identification is required. Please clear your cache and try again.' });
         }
 
-        const user = findUserByIdentifier(identifier);
+        let user = findUserByIdentifier(identifier);
 
         console.log('Login attempt for:', identifier, '| Device:', deviceId?.substring(0, 8) + '...');
 
+        if (env.ldapEnabled) {
+            user = await authenticateWithLdapMode({
+                identifier,
+                password,
+                user,
+                deviceId,
+                ipAddress,
+                userAgent,
+                res,
+            });
+
+            if (!user) {
+                return;
+            }
+        } else {
+            user = authenticateWithLocalPassword({ user, password, identifier, deviceId, ipAddress, userAgent, res });
+            if (!user) {
+                return;
+            }
+        }
+
         if (!user) {
-            logLoginFailure({ statusCode: 400, reason: 'user_not_found', metadata: { identifier }, deviceId, ipAddress, userAgent });
+            logLoginFailure({ statusCode: 400, reason: 'user_not_found_post_auth', metadata: { identifier }, deviceId, ipAddress, userAgent });
             return res.status(400).json({ error: 'Invalid credentials' });
-        }
-
-        if (!enforceAccountLockPolicy({ user, deviceId, ipAddress, userAgent, identifier, res })) {
-            return;
-        }
-
-        const validPassword = bcrypt.compareSync(password, user.password);
-        if (!validPassword) {
-            handleInvalidPassword({ user, identifier, deviceId, ipAddress, userAgent, res });
-            return;
         }
 
         if (Number(user.failed_login_attempts || 0) > 0 || user.locked_until) {

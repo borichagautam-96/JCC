@@ -27,7 +27,9 @@ const execFileAsync = promisify(execFile);
 const ALLOWED_UPLOAD_TYPES = {
     'application/pdf': ['.pdf'],
     'image/jpeg': ['.jpg', '.jpeg'],
+    'image/jpg': ['.jpg', '.jpeg'],
     'image/png': ['.png'],
+    'application/octet-stream': ['.pdf', '.jpg', '.jpeg', '.png'],
 };
 
 const OLLAMA_BASE_URL = (process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
@@ -207,13 +209,16 @@ const upload = multer({
     limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
     fileFilter: (req, file, cb) => {
         const extname = path.extname(file.originalname).toLowerCase();
-        const allowedExts = ALLOWED_UPLOAD_TYPES[file.mimetype];
+        const mime = String(file.mimetype || '').toLowerCase();
+        const allowedExtsByMime = ALLOWED_UPLOAD_TYPES[mime];
+        const allowedByExtension = ['.pdf', '.jpg', '.jpeg', '.png'].includes(extname);
+        const allowedByMimeAndExtension = Array.isArray(allowedExtsByMime) && allowedExtsByMime.includes(extname);
 
-        if (Array.isArray(allowedExts) && allowedExts.includes(extname)) {
+        if (allowedByMimeAndExtension || allowedByExtension) {
             return cb(null, true);
         }
 
-        cb(new Error('Only PDF, JPG, JPEG, and PNG files are allowed with valid MIME type'));
+        cb(new Error('Only PDF, JPG, JPEG, and PNG files are allowed'));
     },
 });
 
@@ -404,30 +409,20 @@ router.post('/extract-ai', authenticateToken, uploadLimiter, upload.single('invo
 // Get assigned invoices for current user
 router.get('/assigned', authenticateToken, validateRequest(assignedInvoicesSchema), (req, res) => {
     try {
-                const scope = req.query.scope || 'assigned';
-                let invoices;
+        const isAdmin = String(req.user.role || '').toLowerCase() === 'admin';
 
-                if (scope === 'dashboard') {
-                        // Dashboard: assignee can see own assigned items; assigner can track items they assigned.
-                        invoices = db.prepare(`
+        const invoices = isAdmin
+            ? db.prepare(`
                 SELECT i.*, u.name as uploader_name
                 FROM invoices i
-                JOIN users u ON i.user_id = u.id
+                LEFT JOIN users u ON i.user_id = u.id
                 WHERE i.status IN ('assigned', 'pending', 'voucher_created')
-                AND (
-                    i.user_id = ?
-                    OR i.assigned_to_user_id = ?
-                    OR i.assigned_to = ?
-                    OR i.assigned_to = ?
-                )
                 ORDER BY COALESCE(i.assigned_at, i.created_at) DESC
-            `).all(req.user.id, req.user.id, req.user.ps_number || '', req.user.name || '');
-                } else {
-                        // Assigned Invoices page: only assignee should see the record.
-                        invoices = db.prepare(`
+            `).all()
+            : db.prepare(`
                 SELECT i.*, u.name as uploader_name
                 FROM invoices i
-                JOIN users u ON i.user_id = u.id
+                LEFT JOIN users u ON i.user_id = u.id
                 WHERE i.status IN ('assigned', 'pending', 'voucher_created')
                 AND (
                     i.assigned_to_user_id = ?
@@ -436,7 +431,6 @@ router.get('/assigned', authenticateToken, validateRequest(assignedInvoicesSchem
                 )
                 ORDER BY COALESCE(i.assigned_at, i.created_at) DESC
             `).all(req.user.id, req.user.ps_number || '', req.user.name || '');
-                }
 
         res.json(invoices);
     } catch (error) {
@@ -505,10 +499,9 @@ router.get('/:id/history', authenticateToken, validateRequest(invoiceIdSchema), 
         }
 
         const isAssignedUser = invoice.assigned_to_user_id === req.user.id || invoice.assigned_to === req.user.ps_number || invoice.assigned_to === req.user.name;
-        const isUploader = invoice.user_id === req.user.id;
-        const isPrivileged = ['admin', 'coordinator', 'manager', 'final_approver'].includes(req.user.role);
+        const isAdmin = String(req.user.role || '').toLowerCase() === 'admin';
 
-        if (!isAssignedUser && !isUploader && !isPrivileged) {
+        if (!isAssignedUser && !isAdmin) {
             return res.status(403).json({ error: 'Not authorized to view this history' });
         }
 
@@ -560,10 +553,19 @@ router.get('/pending', authenticateToken, (req, res) => {
 // Get invoice file
 router.get('/file/:id', authenticateToken, validateRequest(invoiceIdSchema), (req, res) => {
     try {
-        const invoice = db.prepare('SELECT file_path FROM invoices WHERE id = ?').get(req.params.id);
+        const invoice = db.prepare('SELECT file_path, assigned_to_user_id, assigned_to FROM invoices WHERE id = ?').get(req.params.id);
 
         if (!invoice?.file_path) {
             return res.status(404).json({ error: 'File not found' });
+        }
+
+        const isAssignedUser = invoice.assigned_to_user_id === req.user.id
+            || invoice.assigned_to === req.user.ps_number
+            || invoice.assigned_to === req.user.name;
+        const isAdmin = String(req.user.role || '').toLowerCase() === 'admin';
+
+        if (!isAssignedUser && !isAdmin) {
+            return res.status(403).json({ error: 'Not authorized to view this file' });
         }
 
         const filePath = path.join(__dirname, '../../uploads', invoice.file_path);
@@ -588,6 +590,26 @@ router.post('/:id/reject', authenticateToken, validateRequest(invoiceIdSchema), 
         console.error('Error rejecting invoice:', error);
         res.status(500).json({ error: 'Failed to reject invoice' });
     }
+});
+
+// Ensure upload-related errors return JSON the frontend can display.
+router.use((err, req, res, next) => {
+    if (!err) {
+        return next();
+    }
+
+    if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(400).json({ error: 'File is too large. Maximum size is 10MB.' });
+        }
+        return res.status(400).json({ error: err.message || 'Upload failed' });
+    }
+
+    if (err.message) {
+        return res.status(400).json({ error: err.message });
+    }
+
+    return next(err);
 });
 
 export default router;

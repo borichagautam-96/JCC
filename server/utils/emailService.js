@@ -120,8 +120,8 @@ const emailWrapper = (body) => `
     <div style="font-family: Arial, sans-serif; max-width: 650px; margin: 0 auto; color: #333; font-size: 14px; line-height: 1.6;">
         ${body}
         <div style="margin-top: 30px; padding-top: 14px; border-top: 1px solid #E0E0E0;">
-            <p style="color: #888; font-size: 12px; margin: 0;">This is an automated email from the C2C System. Please do not reply to this email.</p>
-            <p style="color: #888; font-size: 12px; margin: 4px 0 0 0;">&copy; ${new Date().getFullYear()} L&amp;T &mdash; C2C JCC Automation System</p>
+            <p style="color: #888; font-size: 12px; margin: 0;">This is an automated email from the InFloAI System. Please do not reply to this email.</p>
+            <p style="color: #888; font-size: 12px; margin: 4px 0 0 0;">&copy; ${new Date().getFullYear()} L&amp;T &mdash; InFloAI JCC Automation System</p>
         </div>
     </div>
 `;
@@ -224,11 +224,12 @@ const emailTemplates = {
     }),
 
     // Sent to Initiator and Manager after final approval
-    jccFinalApprovedNotice: (voucher) => ({
-        subject: `${voucher.voucherRequestId} has been successfully approved`,
+    jccFinalApprovedNotice: (voucher, finalApprover) => ({
+        subject: `${voucher.voucherRequestId} has been successfully approved by ${finalApprover?.name || voucher.approver2Name || 'Final Approver'}`,
         html: emailWrapper(`
             <p>
-                <strong>${voucher.voucherRequestId}</strong> has been successfully approved.<br/>
+                <strong>${voucher.voucherRequestId}</strong> has been successfully approved by
+                <strong>${finalApprover?.name || voucher.approver2Name || 'Final Approver'}</strong>.<br/>
                 Please follow the link to view: <a href="${getJccLink(voucher)}" style="color: #0066CC;">${getJccDisplayId(voucher)}</a>
             </p>
             <p>Its details are as follows:</p>
@@ -329,7 +330,7 @@ export const sendEmail = async (to, templateFn, templateArgs, meta = {}) => {
         const emailContent = templateFn(...templateArgs);
 
         const mailOptions = {
-            from: `"C2C System" <${SENDER_ADDRESS}>`,
+            from: `"InFloAI System" <${SENDER_ADDRESS}>`,
             to,
             subject: emailContent.subject,
             html: emailContent.html
@@ -379,9 +380,6 @@ export const notifyVoucherCreated = async (voucher, creator, approver1, approver
     if (approver1?.email) {
         results.push(await sendEmail(approver1.email, emailTemplates.jccCreatedApprover1, [voucher, creator], { ...meta, templateName: 'jccCreatedApprover1' }));
     }
-    if (approver2?.email && approver2.email !== approver1?.email) {
-        results.push(await sendEmail(approver2.email, emailTemplates.jccCreatedFinalApprover, [voucher, creator], { ...meta, templateName: 'jccCreatedFinalApprover' }));
-    }
 
     return results;
 };
@@ -393,10 +391,10 @@ export const notifyVoucherApproved = async (voucher, approver, creator, level, m
 
     if (level === 'Final Approver') {
         if (creator?.email) {
-            results.push(await sendEmail(creator.email, emailTemplates.jccFinalApprovedNotice, [voucher], { ...meta, templateName: 'jccFinalApprovedNotice' }));
+            results.push(await sendEmail(creator.email, emailTemplates.jccFinalApprovedNotice, [voucher, approver], { ...meta, templateName: 'jccFinalApprovedNotice' }));
         }
         if (manager?.email && manager.email !== creator?.email) {
-            results.push(await sendEmail(manager.email, emailTemplates.jccFinalApprovedNotice, [voucher], { ...meta, templateName: 'jccFinalApprovedNotice' }));
+            results.push(await sendEmail(manager.email, emailTemplates.jccFinalApprovedNotice, [voucher, approver], { ...meta, templateName: 'jccFinalApprovedNotice' }));
         }
     } else if (creator?.email) {
         results.push(await sendEmail(creator.email, emailTemplates.jccApprovedCreator, [voucher, approver, level], { ...meta, templateName: 'jccApprovedCreator' }));

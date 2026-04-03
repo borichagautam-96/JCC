@@ -51,6 +51,8 @@ COPY uploads ./uploads
 # Copy nginx configuration
 COPY nginx.conf /etc/nginx/nginx.conf
 
+COPY .env /app/.env
+
 # Copy startup script
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh

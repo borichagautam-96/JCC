@@ -343,9 +343,58 @@ const initDatabase = async () => {
       address TEXT,
       contact_number TEXT,
       mail_id TEXT,
+      bp_id TEXT,
+      bp_name TEXT,
+      city TEXT,
+      country TEXT,
+      nda_date TEXT,
+      nda_expiry_date TEXT,
+      nda_period_year TEXT,
+      project_name TEXT,
+      signed_hard_copy_depository_location TEXT,
+      signed_hard_copy_depository_location_fp TEXT,
+      item_type TEXT,
+      vendor_path TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  // Migration: Add vendor NDA columns if they don't exist
+  try {
+    const vendorInfoResult = db.exec("PRAGMA table_info(vendors)");
+    const vendorColumns = vendorInfoResult.length > 0 ? vendorInfoResult[0].values : [];
+    const vendorColumnNames = new Set(vendorColumns.map(col => col[1]));
+
+    const vendorColumnsToAdd = [
+      { name: 'bp_id', type: 'TEXT' },
+      { name: 'bp_name', type: 'TEXT' },
+      { name: 'city', type: 'TEXT' },
+      { name: 'country', type: 'TEXT' },
+      { name: 'nda_date', type: 'TEXT' },
+      { name: 'nda_expiry_date', type: 'TEXT' },
+      { name: 'nda_period_year', type: 'TEXT' },
+      { name: 'project_name', type: 'TEXT' },
+      { name: 'signed_hard_copy_depository_location', type: 'TEXT' },
+      { name: 'signed_hard_copy_depository_location_fp', type: 'TEXT' },
+      { name: 'item_type', type: 'TEXT' },
+      { name: 'vendor_path', type: 'TEXT' }
+    ];
+
+    let didAddVendorColumn = false;
+    vendorColumnsToAdd.forEach(col => {
+      if (!vendorColumnNames.has(col.name)) {
+        db.exec(`ALTER TABLE vendors ADD COLUMN ${col.name} ${col.type}`);
+        didAddVendorColumn = true;
+        console.log(`\u2713 Added ${col.name} column to vendors table`);
+      }
+    });
+
+    if (didAddVendorColumn) {
+      saveDatabase();
+    }
+  } catch (error) {
+    console.error('Error adding vendor NDA columns:', error);
+  }
 
   // Seed vendor master list (idempotent by vendor name)
   try {

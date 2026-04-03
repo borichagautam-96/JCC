@@ -75,7 +75,7 @@ app.use('/api/assets', assetRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', message: 'C2C Server is running' });
+    res.json({ status: 'ok', message: 'InFloAI Server is running' });
 });
 
 // Ensure unmatched API routes return JSON instead of SPA HTML
@@ -96,7 +96,7 @@ app.use((err, req, res, next) => {
 
 // Start server
 app.listen(PORT, () => {
-    console.log('\n🚀 C2C Server');
+    console.log('\n🚀 InFloAI Server');
     console.log(`📡 Server running on http://localhost:${PORT}`);
     console.log(`💾 Database initialized`);
     console.log(`\n✅ Ready to accept connections\n`);

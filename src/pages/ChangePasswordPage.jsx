@@ -17,6 +17,7 @@ const ChangePasswordPage = () => {
     const [showCurrentPw, setShowCurrentPw] = useState(false);
     const [showNewPw, setShowNewPw] = useState(false);
     const [showConfirmPw, setShowConfirmPw] = useState(false);
+    const passwordPolicyRegex = /^(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
 
     const EyeIcon = ({ show, onToggle }) => (
         <button
@@ -64,8 +65,8 @@ const ChangePasswordPage = () => {
             return;
         }
 
-        if (formData.newPassword.length < 6) {
-            setError('New password must be at least 6 characters');
+        if (!passwordPolicyRegex.test(formData.newPassword)) {
+            setError('Password must be at least 8 characters and include at least one number and one special character');
             return;
         }
 
@@ -265,7 +266,7 @@ const ChangePasswordPage = () => {
                                 className="input-field"
                                 value={formData.newPassword}
                                 onChange={(e) => setFormData({ ...formData, newPassword: e.target.value })}
-                                placeholder="Enter new password (min 6 characters)"
+                                placeholder="Enter new password (min 8 chars, 1 number, 1 special char)"
                                 required
                                 style={{
                                     backgroundColor: '#FFFFFF',
@@ -277,7 +278,7 @@ const ChangePasswordPage = () => {
                                     width: '100%',
                                     boxSizing: 'border-box'
                                 }}
-                                minLength={6}
+                                minLength={8}
                                 disabled={loading}
                             />
                             <EyeIcon show={showNewPw} onToggle={() => setShowNewPw(!showNewPw)} />
@@ -304,7 +305,7 @@ const ChangePasswordPage = () => {
                                     width: '100%',
                                     boxSizing: 'border-box'
                                 }}
-                                minLength={6}
+                                minLength={8}
                                 disabled={loading}
                             />
                             <EyeIcon show={showConfirmPw} onToggle={() => setShowConfirmPw(!showConfirmPw)} />
@@ -332,7 +333,9 @@ const ChangePasswordPage = () => {
                         Password Requirements:
                     </h3>
                     <ul style={{ margin: 0, paddingLeft: '1.25rem', fontSize: '0.875rem', color: '#6B7280' }}>
-                        <li>At least 6 characters long</li>
+                        <li>At least 8 characters long</li>
+                        <li>Must include at least one number</li>
+                        <li>Must include at least one special character</li>
                         <li>Must match in both new password fields</li>
                     </ul>
                 </div>

@@ -14,6 +14,8 @@ const normalizeRoleList = (input, fallback = []) => {
 };
 
 const router = express.Router();
+const PASSWORD_POLICY_REGEX = /^(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
+const PASSWORD_POLICY_MESSAGE = 'New password must be at least 8 characters and include at least one number and one special character';
 
 const getTableColumnSet = (tableName) => {
     try {
@@ -513,8 +515,8 @@ router.post('/change-password', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'Current and new passwords are required' });
         }
 
-        if (newPassword.length < 6) {
-            return res.status(400).json({ error: 'New password must be at least 6 characters' });
+        if (!PASSWORD_POLICY_REGEX.test(String(newPassword || ''))) {
+            return res.status(400).json({ error: PASSWORD_POLICY_MESSAGE });
         }
 
         // Get current user
@@ -557,8 +559,8 @@ router.post('/admin-reset-password', authenticateToken, authorizeRoles(['admin']
             return res.status(400).json({ error: 'PS number and new password are required' });
         }
 
-        if (newPassword.length < 6) {
-            return res.status(400).json({ error: 'New password must be at least 6 characters' });
+        if (!PASSWORD_POLICY_REGEX.test(String(newPassword || ''))) {
+            return res.status(400).json({ error: PASSWORD_POLICY_MESSAGE });
         }
 
         // Find user by PS number

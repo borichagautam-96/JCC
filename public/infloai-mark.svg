@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">InFloAI Logo Mark</title>
+  <desc id="desc">Rounded square cyan icon with a white upward chevron.</desc>
+  <defs>
+    <linearGradient id="bg" x1="8%" y1="8%" x2="92%" y2="92%">
+      <stop offset="0%" stop-color="#19b7bb" />
+      <stop offset="100%" stop-color="#2f8fd2" />
+    </linearGradient>
+  </defs>
+
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#bg)" />
+  <path d="M21 37l11-11 11 11" fill="none" stroke="#f4fbff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" />
+</svg>

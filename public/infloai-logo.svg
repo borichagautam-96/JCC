@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 220" role="img" aria-labelledby="title desc">
+  <title id="title">InFloAI Logo</title>
+  <desc id="desc">InFloAI wordmark with the new rounded cyan icon.</desc>
+  <defs>
+    <linearGradient id="bg" x1="8%" y1="8%" x2="92%" y2="92%">
+      <stop offset="0%" stop-color="#19b7bb" />
+      <stop offset="100%" stop-color="#2f8fd2" />
+    </linearGradient>
+    <linearGradient id="ai" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1f9cc6" />
+      <stop offset="100%" stop-color="#2f8fd2" />
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(24 24)">
+    <rect x="0" y="0" width="172" height="172" rx="38" fill="url(#bg)" />
+    <path d="M54 99l32-32 32 32" fill="none" stroke="#f4fbff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+
+  <text x="232" y="112" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="94" font-weight="800" fill="#0f172a" letter-spacing="-1">
+    InFlo
+  </text>
+  <text x="516" y="112" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="94" font-weight="900" fill="url(#ai)" letter-spacing="-1">
+    AI
+  </text>
+
+  <text x="234" y="154" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="600" fill="#465b7a">
+    Smart invoice and workflow automation
+  </text>
+</svg>

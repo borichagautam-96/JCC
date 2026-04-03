@@ -204,41 +204,6 @@ const VoucherRequestPage = () => {
         fetchData();
     }, [getToken]);
 
-    // Load extracted invoice data from localStorage (if any)
-    useEffect(() => {
-        const savedData = localStorage.getItem('extractedInvoiceData');
-
-        if (savedData && !extractedData.vendor_name) {
-            try {
-                const invoiceData = JSON.parse(savedData);
-
-                // Only use data if it's less than 1 hour old
-                const hourInMs = 60 * 60 * 1000;
-                if (Date.now() - invoiceData.timestamp < hourInMs) {
-                    setFormData(prev => ({
-                        ...prev,
-                        supplier: invoiceData.supplier || prev.supplier,
-                        invoiceNumber: invoiceData.invoiceNumber || prev.invoiceNumber,
-                        basicAmount: invoiceData.basicAmount || prev.basicAmount,
-                        invoiceDate: invoiceData.invoiceDate || prev.invoiceDate,
-                        poNumber: invoiceData.poNumber || prev.poNumber
-                    }));
-
-                    setSuccess('✅ Invoice data auto-filled from upload!');
-                    setTimeout(() => setSuccess(''), 5000);
-
-                    // Clear the saved data after loading
-                    localStorage.removeItem('extractedInvoiceData');
-                } else {
-                    localStorage.removeItem('extractedInvoiceData');
-                }
-            } catch (error) {
-                console.error('Error loading invoice data:', error);
-                localStorage.removeItem('extractedInvoiceData');
-            }
-        }
-    }, [extractedData]);
-
     const supplierOptions = (() => {
         const merged = [...getVendorNames(), ...poSuppliers];
         const options = [...new Set(merged.filter(Boolean))].sort((a, b) => a.localeCompare(b));
@@ -311,13 +276,6 @@ const VoucherRequestPage = () => {
             const materialsJson = JSON.stringify(effectiveMaterials);
             formDataToSend.append('materialsPayload', materialsJson);
             formDataToSend.append('materialsPayloadB64', btoa(materialsJson));
-
-            // Also append indexed fields for robust multipart parsing across environments.
-            effectiveMaterials.forEach((item, index) => {
-                formDataToSend.append(`materials[${index}][amount]`, item.amount ?? '');
-                formDataToSend.append(`materials[${index}][projectCode]`, item.projectCode ?? '');
-                formDataToSend.append(`materials[${index}][projectName]`, item.projectName ?? '');
-            });
 
             // Append invoice ID if this voucher is being created from an assigned invoice
             console.log('=== DEBUG: extractedData ===', extractedData);

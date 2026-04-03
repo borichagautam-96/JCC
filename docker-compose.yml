@@ -17,3 +17,4 @@ services:
 volumes:
   jcc_data:
   jcc_uploads:
+  

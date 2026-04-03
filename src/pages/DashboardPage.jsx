@@ -21,6 +21,7 @@ const DashboardPage = () => {
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState('all');
     const { getToken, user } = useAuth(); // Get user for role check
+    const isAdmin = String(user?.role || '').toLowerCase() === 'admin';
     const navigate = useNavigate(); // For navigation
     const canViewAssignedInvoices = user?.role !== 'manager' && user?.role !== 'final_approver';
 
@@ -64,7 +65,7 @@ const DashboardPage = () => {
 
     const fetchAssignedInvoices = async () => {
         try {
-            const response = await fetch('/api/invoices/assigned?scope=dashboard', {
+            const response = await fetch('/api/invoices/assigned', {
                 headers: { 'Authorization': `Bearer ${getToken()}`, 'X-Device-ID': getDeviceId() }
             });
             if (response.ok) {
@@ -403,7 +404,9 @@ const DashboardPage = () => {
                 {/* Assigned Invoices Section */}
                 {canViewAssignedInvoices && assignedInvoices.length > 0 && (
                     <div className="glass-card" style={{ marginBottom: 'var(--spacing-xl)' }}>
-                        <h3 style={{ margin: 0, marginBottom: 'var(--spacing-lg)', color: '#0f172a' }}>Invoices Assigned to You</h3>
+                        <h3 style={{ margin: 0, marginBottom: 'var(--spacing-lg)', color: '#0f172a' }}>
+                            {isAdmin ? 'All Assigned Invoices' : 'Invoices Assigned to You'}
+                        </h3>
 
                         <div className="table-container">
                             <table className="table">
@@ -414,6 +417,8 @@ const DashboardPage = () => {
                                         <th>Vendor</th>
                                         <th>Amount</th>
                                         <th>Date</th>
+                                        <th>Assigned By</th>
+                                        {isAdmin && <th>Assigned To</th>}
                                         <th style={{ textAlign: 'center', width: '240px' }}>Action</th>
                                     </tr>
                                 </thead>
@@ -425,6 +430,8 @@ const DashboardPage = () => {
                                             <td>{invoice.vendor_name}</td>
                                             <td>₹{invoice.amount?.toLocaleString()}</td>
                                             <td>{new Date(invoice.invoice_date).toLocaleDateString()}</td>
+                                            <td>{invoice.assigned_by_name || invoice.uploader_name || '-'}</td>
+                                            {isAdmin && <td>{invoice.assigned_to_name || invoice.assigned_to || '-'}</td>}
                                             <td style={{ width: '240px', minWidth: '240px', verticalAlign: 'middle', textAlign: 'center', paddingRight: '1.25rem' }}>
                                                 {isAssignedToCurrentUser(invoice) ? (
                                                     <div style={actionGroupStyle}>

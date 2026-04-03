@@ -24,17 +24,17 @@ export const registerSchema = z.object({
 export const loginSchema = z.object({
     body: z
         .object({
-            email: optionalTrimmedString,
+            identifier: optionalTrimmedString,
             psNumber: optionalTrimmedString,
             ps_number: optionalTrimmedString,
             password: requiredPassword,
         })
         .superRefine((value, ctx) => {
-            if (!value.email && !value.psNumber && !value.ps_number) {
+            if (!value.identifier && !value.psNumber && !value.ps_number) {
                 ctx.addIssue({
                     code: z.ZodIssueCode.custom,
-                    message: 'Email or PS Number is required',
-                    path: ['email'],
+                    message: 'Username, email, or PS Number is required',
+                    path: ['identifier'],
                 });
             }
         }),

@@ -17,10 +17,11 @@ import {
     KeyRound,
     Activity,
     LogOut,
-    ChevronLeft,
 } from 'lucide-react';
 
-const Navbar = ({ isOpen, toggleSidebar }) => {
+const SHOW_ADMIN_LOGS = import.meta.env.VITE_SHOW_ADMIN_LOGS === 'true';
+
+const Navbar = ({ isOpen }) => {
     const { user, logout } = useAuth();
     const navigate = useNavigate();
     const location = useLocation();
@@ -33,28 +34,25 @@ const Navbar = ({ isOpen, toggleSidebar }) => {
     const isActive = (path) => location.pathname === path;
 
     const navClass = (active) =>
-        `group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
-            active
-                ? 'bg-blue-50 text-blue-700 ring-1 ring-blue-100'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+        `group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${active
+            ? 'bg-blue-50 text-blue-700'
+            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
         }`;
 
     return (
         <aside
-            className={`fixed left-0 top-0 z-40 flex h-screen w-72 flex-col border-r border-slate-200 bg-white transition-transform duration-300 ${
-                isOpen ? 'translate-x-0' : '-translate-x-full'
-            }`}
+            className={`fixed left-0 top-0 z-40 flex h-screen w-72 flex-col border-r border-slate-200 bg-white transition-transform duration-300 ${isOpen ? 'translate-x-0' : '-translate-x-full'
+                }`}
         >
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-                <h2 className="m-0 text-xl font-semibold tracking-tight text-slate-900">C2C</h2>
-                <button
-                    type="button"
-                    onClick={toggleSidebar}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-100"
-                    aria-label="Collapse sidebar"
-                >
-                    <ChevronLeft size={16} />
-                </button>
+
+            <div className="flex-column items-center justify-between border-b border-slate-200 px-5 pt-4">
+                <div className='flex items-center justify-between'>
+                    <div className="flex items-center gap-3">
+                        <img src="/infloai-mark.svg" alt="InFloAI logo" className="h-9 w-9 rounded-xl" />
+                        <h2 className="m-0 text-xl font-semibold tracking-tight text-slate-900">InFloAI</h2>
+                    </div>
+                </div>
+                <h2 className="mt-3 text-xs font-semibold tracking-tight text-blue-600">Developed by Development Team(D&T)</h2>
             </div>
 
             <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
@@ -146,10 +144,12 @@ const Navbar = ({ isOpen, toggleSidebar }) => {
                             <span>User Management</span>
                         </Link>
 
-                        <Link to="/admin-logs" className={navClass(isActive('/admin-logs'))}>
-                            <Activity size={18} />
-                            <span>Admin Logs</span>
-                        </Link>
+                        {SHOW_ADMIN_LOGS && (
+                            <Link to="/admin-logs" className={navClass(isActive('/admin-logs'))}>
+                                <Activity size={18} />
+                                <span>Admin Logs</span>
+                            </Link>
+                        )}
                     </>
                 )}
             </nav>

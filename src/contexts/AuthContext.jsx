@@ -118,7 +118,7 @@ export const AuthProvider = ({ children }) => {
         setLoading(false);
     }, []);
 
-    const login = async (email, password) => {
+    const login = async (identifier, password) => {
         try {
             const deviceId = getOrCreateDeviceId();
 
@@ -128,7 +128,11 @@ export const AuthProvider = ({ children }) => {
                     'Content-Type': 'application/json',
                     'X-Device-ID': deviceId,
                 },
-                body: JSON.stringify({ email, password }),
+                body: JSON.stringify({
+                    identifier,
+                    psNumber: identifier,
+                    password,
+                }),
             });
 
             const data = await parseResponseSafely(response);

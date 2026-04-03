@@ -7,7 +7,7 @@ const VendorUploadPage = () => {
     const [files, setFiles] = useState([]);
     const [activeFileIndex, setActiveFileIndex] = useState(0);
     const [preview, setPreview] = useState(null);
-    const [extractedData, setExtractedData] = useState(null);
+    const [fileExtractedDataMap, setFileExtractedDataMap] = useState({});
     const [aiAnalyzing, setAiAnalyzing] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [success, setSuccess] = useState('');
@@ -19,15 +19,6 @@ const VendorUploadPage = () => {
     const { getToken } = useAuth();
     const [users, setUsers] = useState([]); // Restore missing state
     const activeFile = files[activeFileIndex] || null;
-
-    const uploadVendorOptions = useMemo(() => {
-        const base = getVendorNames(extractedData?.vendorName || '');
-        const merged = [...new Set([...base, ...supplierOptions].filter(Boolean))].sort((a, b) => a.localeCompare(b));
-        if (extractedData?.vendorName && !merged.includes(extractedData.vendorName)) {
-            return [extractedData.vendorName, ...merged];
-        }
-        return merged;
-    }, [extractedData?.vendorName, supplierOptions]);
 
     const createEmptyExtractedData = () => ({
         vendorName: '',
@@ -41,6 +32,51 @@ const VendorUploadPage = () => {
         assignedTo: '',
     });
 
+    const getFileKey = (file) => {
+        if (!file) return null;
+        return `${file.name}-${file.size}-${file.lastModified}`;
+    };
+
+    const activeFileKey = getFileKey(activeFile);
+    const extractedData = activeFileKey ? (fileExtractedDataMap[activeFileKey] || createEmptyExtractedData()) : null;
+
+    const setExtractedData = (updater) => {
+        if (!activeFileKey) return;
+
+        setFileExtractedDataMap((prev) => {
+            const current = prev[activeFileKey] || createEmptyExtractedData();
+            const nextValue = typeof updater === 'function' ? updater(current) : updater;
+            return {
+                ...prev,
+                [activeFileKey]: nextValue,
+            };
+        });
+    };
+
+    const ensureExtractedDataEntries = (fileList) => {
+        if (!Array.isArray(fileList) || fileList.length === 0) return;
+
+        setFileExtractedDataMap((prevMap) => {
+            const nextMap = { ...prevMap };
+            for (const file of fileList) {
+                const key = getFileKey(file);
+                if (key && !nextMap[key]) {
+                    nextMap[key] = createEmptyExtractedData();
+                }
+            }
+            return nextMap;
+        });
+    };
+
+    const uploadVendorOptions = useMemo(() => {
+        const base = getVendorNames(extractedData?.vendorName || '');
+        const merged = [...new Set([...base, ...supplierOptions].filter(Boolean))].sort((a, b) => a.localeCompare(b));
+        if (extractedData?.vendorName && !merged.includes(extractedData.vendorName)) {
+            return [extractedData.vendorName, ...merged];
+        }
+        return merged;
+    }, [extractedData?.vendorName, supplierOptions]);
+
     const handleVendorSelection = (value) => {
         setExtractedData({ ...extractedData, vendorName: value });
     };
@@ -49,20 +85,36 @@ const VendorUploadPage = () => {
         const incomingFiles = Array.from(incomingFileList || []).filter(Boolean);
         if (incomingFiles.length === 0) return;
 
-        const allowedFiles = incomingFiles.filter((f) => f.type === 'application/pdf' || f.type.startsWith('image/'));
+        const isSupportedUploadFile = (file) => {
+            const type = String(file?.type || '').toLowerCase();
+            const name = String(file?.name || '').toLowerCase();
+
+            if (type === 'application/pdf' || type === 'image/png' || type === 'image/jpeg' || type === 'image/jpg') {
+                return true;
+            }
+
+            return name.endsWith('.pdf') || name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg');
+        };
+
+        const allowedFiles = incomingFiles.filter(isSupportedUploadFile);
         if (allowedFiles.length === 0) {
             setError('Only PDF, JPG and PNG files are supported.');
             return;
         }
 
+        let duplicateCount = 0;
+
         setFiles((prev) => {
             const existingKeys = new Set(prev.map((f) => `${f.name}-${f.size}-${f.lastModified}`));
             const deduped = allowedFiles.filter((f) => !existingKeys.has(`${f.name}-${f.size}-${f.lastModified}`));
+            duplicateCount = allowedFiles.length - deduped.length;
             const next = [...prev, ...deduped];
 
-            if (prev.length === 0 && next.length > 0) {
-                setActiveFileIndex(0);
-                setExtractedData(createEmptyExtractedData());
+            ensureExtractedDataEntries(deduped);
+
+            if (deduped.length > 0) {
+                // Open the latest newly added file so its own extracted-data form is shown immediately.
+                setActiveFileIndex(next.length - 1);
             }
 
             return next;
@@ -70,12 +122,14 @@ const VendorUploadPage = () => {
 
         setError('');
         setSuccess('');
+        if (duplicateCount > 0) {
+            setSuccess(`${duplicateCount} duplicate file(s) skipped. Added remaining new file(s).`);
+        }
         if (fileInputRef.current) fileInputRef.current.value = '';
     };
 
     const selectFile = (index) => {
         setActiveFileIndex(index);
-        setExtractedData(createEmptyExtractedData());
         setError('');
         setSuccess('');
     };
@@ -84,19 +138,28 @@ const VendorUploadPage = () => {
         setFiles((prev) => {
             if (indexToRemove < 0 || indexToRemove >= prev.length) return prev;
 
+            const removedFile = prev[indexToRemove];
+            const removedFileKey = getFileKey(removedFile);
+
+            if (removedFileKey) {
+                setFileExtractedDataMap((prevMap) => {
+                    const nextMap = { ...prevMap };
+                    delete nextMap[removedFileKey];
+                    return nextMap;
+                });
+            }
+
             const next = prev.filter((_, idx) => idx !== indexToRemove);
 
             if (next.length === 0) {
                 setActiveFileIndex(0);
                 setPreview(null);
-                setExtractedData(null);
                 return next;
             }
 
             if (indexToRemove === activeFileIndex) {
                 const nextIndex = Math.min(indexToRemove, next.length - 1);
                 setActiveFileIndex(nextIndex);
-                setExtractedData(createEmptyExtractedData());
             } else if (indexToRemove < activeFileIndex) {
                 setActiveFileIndex((prevIndex) => Math.max(prevIndex - 1, 0));
             }
@@ -153,20 +216,6 @@ const VendorUploadPage = () => {
 
         fetchSupplierOptions();
     }, []); // Run once on mount
-
-    // Auto-save extracted data to localStorage whenever it changes
-    useEffect(() => {
-        if (extractedData && (extractedData.vendorName || extractedData.invoiceNumber || extractedData.amount)) {
-            localStorage.setItem('extractedInvoiceData', JSON.stringify({
-                supplier: extractedData.vendorName || '',
-                invoiceNumber: extractedData.invoiceNumber || '',
-                basicAmount: extractedData.amount || '',
-                invoiceDate: extractedData.date || '',
-                poNumber: extractedData.poNumber || '',
-                timestamp: Date.now()
-            }));
-        }
-    }, [extractedData]);
 
     const handleFileSelect = (e) => {
         appendSelectedFiles(e.target.files);
@@ -261,18 +310,6 @@ const VendorUploadPage = () => {
         setError('');
         setSuccess('');
 
-        // Save extracted data to localStorage before submitting
-        if (extractedData) {
-            localStorage.setItem('extractedInvoiceData', JSON.stringify({
-                supplier: extractedData.vendorName || '',
-                invoiceNumber: extractedData.invoiceNumber || '',
-                basicAmount: extractedData.amount || '',
-                invoiceDate: extractedData.date || '',
-                poNumber: extractedData.poNumber || '',
-                timestamp: Date.now()
-            }));
-        }
-
         const formData = new FormData();
         formData.append('invoice', activeFile);
         formData.append('vendorName', extractedData.vendorName);
@@ -297,15 +334,24 @@ const VendorUploadPage = () => {
                 setSuccess(`✅ ${result.message} The user can now see this invoice in their "Assigned Invoices" page.`);
 
                 setFiles((prev) => {
+                    const removedFile = prev[activeFileIndex];
+                    const removedFileKey = getFileKey(removedFile);
+
+                    if (removedFileKey) {
+                        setFileExtractedDataMap((prevMap) => {
+                            const nextMap = { ...prevMap };
+                            delete nextMap[removedFileKey];
+                            return nextMap;
+                        });
+                    }
+
                     const next = prev.filter((_, idx) => idx !== activeFileIndex);
                     if (next.length === 0) {
                         setActiveFileIndex(0);
                         setPreview(null);
-                        setExtractedData(null);
                     } else {
                         const nextIndex = Math.min(activeFileIndex, next.length - 1);
                         setActiveFileIndex(nextIndex);
-                        setExtractedData(createEmptyExtractedData());
                     }
                     return next;
                 });
@@ -350,7 +396,7 @@ const VendorUploadPage = () => {
                 <input
                     ref={fileInputRef}
                     type="file"
-                    accept="image/*,.pdf"
+                    accept=".pdf,.png,.jpg,.jpeg,image/*"
                     multiple
                     onChange={handleFileSelect}
                     style={{ display: 'none' }}

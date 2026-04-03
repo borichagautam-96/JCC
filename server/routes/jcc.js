@@ -112,11 +112,38 @@ const upload = multer({
   },
 });
 
+const normalizePersonName = (value) => String(value || '').trim();
+
+const findUserByName = (name) => {
+  const normalized = normalizePersonName(name);
+  if (!normalized) return null;
+
+  return db.prepare(`
+    SELECT id, name, email, ps_number
+    FROM users
+    WHERE lower(trim(name)) = lower(trim(?))
+    LIMIT 1
+  `).get(normalized) || null;
+};
+
+const normalizeDuplicateCsvPair = (value) => {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+
+  // Handle duplicated multipart values like "56,56" caused by repeated keys.
+  const parts = text.split(',').map((part) => part.trim()).filter(Boolean);
+  if (parts.length === 2 && parts[0] === parts[1]) {
+    return parts[0];
+  }
+
+  return text;
+};
+
 const parseVoucherMaterials = (body) => {
   const normalizeMaterial = (item = {}) => ({
-    amount: item.amount ?? item.projectAmount ?? '',
-    projectCode: item.projectCode ?? item.project_code ?? '',
-    projectName: item.projectName ?? item.project_name ?? '',
+    amount: normalizeDuplicateCsvPair(item.amount ?? item.projectAmount ?? ''),
+    projectCode: normalizeDuplicateCsvPair(item.projectCode ?? item.project_code ?? ''),
+    projectName: normalizeDuplicateCsvPair(item.projectName ?? item.project_name ?? ''),
   });
 
   const hasMaterialKeys = (value) => (
@@ -273,14 +300,22 @@ const parseVoucherMaterials = (body) => {
     return rows;
   };
 
-  const candidates = [
+  const payloadCandidates = [
     ...fromMaterialsPayloadField(),
     ...fromMaterialsPayloadB64Field(),
-    ...fromMaterialsField(),
-    ...fromBracketMaterialsField(),
-    ...fromIndexedFields(),
-    ...fromColumnWiseFields(),
   ];
+
+  // Prefer explicit JSON payloads when present to avoid duplicated multipart keys.
+  const fallbackCandidates = payloadCandidates.length > 0
+    ? []
+    : [
+      ...fromMaterialsField(),
+      ...fromBracketMaterialsField(),
+      ...fromIndexedFields(),
+      ...fromColumnWiseFields(),
+    ];
+
+  const candidates = [...payloadCandidates, ...fallbackCandidates];
 
   const uniqueCandidates = [...new Map(
     candidates.map((item) => {
@@ -499,6 +534,59 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
       finalApproverName = approver2;
     }
 
+    // Only the assignee can create a voucher from an assigned invoice.
+    const rawInvoiceId = String(req.body.invoiceId || '').trim();
+    const requestedInvoiceId = Number.parseInt(rawInvoiceId, 10);
+    let linkedAssignedInvoice = null;
+
+    if (rawInvoiceId && (!Number.isInteger(requestedInvoiceId) || requestedInvoiceId <= 0)) {
+      return res.status(400).json({ error: 'Invalid invoice id' });
+    }
+
+    if (Number.isInteger(requestedInvoiceId) && requestedInvoiceId > 0) {
+      linkedAssignedInvoice = db.prepare(`
+        SELECT id
+        FROM invoices
+        WHERE id = ?
+          AND status IN ('assigned', 'pending')
+          AND (
+            assigned_to_user_id = ?
+            OR assigned_to = ?
+            OR assigned_to = ?
+          )
+      `).get(
+        requestedInvoiceId,
+        req.user.id,
+        req.user.ps_number || '',
+        req.user.name || ''
+      );
+
+      if (!linkedAssignedInvoice) {
+        return res.status(403).json({ error: 'You are not allowed to create a voucher for this invoice assignment' });
+      }
+    }
+
+    if (!linkedAssignedInvoice && invoiceNumber) {
+      linkedAssignedInvoice = db.prepare(`
+        SELECT id
+        FROM invoices
+        WHERE invoice_number = ?
+          AND status IN ('assigned', 'pending')
+          AND (
+            assigned_to_user_id = ?
+            OR assigned_to = ?
+            OR assigned_to = ?
+          )
+        ORDER BY COALESCE(assigned_at, created_at) DESC
+        LIMIT 1
+      `).get(
+        invoiceNumber,
+        req.user.id,
+        req.user.ps_number || '',
+        req.user.name || ''
+      );
+    }
+
     // Insert into voucher_requests table with sequential approval
     const result = db.prepare(`
             INSERT INTO voucher_requests (
@@ -559,24 +647,10 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
       }
     }
 
-    // If this voucher was created from an assigned invoice, mark the invoice as processed
-    let invoiceIdToUpdate = req.body.invoiceId;
-    console.log('=== DEBUG: Backend received invoiceId ===', invoiceIdToUpdate);
-    console.log('=== DEBUG: invoiceNumber from form ===', invoiceNumber);
-
-    // Fallback: If invoiceId not provided but invoiceNumber is, find and update by invoice_number
-    if (!invoiceIdToUpdate && invoiceNumber) {
-      const existingInvoice = db.prepare(`
-        SELECT id FROM invoices WHERE invoice_number = ? AND status IN ('assigned', 'pending')
-      `).get(invoiceNumber);
-      if (existingInvoice) {
-        invoiceIdToUpdate = existingInvoice.id;
-        console.log('=== DEBUG: Found invoice by invoice_number, id ===', invoiceIdToUpdate);
-      }
-    }
+    // If this voucher was created from an assigned invoice, mark that invoice as processed.
+    const invoiceIdToUpdate = linkedAssignedInvoice?.id;
 
     if (invoiceIdToUpdate) {
-      console.log('=== DEBUG: Updating invoice status to voucher_created for id ===', invoiceIdToUpdate);
       db.prepare(`
         UPDATE invoices
         SET status = 'voucher_created',
@@ -698,10 +772,8 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
       };
 
       // Look up approvers by name to get their email + id
-      const approver1User = db.prepare('SELECT id, email, name FROM users WHERE name = ?').get(approver1) || null;
-      const approver2User = finalApproverName
-        ? db.prepare('SELECT id, email, name FROM users WHERE name = ?').get(finalApproverName) || null
-        : null;
+      const approver1User = findUserByName(approver1);
+      const approver2User = finalApproverName ? findUserByName(finalApproverName) : null;
 
       // Send emails asynchronously — always runs (creator email is independent of approvers)
       notifyVoucherCreated(voucherData, creatorData, approver1User, approver2User)
@@ -722,7 +794,7 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
       }
 
       // In-app notification for Final Approver (Approver 2)
-      if (approver2User && approver2User.id !== (approver1User && approver1User.id)) {
+      if (approver2User && approver2User.id !== approver1User?.id) {
         db.prepare(`
           INSERT INTO notifications (user_id, title, message, type)
         VALUES (?, ?, ?, ?)
@@ -795,8 +867,8 @@ router.get(['/download-jcc-pdf/:id', '/voucher/:id/pdf', '/vouchers/:id/pdf'], a
     // Helper to get PS number
     const getPSNumberFromName = (name) => {
       if (!name) return '-';
-      const u = db.prepare('SELECT ps_number FROM users WHERE name = ?').get(name);
-      return u ? u.ps_number : '-';
+      const u = findUserByName(name);
+      return u?.ps_number || '-';
     };
 
     // Helper to format date as DD-MM-YYYY
@@ -836,8 +908,19 @@ router.get(['/download-jcc-pdf/:id', '/voucher/:id/pdf', '/vouchers/:id/pdf'], a
       ORDER BY id ASC
     `).all(voucher.id);
 
+    const normalizedMaterials = [...new Map(
+      materialsQuery.map((row) => {
+        const normalized = {
+          amount: normalizeDuplicateCsvPair(row.amount),
+          project_code: normalizeDuplicateCsvPair(row.project_code),
+          project_name: normalizeDuplicateCsvPair(row.project_name),
+        };
+        return [JSON.stringify(normalized), normalized];
+      })
+    ).values()].filter((row) => row.amount || row.project_code || row.project_name);
+
     // If no materials strictly found, fallback to the single main project info
-    const isMaterialsEmpty = materialsQuery.length === 0;
+    const isMaterialsEmpty = normalizedMaterials.length === 0;
 
     const pdfItems = isMaterialsEmpty ? [{
       loc: voucher.expense_booking_location || 'PEW',
@@ -850,7 +933,7 @@ router.get(['/download-jcc-pdf/:id', '/voucher/:id/pdf', '/vouchers/:id/pdf'], a
       project: voucher.project_name || '',
       project_code: voucher.project_code || '',
       amount: voucher.basic_amount
-    }] : materialsQuery.map(m => ({
+    }] : normalizedMaterials.map(m => ({
       loc: voucher.expense_booking_location || 'PEW',
       dept: (() => {
         const dept = (voucher.department || '').toUpperCase();
@@ -1257,7 +1340,7 @@ router.post('/approve-level-1/:id', authenticateToken, authorizeRoles('manager')
 
       // Email + in-app: notify Final Approver (their turn now)
       if (voucher.approver2_name) {
-        const nextApprover = db.prepare('SELECT id, name, email FROM users WHERE name = ?').get(voucher.approver2_name);
+        const nextApprover = findUserByName(voucher.approver2_name);
         if (nextApprover) {
           notifyNextApprover(voucherData, creator, nextApprover)
             .then(result => console.log('[Email] Final approver notified:', result))
@@ -1343,7 +1426,7 @@ router.post('/approve-level-2/:id', authenticateToken, authorizeRoles('final_app
     try {
       const creator = db.prepare('SELECT id, name, email, ps_number FROM users WHERE id = ?').get(voucher.user_id);
       const manager = voucher.approver1_name
-        ? db.prepare('SELECT id, name, email FROM users WHERE name = ?').get(voucher.approver1_name)
+        ? findUserByName(voucher.approver1_name)
         : null;
       const approver = { name: req.user.name, email: req.user.email };
       const appBaseUrl = (process.env.APP_BASE_URL || '').replace(/\/$/, '');

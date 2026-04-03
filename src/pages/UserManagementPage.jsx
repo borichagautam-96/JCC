@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '../contexts/AuthContext';
-import { getDeviceId } from '../contexts/AuthContext';
+import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
 
 const REMINDER_ROLE_OPTIONS = [
@@ -11,6 +10,8 @@ const REMINDER_ROLE_OPTIONS = [
     { value: 'initiator', label: 'Initiator' },
     { value: 'user', label: 'User' },
 ];
+
+const SHOW_APP_SECURITY_SETTINGS = import.meta.env.VITE_SHOW_USER_SECURITY_SETTINGS === 'true';
 
 const UserManagementPage = () => {
     const { getToken } = useAuth();
@@ -89,10 +90,20 @@ const UserManagementPage = () => {
         'X-Device-ID': getDeviceId(),
     });
 
+    const parseJsonSafe = async (response) => {
+        try {
+            return await response.json();
+        } catch {
+            return null;
+        }
+    };
+
     useEffect(() => {
         fetchUsers();
         fetchManagers();
-        fetchAppSettings();
+        if (SHOW_APP_SECURITY_SETTINGS) {
+            fetchAppSettings();
+        }
     }, []);
 
     const fetchAppSettings = async () => {
@@ -149,13 +160,19 @@ const UserManagementPage = () => {
             const response = await fetch('/api/users', {
                 headers: authHeaders()
             });
-            const data = await response.json();
+
             if (response.status === 401) {
                 // Session invalidated
-                window.location.href = '/login';
+                globalThis.location.href = '/login';
                 return;
             }
-            setUsers(data);
+
+            const data = await parseJsonSafe(response);
+            if (!response.ok) {
+                throw new Error(data?.error || `Failed to load users (${response.status})`);
+            }
+
+            setUsers(Array.isArray(data) ? data : []);
         } catch (error) {
             console.error('Error fetching users:', error);
             setError('Failed to load users');
@@ -169,7 +186,17 @@ const UserManagementPage = () => {
             const response = await fetch('/api/users', {
                 headers: authHeaders()
             });
-            const data = await response.json();
+
+            if (response.status === 401) {
+                globalThis.location.href = '/login';
+                return;
+            }
+
+            const data = await parseJsonSafe(response);
+            if (!response.ok) {
+                throw new Error(data?.error || `Failed to load managers (${response.status})`);
+            }
+
             const managerUsers = data.filter(u => u.role === 'manager' || u.role === 'admin');
             setManagers(managerUsers);
         } catch (error) {
@@ -183,8 +210,18 @@ const UserManagementPage = () => {
             const response = await fetch('/api/users/device-audit-log', {
                 headers: authHeaders()
             });
-            const data = await response.json();
-            setAuditLogs(data);
+
+            if (response.status === 401) {
+                globalThis.location.href = '/login';
+                return;
+            }
+
+            const data = await parseJsonSafe(response);
+            if (!response.ok) {
+                throw new Error(data?.error || `Failed to fetch audit log (${response.status})`);
+            }
+
+            setAuditLogs(Array.isArray(data) ? data : []);
         } catch (error) {
             console.error('Error fetching audit logs:', error);
         } finally {
@@ -516,100 +553,102 @@ const UserManagementPage = () => {
                 </div>
             )}
 
-            <div style={{
-                background: 'white',
-                border: '1px solid #E2E8F0',
-                borderRadius: '10px',
-                padding: '1rem',
-                marginBottom: '1.25rem'
-            }}>
-                <h3 style={{ margin: '0 0 0.75rem 0', color: '#0F172A' }}>App Security & Return Workflow Settings</h3>
-                {appSettingsLoading ? (
-                    <p style={{ margin: 0, color: '#64748B' }}>Loading settings...</p>
-                ) : (
-                    <div style={{ display: 'grid', gap: '0.9rem' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: '0.75rem', alignItems: 'end' }}>
-                        <div className="input-group" style={{ marginBottom: 0 }}>
-                            <label className="input-label">Session Timeout (hours)</label>
-                            <input
-                                type="number"
-                                min="1"
-                                max="72"
-                                className="input-field"
-                                value={appSettings.session_timeout_hours}
-                                onChange={(e) => setAppSettings((prev) => ({ ...prev, session_timeout_hours: Number(e.target.value || 8) }))}
-                            />
-                        </div>
-
-                        <div className="input-group" style={{ marginBottom: 0 }}>
-                            <label className="input-label">Return Reminder (days before due)</label>
-                            <input
-                                type="number"
-                                min="0"
-                                max="30"
-                                className="input-field"
-                                value={appSettings.return_reminder_advance_days}
-                                onChange={(e) => setAppSettings((prev) => ({ ...prev, return_reminder_advance_days: Number(e.target.value || 0) }))}
-                            />
-                        </div>
-
-                        <div className="input-group" style={{ marginBottom: 0 }}>
-                            <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            {SHOW_APP_SECURITY_SETTINGS && (
+                <div style={{
+                    background: 'white',
+                    border: '1px solid #E2E8F0',
+                    borderRadius: '10px',
+                    padding: '1rem',
+                    marginBottom: '1.25rem'
+                }}>
+                    <h3 style={{ margin: '0 0 0.75rem 0', color: '#0F172A' }}>App Security & Return Workflow Settings</h3>
+                    {appSettingsLoading ? (
+                        <p style={{ margin: 0, color: '#64748B' }}>Loading settings...</p>
+                    ) : (
+                        <div style={{ display: 'grid', gap: '0.9rem' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: '0.75rem', alignItems: 'end' }}>
+                            <div className="input-group" style={{ marginBottom: 0 }}>
+                                <label className="input-label">Session Timeout (hours)</label>
                                 <input
-                                    type="checkbox"
-                                    checked={appSettings.return_maker_checker_enabled}
-                                    onChange={(e) => setAppSettings((prev) => ({ ...prev, return_maker_checker_enabled: e.target.checked }))}
+                                    type="number"
+                                    min="1"
+                                    max="72"
+                                    className="input-field"
+                                    value={appSettings.session_timeout_hours}
+                                    onChange={(e) => setAppSettings((prev) => ({ ...prev, session_timeout_hours: Number(e.target.value || 8) }))}
                                 />
-                                Enable Maker-Checker for Returns
-                            </label>
-                        </div>
+                            </div>
 
-                        <button className="btn btn-primary" onClick={saveAppSettings}>Save Settings</button>
-                        </div>
+                            <div className="input-group" style={{ marginBottom: 0 }}>
+                                <label className="input-label">Return Reminder (days before due)</label>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    max="30"
+                                    className="input-field"
+                                    value={appSettings.return_reminder_advance_days}
+                                    onChange={(e) => setAppSettings((prev) => ({ ...prev, return_reminder_advance_days: Number(e.target.value || 0) }))}
+                                />
+                            </div>
 
-                        <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: '0.9rem' }}>
-                            <h4 style={{ margin: '0 0 0.6rem 0', color: '#1E293B', fontSize: '0.95rem' }}>Notification Settings Panel</h4>
-                            <p style={{ margin: '0 0 0.75rem 0', color: '#64748B', fontSize: '0.86rem' }}>
-                                Enable or disable which roles receive reminder notifications and reminder emails.
-                            </p>
+                            <div className="input-group" style={{ marginBottom: 0 }}>
+                                <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={appSettings.return_maker_checker_enabled}
+                                        onChange={(e) => setAppSettings((prev) => ({ ...prev, return_maker_checker_enabled: e.target.checked }))}
+                                    />
+                                    Enable Maker-Checker for Returns
+                                </label>
+                            </div>
 
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.9rem' }}>
-                                <div style={{ border: '1px solid #E2E8F0', borderRadius: '8px', padding: '0.8rem' }}>
-                                    <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: '#0F172A' }}>In-app reminder notifications</div>
-                                    <div style={{ display: 'grid', gap: '0.4rem' }}>
-                                        {REMINDER_ROLE_OPTIONS.map((role) => (
-                                            <label key={`notify-${role.value}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.88rem', color: '#334155' }}>
-                                                <input
-                                                    type="checkbox"
-                                                    checked={appSettings.reminder_notification_roles.includes(role.value)}
-                                                    onChange={() => toggleReminderRole('reminder_notification_roles', role.value)}
-                                                />
-                                                {role.label}
-                                            </label>
-                                        ))}
+                            <button className="btn btn-primary" onClick={saveAppSettings}>Save Settings</button>
+                            </div>
+
+                            <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: '0.9rem' }}>
+                                <h4 style={{ margin: '0 0 0.6rem 0', color: '#1E293B', fontSize: '0.95rem' }}>Notification Settings Panel</h4>
+                                <p style={{ margin: '0 0 0.75rem 0', color: '#64748B', fontSize: '0.86rem' }}>
+                                    Enable or disable which roles receive reminder notifications and reminder emails.
+                                </p>
+
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.9rem' }}>
+                                    <div style={{ border: '1px solid #E2E8F0', borderRadius: '8px', padding: '0.8rem' }}>
+                                        <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: '#0F172A' }}>In-app reminder notifications</div>
+                                        <div style={{ display: 'grid', gap: '0.4rem' }}>
+                                            {REMINDER_ROLE_OPTIONS.map((role) => (
+                                                <label key={`notify-${role.value}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.88rem', color: '#334155' }}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={appSettings.reminder_notification_roles.includes(role.value)}
+                                                        onChange={() => toggleReminderRole('reminder_notification_roles', role.value)}
+                                                    />
+                                                    {role.label}
+                                                </label>
+                                            ))}
+                                        </div>
                                     </div>
-                                </div>
 
-                                <div style={{ border: '1px solid #E2E8F0', borderRadius: '8px', padding: '0.8rem' }}>
-                                    <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: '#0F172A' }}>Reminder emails by role</div>
-                                    <div style={{ display: 'grid', gap: '0.4rem' }}>
-                                        {REMINDER_ROLE_OPTIONS.map((role) => (
-                                            <label key={`email-${role.value}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.88rem', color: '#334155' }}>
-                                                <input
-                                                    type="checkbox"
-                                                    checked={appSettings.reminder_email_roles.includes(role.value)}
-                                                    onChange={() => toggleReminderRole('reminder_email_roles', role.value)}
-                                                />
-                                                {role.label}
-                                            </label>
-                                        ))}
+                                    <div style={{ border: '1px solid #E2E8F0', borderRadius: '8px', padding: '0.8rem' }}>
+                                        <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: '#0F172A' }}>Reminder emails by role</div>
+                                        <div style={{ display: 'grid', gap: '0.4rem' }}>
+                                            {REMINDER_ROLE_OPTIONS.map((role) => (
+                                                <label key={`email-${role.value}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.88rem', color: '#334155' }}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={appSettings.reminder_email_roles.includes(role.value)}
+                                                        onChange={() => toggleReminderRole('reminder_email_roles', role.value)}
+                                                    />
+                                                    {role.label}
+                                                </label>
+                                            ))}
+                                        </div>
                                     </div>
                                 </div>
                             </div>
                         </div>
-                    </div>
-                )}
-            </div>
+                    )}
+                </div>
+            )}
 
             {/* ===== USERS TAB ===== */}
             {activeTab === 'users' && (

@@ -27,6 +27,8 @@ import AdminLogsPage from './pages/AdminLogsPage';
 
 import AppShell from './components/AppShell';
 
+const SHOW_ADMIN_LOGS = import.meta.env.VITE_SHOW_ADMIN_LOGS === 'true';
+
 const ProtectedRoute = ({ children, allowedRoles }) => {
     const { user, loading } = useAuth();
     const location = useLocation();
@@ -298,11 +300,13 @@ const AppContent = () => {
                             </ProtectedRoute>
                         } />
 
-                        <Route path="/admin-logs" element={
-                            <ProtectedRoute allowedRoles={['admin']}>
-                                <AdminLogsPage />
-                            </ProtectedRoute>
-                        } />
+                        {SHOW_ADMIN_LOGS && (
+                            <Route path="/admin-logs" element={
+                                <ProtectedRoute allowedRoles={['admin']}>
+                                    <AdminLogsPage />
+                                </ProtectedRoute>
+                            } />
+                        )}
 
                         <Route path="/monthly-vouchers" element={
                             <ProtectedRoute allowedRoles={['admin', 'manager', 'coordinator', 'final_approver', 'initiator', 'user']}>

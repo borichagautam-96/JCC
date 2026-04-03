@@ -4,6 +4,8 @@ import { Menu } from 'lucide-react';
 import Navbar from './Navbar';
 import NotificationBell from './NotificationBell';
 
+const SHOW_ADMIN_LOGS = import.meta.env.VITE_SHOW_ADMIN_LOGS === 'true';
+
 const pageTitleMap = {
   '/': 'Dashboard',
   '/upload': 'Upload Invoice',
@@ -25,24 +27,36 @@ const pageTitleMap = {
 };
 
 const resolvePageTitle = (pathname) => {
+  if (!SHOW_ADMIN_LOGS && pathname === '/admin-logs') return 'Dashboard';
   if (pageTitleMap[pathname]) return pageTitleMap[pathname];
   if (pathname.startsWith('/letters/incoming/')) return 'Letter Detail';
-  return 'C2C';
+  return 'InFloAI';
 };
 
 const AppShell = ({ user, children }) => {
   const location = useLocation();
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(true);
 
+  const globalFooter = (
+    <footer className="">
+      
+    </footer>
+  );
+
   if (!user) {
-    return <>{children}</>;
+    return (
+      <div className="app-global-layout">
+        <div className="app-global-content">{children}</div>
+        {globalFooter}
+      </div>
+    );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <Navbar isOpen={isSidebarOpen} toggleSidebar={() => setIsSidebarOpen((prev) => !prev)} />
+    <div className="app-global-layout min-h-screen bg-slate-50 text-slate-900">
+      <Navbar isOpen={isSidebarOpen} />
 
-      <div className={`transition-all duration-300 ${isSidebarOpen ? 'md:ml-72' : 'md:ml-0'}`}>
+      <div className={`app-global-content transition-all duration-300 ${isSidebarOpen ? 'md:ml-72' : 'md:ml-0'}`}>
         <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-slate-200 bg-white px-4 md:px-6">
           <div className="flex items-center gap-3">
             <button
@@ -64,6 +78,8 @@ const AppShell = ({ user, children }) => {
 
         <main className="min-h-[calc(100vh-4rem)]">{children}</main>
       </div>
+
+      {globalFooter}
     </div>
   );
 };
