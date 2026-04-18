@@ -3,21 +3,52 @@ import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
 
 const INITIAL_FORM_DATA = {
-    bpId: '',
-    bpName: '',
-    city: '',
-    country: '',
-    ndaDate: '',
-    ndaExpiryDate: '',
-    ndaPeriodYear: '',
-    projectName: '',
-    signedHardCopyDepositoryLocation: '',
-    signedHardCopyDepositoryLocationFp: '',
-    itemType: '',
-    path: '',
+    vendorName: '',
     vendorCode: '',
+    address: '',
     mailId: ''
 };
+
+const TEMP_ALLOWED_VENDOR_NAMES = [
+    'ALLWYN JUMBO PRINTS AND EXCHANGER PVT LTD',
+    'Armoured Vehicles Nigam Limited',
+    'Asha Furniture Works',
+    'Balaji Arts',
+    'Bharat Electronics Limited',
+    'CHANDRAHAS SHETTY',
+    'DDSPLM Pvt. Ltd.',
+    'Delos Consulting Pvt. Ltd.',
+    'DesignTech Systems Pvt. Ltd.',
+    'GenieHR Solutions Pvt. Ltd.',
+    'Global Publishing Solutions Ltd.',
+    'Hornbill Studios Pvt Ltd',
+    'JUSTVFX STUDIOS',
+    'LOUISCIAGA OVERSEAS PVT. LTD',
+    'MICROPOINT COMPUTERS PRIVATE LIMITED',
+    'Pentagon System And Services Pvt. Ltd',
+    'PEREVODRU',
+    'PEREVODRU GLOBAL TRANSLATION SERVICES',
+    'Pixlar Art Creation',
+    'RAC IT SOLUTIONS PVT. LTD.',
+    'Schneider Electric India Pvt. Limited (SEIPL)',
+    'Shezarweb Technologies',
+    'Shivam Computers',
+    'SIEMENS INDUSTRY SOFTWARE (INDIA)',
+    'Smartify Software Solutions LLP',
+    'Somshanti Enterprises',
+    'Urgent Courier',
+    'Vendor Name',
+    'Voice Kraft Productions',
+    'White Globe Pvt. Ltd.',
+    'Track On Courier',
+];
+
+const normalizeVendorName = (value) => String(value || '').trim().toLowerCase();
+
+const TEMP_ALLOWED_VENDOR_NAME_INDEX = TEMP_ALLOWED_VENDOR_NAMES.reduce((map, name, index) => {
+    map.set(normalizeVendorName(name), index);
+    return map;
+}, new Map());
 
 const compactStyles = `
     .vendor-compact .vendor-layout-grid {
@@ -79,9 +110,8 @@ const compactStyles = `
         white-space: nowrap;
     }
 
-    .vendor-compact .table td:nth-child(3),
-    .vendor-compact .table td:nth-child(10),
-    .vendor-compact .table td:nth-child(11) {
+    .vendor-compact .table td:nth-child(2),
+    .vendor-compact .table td:nth-child(4) {
         min-width: 160px;
         white-space: normal;
     }
@@ -105,6 +135,11 @@ const compactStyles = `
 const VendorManagementPage = () => {
     const { getToken } = useAuth();
     const dialog = useDialog();
+
+    const entitySingular = 'Vendor';
+    const entityPlural = 'Vendors';
+    const entitySingularLower = entitySingular.toLowerCase();
+    const entityPluralLower = entityPlural.toLowerCase();
 
     const [vendors, setVendors] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -157,11 +192,11 @@ const VendorManagementPage = () => {
 
             const data = await parseJsonSafe(response);
             if (!response.ok) {
-                throw new Error(data?.error || `Failed to fetch vendors (${response.status})`);
+                throw new Error(data?.error || `Failed to fetch ${entityPluralLower} (${response.status})`);
             }
             setVendors(Array.isArray(data) ? data : []);
         } catch (fetchError) {
-            setError(fetchError.message || 'Failed to fetch vendors');
+            setError(fetchError.message || `Failed to fetch ${entityPluralLower}`);
         } finally {
             setLoading(false);
         }
@@ -177,9 +212,21 @@ const VendorManagementPage = () => {
 
     const filteredVendors = useMemo(() => {
         const needle = query.trim().toLowerCase();
-        const sortedVendors = [...vendors].sort((left, right) => {
-            const leftName = String(left.bp_name || left.vendor_name || '').trim().toLowerCase();
-            const rightName = String(right.bp_name || right.vendor_name || '').trim().toLowerCase();
+        const visibleVendors = vendors.filter((vendor) => {
+            const displayName = normalizeVendorName(vendor.bp_name || vendor.vendor_name);
+            return TEMP_ALLOWED_VENDOR_NAME_INDEX.has(displayName);
+        });
+
+        const sortedVendors = [...visibleVendors].sort((left, right) => {
+            const leftName = normalizeVendorName(left.bp_name || left.vendor_name);
+            const rightName = normalizeVendorName(right.bp_name || right.vendor_name);
+
+            const leftOrder = TEMP_ALLOWED_VENDOR_NAME_INDEX.get(leftName) ?? Number.MAX_SAFE_INTEGER;
+            const rightOrder = TEMP_ALLOWED_VENDOR_NAME_INDEX.get(rightName) ?? Number.MAX_SAFE_INTEGER;
+
+            if (leftOrder !== rightOrder) {
+                return leftOrder - rightOrder;
+            }
 
             if (leftName === rightName) {
                 return Number(left.id || 0) - Number(right.id || 0);
@@ -192,20 +239,9 @@ const VendorManagementPage = () => {
         return sortedVendors.filter((vendor) => {
             const searchableFields = [
                 vendor.id,
-                vendor.bp_id,
-                vendor.bp_name,
                 vendor.vendor_name,
-                vendor.city,
-                vendor.country,
-                vendor.nda_date,
-                vendor.nda_expiry_date,
-                vendor.nda_period_year,
-                vendor.project_name,
-                vendor.signed_hard_copy_depository_location,
-                vendor.signed_hard_copy_depository_location_fp,
-                vendor.item_type,
-                vendor.vendor_path,
                 vendor.vendor_code,
+                vendor.address,
                 vendor.mail_id,
             ];
 
@@ -219,27 +255,25 @@ const VendorManagementPage = () => {
         setSuccess('');
 
         const payload = {
-            vendorName: String(formData.bpName || '').trim(),
+            vendorName: String(formData.vendorName || '').trim(),
             vendorCode: String(formData.vendorCode || '').trim(),
-            address: '',
+            address: String(formData.address || '').trim(),
             contactNumber: '',
             mailId: String(formData.mailId || '').trim(),
-            bpId: String(formData.bpId || '').trim(),
-            bpName: String(formData.bpName || '').trim(),
-            city: String(formData.city || '').trim(),
-            country: String(formData.country || '').trim(),
-            ndaDate: String(formData.ndaDate || '').trim(),
-            ndaExpiryDate: String(formData.ndaExpiryDate || '').trim(),
-            ndaPeriodYear: String(formData.ndaPeriodYear || '').trim(),
-            projectName: String(formData.projectName || '').trim(),
-            signedHardCopyDepositoryLocation: String(formData.signedHardCopyDepositoryLocation || '').trim(),
-            signedHardCopyDepositoryLocationFp: String(formData.signedHardCopyDepositoryLocationFp || '').trim(),
-            itemType: String(formData.itemType || '').trim(),
-            path: String(formData.path || '').trim(),
         };
 
-        if (!payload.bpName) {
-            setError('BP Name is required');
+        if (!payload.vendorName) {
+            setError(`${entitySingular} is required`);
+            return;
+        }
+
+        if (!payload.vendorCode) {
+            setError(`${entitySingular} code is required`);
+            return;
+        }
+
+        if (!payload.address) {
+            setError(`${entitySingular} address is required`);
             return;
         }
 
@@ -258,22 +292,22 @@ const VendorManagementPage = () => {
 
             const data = await parseJsonSafe(response);
             if (!response.ok) {
-                throw new Error(data?.error || `Failed to create vendor (${response.status})`);
+                throw new Error(data?.error || `Failed to create ${entitySingularLower} (${response.status})`);
             }
 
-            setSuccess(`Vendor entry added successfully (${data.vendorCode || 'auto code'})`);
+            setSuccess(`${entitySingular} entry added successfully (${data.vendorCode})`);
             setFormData(INITIAL_FORM_DATA);
             await fetchVendors();
         } catch (saveError) {
-            setError(saveError.message || 'Failed to create vendor');
+            setError(saveError.message || `Failed to create ${entitySingularLower}`);
         } finally {
             setSaving(false);
         }
     };
 
     const handleDeleteVendor = async (vendor) => {
-        const vendorDisplayName = vendor.bp_name || vendor.vendor_name || vendor.bp_id || `ID ${vendor.id}`;
-        const confirmed = await dialog.confirm(`Delete vendor "${vendorDisplayName}"?`);
+        const vendorDisplayName = vendor.vendor_name || vendor.bp_name || `ID ${vendor.id}`;
+        const confirmed = await dialog.confirm(`Delete ${entitySingularLower} "${vendorDisplayName}"?`);
         if (!confirmed) return;
 
         setError('');
@@ -294,13 +328,13 @@ const VendorManagementPage = () => {
 
             const data = await parseJsonSafe(response);
             if (!response.ok) {
-                throw new Error(data?.error || `Failed to delete vendor (${response.status})`);
+                throw new Error(data?.error || `Failed to delete ${entitySingularLower} (${response.status})`);
             }
 
-            setSuccess('Vendor deleted successfully');
+            setSuccess(`${entitySingular} deleted successfully`);
             await fetchVendors();
         } catch (deleteError) {
-            setError(deleteError.message || 'Failed to delete vendor');
+            setError(deleteError.message || `Failed to delete ${entitySingularLower}`);
         }
     };
 
@@ -332,13 +366,13 @@ const VendorManagementPage = () => {
 
             const data = await parseJsonSafe(response);
             if (!response.ok) {
-                throw new Error(data?.error || `Failed to import vendors (${response.status})`);
+                throw new Error(data?.error || `Failed to import ${entityPluralLower} (${response.status})`);
             }
 
             setSuccess(`Import complete: ${data.inserted} added, ${data.skipped} skipped.`);
             await fetchVendors();
         } catch (importError) {
-            setError(importError.message || 'Failed to import vendors');
+            setError(importError.message || `Failed to import ${entityPluralLower}`);
         } finally {
             setImporting(false);
             if (excelInputRef.current) {
@@ -359,8 +393,8 @@ const VendorManagementPage = () => {
                 marginBottom: '1.25rem',
                 border: '1px solid #e2e8f0',
                 }}>
-                    <h1 style={{ margin: 0, fontSize: '1.6rem', color: 'black' }}>Vendor Management</h1>
-                    <p style={{ margin: '0.4rem 0 0 0', opacity: 0.9, color: 'black', fontSize: '0.98rem' }}>Manage vendor BP, NDA and project metadata in one place</p>
+                    <h1 style={{ margin: 0, fontSize: '1.6rem', color: 'black' }}>{entitySingular} Management</h1>
+                    <p style={{ margin: '0.4rem 0 0 0', opacity: 0.9, color: 'black', fontSize: '0.98rem' }}>Manage core {entitySingularLower} details in one place</p>
                 </div>
 
                 {success && (
@@ -391,7 +425,7 @@ const VendorManagementPage = () => {
 
                 <div className="card-grid vendor-layout-grid">
                     <div className="glass-card vendor-form-card" style={{ background: 'white', border: '1px solid #E0E0E0', alignSelf: 'start', height: '590px', overflowY: 'auto' }}>
-                        <h3 style={{ marginTop: 0, marginBottom: '1rem', color: '#0F172A' }}>Add Vendor Entry</h3>
+                        <h3 style={{ marginTop: 0, marginBottom: '1rem', color: '#0F172A' }}>Add {entitySingular} Entry</h3>
                         <div style={{ marginBottom: '1rem' }}>
                             <input
                                 ref={excelInputRef}
@@ -407,247 +441,115 @@ const VendorManagementPage = () => {
                                 disabled={importing}
                                 style={{ width: '100%' }}
                             >
-                                {importing ? 'Importing vendors...' : 'Upload Excel (Vendor NDA List)'}
+                                {importing ? `Importing ${entityPluralLower}...` : `Upload Excel (${entitySingular} List)`}
                             </button>
                             <small style={{ display: 'block', marginTop: '0.5rem', color: '#64748b' }}>
-                                Upload .xlsx/.xls with fields like BP ID, BP Name, City, Country, NDA dates and project details.
+                                Upload .xlsx/.xls with columns like {entitySingular} Name, {entitySingular} Code, {entitySingular} Address and Email ID.
                             </small>
                         </div>
                         <form onSubmit={handleCreateVendor}>
                             <div className="input-group">
-                                <label className="input-label" htmlFor="bp-id-input">BP ID</label>
+                                <label className="input-label" htmlFor="vendor-name-input">{entitySingular} *</label>
                                 <input
-                                    id="bp-id-input"
+                                    id="vendor-name-input"
                                     type="text"
                                     className="input-field"
-                                    value={formData.bpId}
-                                    onChange={(e) => updateField('bpId', e.target.value)}
-                                    placeholder="Enter BP ID"
-                                />
-                            </div>
-
-                            <div className="input-group">
-                                <label className="input-label" htmlFor="bp-name-input">BP Name *</label>
-                                <input
-                                    id="bp-name-input"
-                                    type="text"
-                                    className="input-field"
-                                    value={formData.bpName}
-                                    onChange={(e) => updateField('bpName', e.target.value)}
-                                    placeholder="Enter BP Name"
+                                    value={formData.vendorName}
+                                    onChange={(e) => updateField('vendorName', e.target.value)}
+                                    placeholder={`Enter ${entitySingularLower} name`}
                                     required
                                 />
                             </div>
 
                             <div className="input-group">
-                                <label className="input-label" htmlFor="city-input">City</label>
-                                <input
-                                    id="city-input"
-                                    type="text"
-                                    className="input-field"
-                                    value={formData.city}
-                                    onChange={(e) => updateField('city', e.target.value)}
-                                    placeholder="Enter city"
-                                />
-                            </div>
-
-                            <div className="input-group">
-                                <label className="input-label" htmlFor="country-input">Country</label>
-                                <input
-                                    id="country-input"
-                                    type="text"
-                                    className="input-field"
-                                    value={formData.country}
-                                    onChange={(e) => updateField('country', e.target.value)}
-                                    placeholder="Enter country"
-                                />
-                            </div>
-
-                            <div className="input-group">
-                                <label className="input-label" htmlFor="nda-date-input">Date of NDA</label>
-                                <input
-                                    id="nda-date-input"
-                                    type="date"
-                                    className="input-field"
-                                    value={formData.ndaDate}
-                                    onChange={(e) => updateField('ndaDate', e.target.value)}
-                                />
-                            </div>
-
-                            <div className="input-group">
-                                <label className="input-label" htmlFor="nda-expiry-date-input">Expiry date of NDA</label>
-                                <input
-                                    id="nda-expiry-date-input"
-                                    type="date"
-                                    className="input-field"
-                                    value={formData.ndaExpiryDate}
-                                    onChange={(e) => updateField('ndaExpiryDate', e.target.value)}
-                                />
-                            </div>
-
-                            <div className="input-group">
-                                <label className="input-label" htmlFor="nda-period-year-input">Period Of NDA in Year</label>
-                                <input
-                                    id="nda-period-year-input"
-                                    type="text"
-                                    className="input-field"
-                                    value={formData.ndaPeriodYear}
-                                    onChange={(e) => updateField('ndaPeriodYear', e.target.value)}
-                                    placeholder="Enter NDA period"
-                                />
-                            </div>
-
-                            <div className="input-group">
-                                <label className="input-label" htmlFor="project-name-input">Project Name</label>
-                                <input
-                                    id="project-name-input"
-                                    type="text"
-                                    className="input-field"
-                                    value={formData.projectName}
-                                    onChange={(e) => updateField('projectName', e.target.value)}
-                                    placeholder="Enter project name"
-                                />
-                            </div>
-
-                            <div className="input-group">
-                                <label className="input-label" htmlFor="signed-location-input">Signed Hard Copy Depository Location</label>
-                                <input
-                                    id="signed-location-input"
-                                    type="text"
-                                    className="input-field"
-                                    value={formData.signedHardCopyDepositoryLocation}
-                                    onChange={(e) => updateField('signedHardCopyDepositoryLocation', e.target.value)}
-                                    placeholder="Enter signed copy location"
-                                />
-                            </div>
-
-                            <div className="input-group">
-                                <label className="input-label" htmlFor="signed-location-fp-input">Signed Hard Copy Depository Location FP</label>
-                                <input
-                                    id="signed-location-fp-input"
-                                    type="text"
-                                    className="input-field"
-                                    value={formData.signedHardCopyDepositoryLocationFp}
-                                    onChange={(e) => updateField('signedHardCopyDepositoryLocationFp', e.target.value)}
-                                    placeholder="Enter signed copy FP location"
-                                />
-                            </div>
-
-                            <div className="input-group">
-                                <label className="input-label" htmlFor="item-type-input">Item Type</label>
-                                <input
-                                    id="item-type-input"
-                                    type="text"
-                                    className="input-field"
-                                    value={formData.itemType}
-                                    onChange={(e) => updateField('itemType', e.target.value)}
-                                    placeholder="Enter item type"
-                                />
-                            </div>
-
-                            <div className="input-group">
-                                <label className="input-label" htmlFor="path-input">Path</label>
-                                <input
-                                    id="path-input"
-                                    type="text"
-                                    className="input-field"
-                                    value={formData.path}
-                                    onChange={(e) => updateField('path', e.target.value)}
-                                    placeholder="Enter path"
-                                />
-                            </div>
-
-                            <div className="input-group">
-                                <label className="input-label" htmlFor="vendor-code-input">Code (optional)</label>
+                                <label className="input-label" htmlFor="vendor-code-input">{entitySingular} Code *</label>
                                 <input
                                     id="vendor-code-input"
                                     type="text"
                                     className="input-field"
                                     value={formData.vendorCode}
                                     onChange={(e) => updateField('vendorCode', e.target.value)}
-                                    placeholder="Leave blank for auto-generate"
+                                    placeholder={`Enter ${entitySingularLower} code`}
+                                    required
                                 />
                             </div>
 
                             <div className="input-group">
-                                <label className="input-label" htmlFor="vendor-email-input">Email (optional)</label>
+                                <label className="input-label" htmlFor="vendor-address-input">{entitySingular} Address *</label>
+                                <input
+                                    id="vendor-address-input"
+                                    type="text"
+                                    className="input-field"
+                                    value={formData.address}
+                                    onChange={(e) => updateField('address', e.target.value)}
+                                    placeholder={`Enter ${entitySingularLower} address`}
+                                    required
+                                />
+                            </div>
+
+                            <div className="input-group">
+                                <label className="input-label" htmlFor="vendor-email-input">Email ID (optional)</label>
                                 <input
                                     id="vendor-email-input"
                                     type="email"
                                     className="input-field"
                                     value={formData.mailId}
                                     onChange={(e) => updateField('mailId', e.target.value)}
-                                    placeholder="vendor@example.com"
+                                    placeholder={`${entitySingularLower}@example.com`}
                                 />
                             </div>
 
                             <button type="submit" className="btn btn-primary" disabled={saving} style={{ width: '100%' }}>
-                                {saving ? 'Adding...' : 'Add Vendor Entry'}
+                                {saving ? 'Adding...' : `Add ${entitySingular} Entry`}
                             </button>
                         </form>
                     </div>
 
                     <div className="glass-card vendor-list-card" style={{ background: 'white', border: '1px solid #E0E0E0', height: '590px', display: 'flex', flexDirection: 'column' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', gap: '1rem' }}>
-                            <h3 style={{ margin: 0, color: '#0F172A' }}>Vendor List</h3>
+                            <h3 style={{ margin: 0, color: '#0F172A' }}>{entitySingular} List</h3>
                             <input
                                 type="text"
                                 className="input-field"
                                 style={{ maxWidth: '360px' }}
                                 value={query}
                                 onChange={(e) => setQuery(e.target.value)}
-                                placeholder="Search by BP ID, BP Name, city, project"
+                                placeholder={`Search by ${entitySingularLower}, code, address or email`}
                             />
                         </div>
 
                         {loading ? (
                             <div className="text-center py-xl">
                                 <div className="spinner"></div>
-                                <p className="mt-md text-muted">Loading vendors...</p>
+                                <p className="mt-md text-muted">Loading {entityPluralLower}...</p>
                             </div>
                         ) : (
                             <div className="table-container vendor-table-wrap" style={{ flex: 1, minHeight: 0 }}>
                                 <table className="table">
                                     <thead>
                                         <tr>
-                                            <th>ID</th>
-                                            <th>BP ID</th>
-                                            <th>BP Name</th>
-                                            <th>City</th>
-                                            <th>Country</th>
-                                            <th>Date of NDA</th>
-                                            <th>Expiry date of NDA</th>
-                                            <th>Period Of NDA in Year</th>
-                                            <th>Project Name</th>
-                                            <th>Signed Hard Copy Depository Location</th>
-                                            <th>Signed Hard Copy Depository Location FP</th>
-                                            <th>Item Type</th>
-                                            <th>Path</th>
+                                            <th>#</th>
+                                            <th>{entitySingular}</th>
+                                            <th>{entitySingular} Code</th>
+                                            <th>{entitySingular} Address</th>
+                                            <th>Email ID</th>
                                             <th>Action</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {filteredVendors.length === 0 ? (
                                             <tr>
-                                                <td colSpan="14" className="text-center" style={{ color: '#64748B' }}>
-                                                    No vendors found.
+                                                <td colSpan="6" className="text-center" style={{ color: '#64748B' }}>
+                                                    No {entityPluralLower} found.
                                                 </td>
                                             </tr>
                                         ) : filteredVendors.map((vendor, index) => (
                                             <tr key={vendor.id}>
                                                 <td style={{ fontWeight: 600 }}>{index + 1}</td>
-                                                <td>{vendor.bp_id || '-'}</td>
-                                                <td>{vendor.bp_name || vendor.vendor_name || '-'}</td>
-                                                <td>{vendor.city || '-'}</td>
-                                                <td>{vendor.country || '-'}</td>
-                                                <td>{vendor.nda_date || '-'}</td>
-                                                <td>{vendor.nda_expiry_date || '-'}</td>
-                                                <td>{vendor.nda_period_year || '-'}</td>
-                                                <td>{vendor.project_name || '-'}</td>
-                                                <td>{vendor.signed_hard_copy_depository_location || '-'}</td>
-                                                <td>{vendor.signed_hard_copy_depository_location_fp || '-'}</td>
-                                                <td>{vendor.item_type || '-'}</td>
-                                                <td>{vendor.vendor_path || '-'}</td>
+                                                <td>{vendor.vendor_name || vendor.bp_name || '-'}</td>
+                                                <td>{vendor.vendor_code || '-'}</td>
+                                                <td>{vendor.address || '-'}</td>
+                                                <td>{vendor.mail_id || '-'}</td>
                                                 <td>
                                                     <button
                                                         type="button"

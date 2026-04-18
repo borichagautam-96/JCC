@@ -18,6 +18,13 @@ const VoucherHistoryPage = () => {
     });
     const [apiSyncWarning, setApiSyncWarning] = useState('');
 
+    const formatDateTime = (value) => {
+        if (!value) return '-';
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return String(value);
+        return parsed.toLocaleString();
+    };
+
     const parseApiResponse = async (response, fallbackErrorMessage) => {
         const contentType = response.headers.get('content-type') || '';
         const isJson = contentType.includes('application/json');
@@ -222,9 +229,27 @@ const VoucherHistoryPage = () => {
         reversed: ['payment_initiated'],
     };
 
+    const supplierAckStyles = {
+        not_sent: { bg: '#F1F5F9', text: '#334155', label: 'Not Sent' },
+        pending: { bg: '#FEF3C7', text: '#92400E', label: 'Pending Response' },
+        acknowledged: { bg: '#DCFCE7', text: '#166534', label: 'Acknowledged' },
+        rejected: { bg: '#FEE2E2', text: '#991B1B', label: 'Rejected' },
+        expired: { bg: '#E2E8F0', text: '#334155', label: 'Link Expired' },
+    };
+
     const renderPaymentBadge = (status) => {
         const safe = status || 'awaiting_approval';
         const style = paymentStatusStyles[safe] || paymentStatusStyles.awaiting_approval;
+        return (
+            <span className="inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold" style={{ background: style.bg, color: style.text }}>
+                {style.label}
+            </span>
+        );
+    };
+
+    const renderSupplierAckBadge = (status) => {
+        const safe = (status || 'not_sent').toLowerCase();
+        const style = supplierAckStyles[safe] || supplierAckStyles.not_sent;
         return (
             <span className="inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold" style={{ background: style.bg, color: style.text }}>
                 {style.label}
@@ -306,6 +331,33 @@ const VoucherHistoryPage = () => {
         }
     };
 
+    const handleSendToSupplier = async (voucher) => {
+        if (!voucher?.id || !canUpdatePayment) return;
+
+        try {
+            const response = await fetch(`/api/jcc/vouchers/${voucher.id}/send-to-supplier`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${getToken()}`,
+                    'X-Device-ID': getDeviceId(),
+                },
+            });
+
+            const data = await parseApiResponse(response, 'Failed to send JCC to supplier');
+            await dialog.alert(`JCC${String(voucher.id).padStart(4, '0')} sent to supplier email ${data?.recipientEmail || ''}`.trim());
+            if (paymentLogModal?.id === voucher.id) {
+                await openPaymentLog(paymentLogModal);
+            }
+            fetchVouchers();
+        } catch (error) {
+            console.error('Error sending voucher to supplier:', error);
+            if (!error?.isApiSyncWarning) {
+                await dialog.alert(error.message || 'Failed to send JCC to supplier');
+            }
+        }
+    };
+
     const updatePaymentStatus = async () => {
         if (!paymentLogModal) return;
 
@@ -335,7 +387,11 @@ const VoucherHistoryPage = () => {
                 }),
             });
 
-            await parseApiResponse(response, 'Failed to update payment status');
+            const data = await parseApiResponse(response, 'Failed to update payment status');
+
+            if (data?.supplierDispatch?.recipientEmail) {
+                await dialog.alert(`JCC${String(paymentLogModal.id).padStart(4, '0')} sent to supplier email ${data.supplierDispatch.recipientEmail}`);
+            }
 
             await openPaymentLog(paymentLogModal);
             fetchVouchers();
@@ -465,6 +521,7 @@ const VoucherHistoryPage = () => {
                                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-700">PO NO.</th>
                                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-700">STATUS</th>
                                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-700">PAYMENT</th>
+                                <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-700">SUPPLIER ACK</th>
                                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-700">CREATED BY</th>
                                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-700">DATE</th>
                                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-700">DOWNLOAD JCC</th>
@@ -473,7 +530,7 @@ const VoucherHistoryPage = () => {
                         <tbody>
                             {filteredVouchers.length === 0 ? (
                                 <tr>
-                                    <td colSpan="11" className="px-4 py-12 text-center text-sm text-slate-500">
+                                    <td colSpan="12" className="px-4 py-12 text-center text-sm text-slate-500">
                                         {searchTerm ? `No vouchers found matching "${searchTerm}"` : 'No vouchers found'}
                                     </td>
                                 </tr>
@@ -494,12 +551,36 @@ const VoucherHistoryPage = () => {
                                         <td className="px-4 py-3 text-sm text-slate-700">{voucher.po_number || '-'}</td>
                                         <td className="px-4 py-3">{getStatusBadge(voucher.status)}</td>
                                         <td className="px-4 py-3">{renderPaymentBadge(voucher.payment_status)}</td>
+                                        <td className="px-4 py-3">
+                                            <div className="flex flex-col gap-1">
+                                                {renderSupplierAckBadge(voucher.supplier_ack_status)}
+                                                {voucher.supplier_ack_email && (
+                                                    <span className="text-xs text-slate-500">{voucher.supplier_ack_email}</span>
+                                                )}
+                                                {voucher.supplier_ack_status === 'pending' && voucher.supplier_ack_expires_at && (
+                                                    <span className="text-xs text-slate-500">Expires {formatDateTime(voucher.supplier_ack_expires_at)}</span>
+                                                )}
+                                                {['acknowledged', 'rejected'].includes((voucher.supplier_ack_status || '').toLowerCase()) && voucher.supplier_ack_at && (
+                                                    <span className="text-xs text-slate-500">Updated {formatDateTime(voucher.supplier_ack_at)}</span>
+                                                )}
+                                            </div>
+                                        </td>
                                         <td className="px-4 py-3 text-sm text-slate-700">{voucher.user_name}</td>
                                         <td className="px-4 py-3 text-sm text-slate-500">
                                             {new Date(voucher.created_at).toLocaleDateString()}
                                         </td>
                                         <td className="px-4 py-3">
                                             <div className="flex items-center gap-2">
+                                                {voucher.status === 'approved' && canUpdatePayment && voucher.supplier_ack_status !== 'acknowledged' && (
+                                                    <button
+                                                        onClick={() => handleSendToSupplier(voucher)}
+                                                        className="rounded-md bg-indigo-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
+                                                        title="Send JCC PDF and acknowledgement link to supplier"
+                                                    >
+                                                        {voucher.supplier_ack_status === 'pending' ? 'Resend to Supplier' : 'Send to Supplier'}
+                                                    </button>
+                                                )}
+
                                                 {voucher.status === 'approved' && (
                                                     <button
                                                         onClick={() => openPaymentLog(voucher)}
@@ -578,6 +659,56 @@ const VoucherHistoryPage = () => {
                                         <div><strong>Amount:</strong> ₹{Number.parseFloat(paymentLogData?.voucher?.basic_amount || 0).toLocaleString()}</div>
                                         <div><strong>Current:</strong> {renderPaymentBadge(paymentLogData?.voucher?.payment_status)}</div>
                                     </div>
+                                </div>
+
+                                <div className="voucher-modal-panel">
+                                    <h4 style={{ margin: '0 0 0.6rem 0' }}>Supplier Acknowledgement</h4>
+                                    <div className="voucher-modal-grid">
+                                        <div>
+                                            <div className="voucher-modal-muted" style={{ fontSize: '0.8rem', marginBottom: '0.2rem' }}>Status</div>
+                                            {renderSupplierAckBadge(paymentLogData?.voucher?.supplier_ack_status)}
+                                        </div>
+                                        <div>
+                                            <div className="voucher-modal-muted" style={{ fontSize: '0.8rem', marginBottom: '0.2rem' }}>Recipient Email</div>
+                                            <div>{paymentLogData?.voucher?.supplier_ack_email || '-'}</div>
+                                        </div>
+                                        <div>
+                                            <div className="voucher-modal-muted" style={{ fontSize: '0.8rem', marginBottom: '0.2rem' }}>Sent At</div>
+                                            <div>{formatDateTime(paymentLogData?.voucher?.supplier_ack_sent_at)}</div>
+                                        </div>
+                                        <div>
+                                            <div className="voucher-modal-muted" style={{ fontSize: '0.8rem', marginBottom: '0.2rem' }}>Expires At</div>
+                                            <div>{formatDateTime(paymentLogData?.voucher?.supplier_ack_expires_at)}</div>
+                                        </div>
+                                        <div>
+                                            <div className="voucher-modal-muted" style={{ fontSize: '0.8rem', marginBottom: '0.2rem' }}>Responded At</div>
+                                            <div>{formatDateTime(paymentLogData?.voucher?.supplier_ack_at)}</div>
+                                        </div>
+                                        <div>
+                                            <div className="voucher-modal-muted" style={{ fontSize: '0.8rem', marginBottom: '0.2rem' }}>Responded By</div>
+                                            <div>{paymentLogData?.voucher?.supplier_ack_by_email || '-'}</div>
+                                        </div>
+                                    </div>
+
+                                    {paymentLogData?.voucher?.supplier_ack_remarks && (
+                                        <div style={{ marginTop: '0.75rem' }}>
+                                            <div className="voucher-modal-muted" style={{ fontSize: '0.8rem', marginBottom: '0.2rem' }}>Remarks</div>
+                                            <div>{paymentLogData.voucher.supplier_ack_remarks}</div>
+                                        </div>
+                                    )}
+
+                                    {paymentLogData?.voucher?.status === 'approved' && canUpdatePayment && String(paymentLogData?.voucher?.supplier_ack_status || '').toLowerCase() !== 'acknowledged' && (
+                                        <button
+                                            className="btn btn-primary"
+                                            style={{ marginTop: '0.75rem' }}
+                                            onClick={() => handleSendToSupplier({
+                                                id: paymentLogModal.id,
+                                                supplier_ack_status: paymentLogData?.voucher?.supplier_ack_status,
+                                            })}
+                                        >
+                                            {String(paymentLogData?.voucher?.supplier_ack_status || '').toLowerCase() === 'pending' ? 'Resend to Supplier' : 'Send to Supplier'}
+                                        </button>
+                                    )}
                                 </div>
 
                                 <div className="voucher-modal-panel">

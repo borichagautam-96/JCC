@@ -329,6 +329,32 @@ select.input-field {
     background: #f8fafc;
 }
 
+.feedback-inbox-scroll {
+    overflow-x: auto;
+}
+
+.feedback-inbox-table {
+    min-width: 1910px;
+}
+
+.feedback-inbox-table .feedback-control-select {
+    min-width: 128px;
+}
+
+.feedback-inbox-table .feedback-control-assignee {
+    min-width: 188px;
+}
+
+.feedback-inbox-table .feedback-note-field {
+    min-width: 240px;
+    resize: vertical;
+}
+
+.feedback-inbox-table .feedback-action-button {
+    min-width: 106px;
+    justify-content: center;
+}
+
 .page-shell {
     padding-top: 2rem;
     padding-bottom: 2rem;

@@ -1,10 +1,11 @@
 import React from 'react';
-import { useLocation } from 'react-router-dom';
-import { Menu } from 'lucide-react';
+import { Link, useLocation } from 'react-router-dom';
+import { Menu, MessageSquarePlus } from 'lucide-react';
 import Navbar from './Navbar';
 import NotificationBell from './NotificationBell';
 
 const SHOW_ADMIN_LOGS = import.meta.env.VITE_SHOW_ADMIN_LOGS === 'true';
+const ENABLE_FEEDBACK_MODULE = import.meta.env.VITE_ENABLE_FEEDBACK === 'true';
 
 const pageTitleMap = {
   '/': 'Dashboard',
@@ -17,6 +18,8 @@ const pageTitleMap = {
   '/coordinator': 'Pending Approvals',
   '/purchase-orders': 'PO Management',
   '/vendors': 'Vendor Management',
+  '/feedback': 'Feedback',
+  '/admin-feedback': 'Feedback Inbox',
   '/change-password': 'Change Password',
   '/user-management': 'User Management',
   '/admin-logs': 'Admin Logs',
@@ -28,6 +31,7 @@ const pageTitleMap = {
 
 const resolvePageTitle = (pathname) => {
   if (!SHOW_ADMIN_LOGS && pathname === '/admin-logs') return 'Dashboard';
+  if (!ENABLE_FEEDBACK_MODULE && (pathname === '/feedback' || pathname === '/admin-feedback')) return 'Dashboard';
   if (pageTitleMap[pathname]) return pageTitleMap[pathname];
   if (pathname.startsWith('/letters/incoming/')) return 'Letter Detail';
   return 'InFloAI';
@@ -73,7 +77,19 @@ const AppShell = ({ user, children }) => {
               </h1>
             </div>
           </div>
-          <NotificationBell />
+          <div className="flex items-center gap-2">
+            {ENABLE_FEEDBACK_MODULE && (
+              <Link
+                to="/feedback"
+                state={{ sourcePath: location.pathname }}
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
+              >
+                <MessageSquarePlus size={16} />
+                <span className="hidden md:inline">Feedback</span>
+              </Link>
+            )}
+            <NotificationBell />
+          </div>
         </header>
 
         <main className="min-h-[calc(100vh-4rem)]">{children}</main>

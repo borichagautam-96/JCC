@@ -2,11 +2,12 @@ import express from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import db from '../database.js';
 import { authenticateToken, authorizeRoles } from '../middleware/auth.js';
 import { generateJCCPDF } from '../utils/pdfGenerator.js';
-import { notifyVoucherCreated, notifyVoucherApproved, notifyNextApprover, notifyVoucherRejected } from '../utils/emailService.js';
+import { notifyVoucherCreated, notifyVoucherApproved, notifyNextApprover, notifyVoucherRejected, sendEmail } from '../utils/emailService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,6 +38,9 @@ const PAYMENT_TRANSITIONS = {
   failed: ['payment_initiated', 'reversed'],
   reversed: ['payment_initiated'],
 };
+
+const CLAIM_DATE_LOOKBACK_DAYS = 15;
+const INVOICE_DATE_LOOKBACK_DAYS = 15;
 
 const setPaymentTimestamps = (status) => {
   const tsMap = {
@@ -333,6 +337,651 @@ const parseVoucherMaterials = (body) => {
     .filter((item) => item.amount || item.projectCode || item.projectName);
 };
 
+const SUPPLIER_ACK_TOKEN_VALIDITY_HOURS = 24 * 7;
+const SUPPLIER_ACK_ALLOWED_ACTIONS = new Set(['acknowledged', 'rejected']);
+
+const createHttpError = (statusCode, message) => {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+};
+
+const formatJccId = (voucherId) => `JCC${String(voucherId).padStart(4, '0')}`;
+
+const escapeHtml = (value) => String(value ?? '')
+  .replaceAll('&', '&amp;')
+  .replaceAll('<', '&lt;')
+  .replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;')
+  .replaceAll("'", '&#39;');
+
+const resolveAppBaseUrl = (req) => {
+  const configuredBaseUrl = String(process.env.APP_BASE_URL || '').trim();
+  if (configuredBaseUrl) {
+    return configuredBaseUrl.replace(/\/$/, '');
+  }
+
+  const host = req?.get?.('host');
+  if (host) {
+    return `${req.protocol || 'http'}://${host}`;
+  }
+
+  return '';
+};
+
+const hashSupplierToken = (token) => crypto.createHash('sha256').update(String(token || '')).digest('hex');
+
+const isSupplierTokenExpired = (expiresAt) => {
+  if (!expiresAt) return true;
+  return new Date(expiresAt).getTime() <= Date.now();
+};
+
+const insertSupplierAckEvent = ({ voucherId, tokenId = null, eventType, eventByEmail = null, remarks = null, metadata = null }) => {
+  try {
+    db.prepare(`
+      INSERT INTO voucher_supplier_ack_events (
+        voucher_id, token_id, event_type, event_by_email, remarks, metadata
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      voucherId,
+      tokenId,
+      eventType,
+      eventByEmail,
+      remarks,
+      metadata ? JSON.stringify(metadata) : null
+    );
+  } catch (error) {
+    console.error('Error writing supplier acknowledgement event:', error);
+  }
+};
+
+const resolveSupplierRecipient = (supplierName) => {
+  const normalizedName = String(supplierName || '').trim();
+  if (!normalizedName) return null;
+
+  const exactMatch = db.prepare(`
+    SELECT id, vendor_name, mail_id
+    FROM vendors
+    WHERE LOWER(TRIM(vendor_name)) = LOWER(TRIM(?))
+    LIMIT 1
+  `).get(normalizedName);
+
+  if (exactMatch?.mail_id) {
+    return exactMatch;
+  }
+
+  const partialMatch = db.prepare(`
+    SELECT id, vendor_name, mail_id
+    FROM vendors
+    WHERE LOWER(vendor_name) LIKE LOWER(?)
+    ORDER BY LENGTH(vendor_name) ASC
+    LIMIT 1
+  `).get(`%${normalizedName}%`);
+
+  if (partialMatch?.mail_id) {
+    return partialMatch;
+  }
+
+  return null;
+};
+
+const createSupplierAckToken = ({ voucherId, recipientEmail, createdBy }) => {
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const tokenHash = hashSupplierToken(rawToken);
+  const expiresAt = new Date(Date.now() + (SUPPLIER_ACK_TOKEN_VALIDITY_HOURS * 60 * 60 * 1000)).toISOString();
+
+  const result = db.prepare(`
+    INSERT INTO voucher_supplier_ack_tokens (
+      voucher_id, recipient_email, token_hash, expires_at, created_by
+    ) VALUES (?, ?, ?, ?, ?)
+  `).run(voucherId, recipientEmail, tokenHash, expiresAt, createdBy || null);
+
+  return {
+    tokenId: Number(result.lastInsertRowid) || null,
+    rawToken,
+    expiresAt,
+  };
+};
+
+const invalidateSupplierAckTokens = ({ voucherId, exceptTokenId = null }) => {
+  if (exceptTokenId) {
+    db.prepare(`
+      UPDATE voucher_supplier_ack_tokens
+      SET used_at = datetime('now')
+      WHERE voucher_id = ?
+        AND used_at IS NULL
+        AND id != ?
+    `).run(voucherId, exceptTokenId);
+    return;
+  }
+
+  db.prepare(`
+    UPDATE voucher_supplier_ack_tokens
+    SET used_at = datetime('now')
+    WHERE voucher_id = ?
+      AND used_at IS NULL
+  `).run(voucherId);
+};
+
+const getSupplierTokenContext = (token) => {
+  const rawToken = String(token || '').trim();
+  if (!/^[a-fA-F0-9]{64}$/.test(rawToken)) {
+    return null;
+  }
+
+  const tokenHash = hashSupplierToken(rawToken);
+
+  return db.prepare(`
+    SELECT
+      t.id AS token_id,
+      t.voucher_id,
+      t.recipient_email,
+      t.expires_at,
+      t.used_at,
+      v.user_id,
+      v.supplier,
+      v.invoice_number,
+      v.basic_amount,
+      v.status AS voucher_status,
+      v.supplier_ack_status,
+      v.supplier_ack_email,
+      v.supplier_ack_sent_at,
+      v.supplier_ack_expires_at,
+      v.supplier_ack_at,
+      v.supplier_ack_by_email,
+      v.supplier_ack_remarks,
+      v.approver1_name,
+      v.approver2_name
+    FROM voucher_supplier_ack_tokens t
+    JOIN voucher_requests v ON v.id = t.voucher_id
+    WHERE t.token_hash = ?
+    LIMIT 1
+  `).get(tokenHash);
+};
+
+const sendSupplierDispatchEmail = async ({ recipientEmail, voucher, supplierName, ackUrl, pdfUrl, expiresAt }) => {
+  const voucherRef = formatJccId(voucher.id);
+  const expiryLabel = new Date(expiresAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+  return sendEmail(
+    recipientEmail,
+    (payload) => ({
+      subject: `Action Required: ${payload.voucherRef} JCC PDF Acknowledgement`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 680px; margin: 0 auto; color: #1f2937; line-height: 1.6;">
+          <h2 style="margin-bottom: 10px;">JCC PDF Shared for Supplier Acknowledgement</h2>
+          <p>Dear ${escapeHtml(payload.supplierName || 'Supplier')},</p>
+          <p>Please review the JCC PDF and submit your acknowledgement.</p>
+          <table style="border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px;">
+            <tr><td style="padding: 6px 10px; border: 1px solid #e5e7eb;"><strong>JCC Number</strong></td><td style="padding: 6px 10px; border: 1px solid #e5e7eb;">${escapeHtml(payload.voucherRef)}</td></tr>
+            <tr><td style="padding: 6px 10px; border: 1px solid #e5e7eb;"><strong>Supplier</strong></td><td style="padding: 6px 10px; border: 1px solid #e5e7eb;">${escapeHtml(payload.supplierName || '-')}</td></tr>
+            <tr><td style="padding: 6px 10px; border: 1px solid #e5e7eb;"><strong>Invoice Number</strong></td><td style="padding: 6px 10px; border: 1px solid #e5e7eb;">${escapeHtml(payload.invoiceNumber || '-')}</td></tr>
+            <tr><td style="padding: 6px 10px; border: 1px solid #e5e7eb;"><strong>Amount</strong></td><td style="padding: 6px 10px; border: 1px solid #e5e7eb;">INR ${escapeHtml(payload.amount || '-')}</td></tr>
+          </table>
+          <p>
+            <a href="${escapeHtml(payload.pdfUrl)}" style="display: inline-block; margin-right: 10px; background: #1d4ed8; color: #fff; text-decoration: none; padding: 10px 14px; border-radius: 6px;">Download JCC PDF</a>
+            <a href="${escapeHtml(payload.ackUrl)}" style="display: inline-block; background: #065f46; color: #fff; text-decoration: none; padding: 10px 14px; border-radius: 6px;">Acknowledge JCC</a>
+          </p>
+          <p style="font-size: 12px; color: #6b7280;">This secure link expires on ${escapeHtml(payload.expiryLabel)} IST.</p>
+        </div>
+      `,
+    }),
+    [{
+      voucherRef,
+      supplierName,
+      invoiceNumber: voucher.invoice_number,
+      amount: voucher.basic_amount,
+      ackUrl,
+      pdfUrl,
+      expiryLabel,
+    }],
+    {
+      entityType: 'supplier_ack',
+      entityId: voucherRef,
+      templateName: 'supplierJccDispatch',
+    }
+  );
+};
+
+const sendSupplierAckReceiptEmail = async ({ recipientEmail, voucherId, supplierName, action, remarks }) => {
+  const voucherRef = formatJccId(voucherId);
+  const actionLabel = action === 'acknowledged' ? 'Acknowledged' : 'Rejected';
+
+  return sendEmail(
+    recipientEmail,
+    (payload) => ({
+      subject: `Confirmation: ${payload.voucherRef} marked as ${payload.actionLabel}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 680px; margin: 0 auto; color: #1f2937; line-height: 1.6;">
+          <p>Dear ${escapeHtml(payload.supplierName || 'Supplier')},</p>
+          <p>We have recorded your response for <strong>${escapeHtml(payload.voucherRef)}</strong> as <strong>${escapeHtml(payload.actionLabel)}</strong>.</p>
+          ${payload.remarks ? `<p><strong>Remarks:</strong> ${escapeHtml(payload.remarks)}</p>` : ''}
+          <p>Thank you.</p>
+        </div>
+      `,
+    }),
+    [{ voucherRef, supplierName, actionLabel, remarks }],
+    {
+      entityType: 'supplier_ack',
+      entityId: voucherRef,
+      templateName: 'supplierAckReceipt',
+    }
+  );
+};
+
+const sendInternalSupplierAckEmails = async ({ voucher, action, remarks, supplierEmail }) => {
+  const creator = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(voucher.user_id);
+  const approver1 = findUserByName(voucher.approver1_name);
+  const approver2 = findUserByName(voucher.approver2_name);
+
+  const recipients = [creator, approver1, approver2]
+    .filter((user) => user?.email)
+    .filter((user, index, arr) => arr.findIndex((item) => item?.email?.toLowerCase() === user.email.toLowerCase()) === index);
+
+  if (recipients.length === 0) {
+    return [];
+  }
+
+  const voucherRef = formatJccId(voucher.id);
+  const actionLabel = action === 'acknowledged' ? 'Acknowledged' : 'Rejected';
+
+  const results = [];
+  for (const recipient of recipients) {
+    const result = await sendEmail(
+      recipient.email,
+      (payload) => ({
+        subject: `${payload.voucherRef} supplier response: ${payload.actionLabel}`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 680px; margin: 0 auto; color: #1f2937; line-height: 1.6;">
+            <p>Dear ${escapeHtml(payload.recipientName || 'Team')},</p>
+            <p>Supplier response has been captured for <strong>${escapeHtml(payload.voucherRef)}</strong>.</p>
+            <table style="border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px;">
+              <tr><td style="padding: 6px 10px; border: 1px solid #e5e7eb;"><strong>Action</strong></td><td style="padding: 6px 10px; border: 1px solid #e5e7eb;">${escapeHtml(payload.actionLabel)}</td></tr>
+              <tr><td style="padding: 6px 10px; border: 1px solid #e5e7eb;"><strong>Supplier</strong></td><td style="padding: 6px 10px; border: 1px solid #e5e7eb;">${escapeHtml(payload.supplierName || '-')}</td></tr>
+              <tr><td style="padding: 6px 10px; border: 1px solid #e5e7eb;"><strong>Supplier Email</strong></td><td style="padding: 6px 10px; border: 1px solid #e5e7eb;">${escapeHtml(payload.supplierEmail || '-')}</td></tr>
+              ${payload.remarks ? `<tr><td style="padding: 6px 10px; border: 1px solid #e5e7eb;"><strong>Remarks</strong></td><td style="padding: 6px 10px; border: 1px solid #e5e7eb;">${escapeHtml(payload.remarks)}</td></tr>` : ''}
+            </table>
+          </div>
+        `,
+      }),
+      [{
+        recipientName: recipient.name,
+        voucherRef,
+        actionLabel,
+        supplierName: voucher.supplier,
+        supplierEmail,
+        remarks,
+      }],
+      {
+        entityType: 'supplier_ack',
+        entityId: voucherRef,
+        templateName: 'supplierAckInternalNotice',
+      }
+    );
+
+    results.push(result);
+  }
+
+  return results;
+};
+
+const dispatchVoucherToSupplier = async ({ voucherId, actorUser, req }) => {
+  const voucher = db.prepare(`
+    SELECT id, user_id, supplier, invoice_number, basic_amount, status, approver1_name, approver2_name
+    FROM voucher_requests
+    WHERE id = ?
+  `).get(voucherId);
+
+  if (!voucher) {
+    throw createHttpError(404, 'Voucher not found');
+  }
+
+  if (voucher.status !== 'approved') {
+    throw createHttpError(400, 'Only approved vouchers can be sent to supplier');
+  }
+
+  const supplierRecord = resolveSupplierRecipient(voucher.supplier);
+  const recipientEmail = String(supplierRecord?.mail_id || '').trim();
+  if (!recipientEmail) {
+    throw createHttpError(400, `Supplier email not found for "${voucher.supplier || 'Unknown Supplier'}" in Vendor Management`);
+  }
+
+  const baseUrl = resolveAppBaseUrl(req);
+  if (!baseUrl) {
+    throw createHttpError(500, 'APP_BASE_URL is missing. Configure APP_BASE_URL before sending supplier links.');
+  }
+
+  const { tokenId, rawToken, expiresAt } = createSupplierAckToken({
+    voucherId: voucher.id,
+    recipientEmail,
+    createdBy: actorUser?.id,
+  });
+
+  const ackUrl = `${baseUrl}/api/jcc/supplier/ack/${rawToken}`;
+  const pdfUrl = `${baseUrl}/api/jcc/supplier/ack/${rawToken}/pdf`;
+
+  const emailResult = await sendSupplierDispatchEmail({
+    recipientEmail,
+    voucher,
+    supplierName: voucher.supplier,
+    ackUrl,
+    pdfUrl,
+    expiresAt,
+  });
+
+  if (!emailResult?.success) {
+    db.prepare('DELETE FROM voucher_supplier_ack_tokens WHERE id = ?').run(tokenId);
+    throw createHttpError(502, emailResult?.error || emailResult?.message || 'Failed to send supplier email');
+  }
+
+  invalidateSupplierAckTokens({
+    voucherId: voucher.id,
+    exceptTokenId: tokenId,
+  });
+
+  db.prepare(`
+    UPDATE voucher_requests
+    SET supplier_ack_status = 'pending',
+        supplier_ack_email = ?,
+        supplier_ack_sent_at = datetime('now'),
+        supplier_ack_expires_at = ?,
+        supplier_ack_at = NULL,
+        supplier_ack_by_email = NULL,
+        supplier_ack_remarks = NULL
+    WHERE id = ?
+  `).run(recipientEmail, expiresAt, voucher.id);
+
+  insertSupplierAckEvent({
+    voucherId: voucher.id,
+    tokenId,
+    eventType: 'email_sent',
+    eventByEmail: recipientEmail,
+    metadata: {
+      sentBy: actorUser?.name || null,
+      sentByUserId: actorUser?.id || null,
+      ackUrl,
+      pdfUrl,
+      expiresAt,
+    },
+  });
+
+  return {
+    voucher,
+    recipientEmail,
+    ackUrl,
+    pdfUrl,
+    expiresAt,
+  };
+};
+
+const createVoucherPdfArtifact = async (voucherId) => {
+  const voucher = db.prepare(`
+    SELECT v.*, u.name AS user_name, u.ps_number AS creator_ps_number
+    FROM voucher_requests v
+    JOIN users u ON v.user_id = u.id
+    WHERE v.id = ?
+  `).get(voucherId);
+
+  if (!voucher) {
+    throw createHttpError(404, 'Voucher not found');
+  }
+
+  if (voucher.status !== 'approved') {
+    throw createHttpError(403, 'Voucher must be fully approved to download JCC PDF');
+  }
+
+  const getPSNumberFromName = (name) => {
+    if (!name) return '-';
+    const foundUser = findUserByName(name);
+    return foundUser?.ps_number || '-';
+  };
+
+  const resolvePersonName = (identifier, fallback = '-') => {
+    const userRecord = findUserByName(identifier);
+    if (userRecord?.name) {
+      return userRecord.name;
+    }
+    const fallbackText = String(fallback || '').trim();
+    return fallbackText || '-';
+  };
+
+  const creatorFromUserManagement = db.prepare('SELECT name, ps_number FROM users WHERE id = ?').get(voucher.user_id);
+
+  const formatDate = (dateStr) => {
+    if (!dateStr) return '-';
+    const date = new Date(dateStr);
+    return `${String(date.getDate()).padStart(2, '0')}-${String(date.getMonth() + 1).padStart(2, '0')}-${date.getFullYear()}`;
+  };
+
+  let supplierCode = '';
+  let supplierAddress = '';
+  let poDate = '';
+  let poAmount = '';
+  if (voucher.po_number) {
+    const linkedPO = db.prepare(`
+      SELECT supplier_code, supplier_address, po_date, total_budget
+      FROM purchase_orders
+      WHERE po_number = ?
+    `).get(voucher.po_number);
+
+    if (linkedPO) {
+      supplierCode = linkedPO.supplier_code || '';
+      supplierAddress = linkedPO.supplier_address || '';
+      poDate = linkedPO.po_date || '';
+      poAmount = linkedPO.total_budget || '';
+    }
+  }
+
+  const deptCode = (() => {
+    const dept = (voucher.department || '').toUpperCase();
+    if (dept.includes('DOCUMENTATION') || dept.includes('TRAINING')) return '3559';
+    return '';
+  })();
+
+  const materialsQuery = db.prepare(`
+    SELECT amount, project_code, project_name
+    FROM voucher_materials
+    WHERE voucher_id = ?
+    ORDER BY id ASC
+  `).all(voucher.id);
+
+  const normalizedMaterials = [...new Map(
+    materialsQuery.map((row) => {
+      const normalized = {
+        amount: normalizeDuplicateCsvPair(row.amount),
+        project_code: normalizeDuplicateCsvPair(row.project_code),
+        project_name: normalizeDuplicateCsvPair(row.project_name),
+      };
+      return [JSON.stringify(normalized), normalized];
+    })
+  ).values()].filter((row) => row.amount || row.project_code || row.project_name);
+
+  const isMaterialsEmpty = normalizedMaterials.length === 0;
+
+  const pdfItems = isMaterialsEmpty ? [{
+    loc: voucher.expense_booking_location || 'PEW',
+    dept: (() => {
+      const dept = (voucher.department || '').toUpperCase();
+      if (dept.includes('DOCUMENTATION') || dept.includes('TRAINING')) return 'DOC & TRNG';
+      return voucher.department;
+    })(),
+    dept_code: deptCode,
+    project: voucher.project_name || '',
+    project_code: voucher.project_code || '',
+    amount: voucher.basic_amount,
+  }] : normalizedMaterials.map((material) => ({
+    loc: voucher.expense_booking_location || 'PEW',
+    dept: (() => {
+      const dept = (voucher.department || '').toUpperCase();
+      if (dept.includes('DOCUMENTATION') || dept.includes('TRAINING')) return 'DOC & TRNG';
+      return voucher.department;
+    })(),
+    dept_code: deptCode,
+    project: material.project_name || '',
+    project_code: material.project_code || '',
+    amount: material.amount,
+  }));
+
+  const pdfData = {
+    id: voucher.id,
+    voucher_number: formatJccId(voucher.id),
+    claimed_by: voucher.claimed_by,
+    ps_number: voucher.creator_ps_number || '-',
+    department: (() => {
+      const dept = (voucher.department || '').toUpperCase();
+      if (dept.includes('DOCUMENTATION') || dept.includes('TRAINING')) return 'DOCUMENTATION & TRAINING';
+      return voucher.department;
+    })(),
+    claimed_date: voucher.claimed_date,
+    expense_booking_location: voucher.expense_booking_location,
+    actions: [
+      {
+        action_by: 'INITIATOR',
+        person: resolvePersonName(voucher.user_name || creatorFromUserManagement?.name, creatorFromUserManagement?.name || voucher.user_name || '-'),
+        psno: creatorFromUserManagement?.ps_number || voucher.creator_ps_number || '-',
+        action: 'Voucher Initiated',
+        date: formatDate(voucher.claimed_date),
+      },
+      {
+        action_by: 'FIRST APPROVER',
+        person: resolvePersonName(voucher.approver1_name, voucher.approver1_name || '-'),
+        psno: getPSNumberFromName(voucher.approver1_name),
+        action: voucher.approver1_status === 'approved' ? 'Approved' : (voucher.approver1_status || '-'),
+        date: voucher.approver1_date ? formatDate(voucher.approver1_date) : '-',
+      },
+      {
+        action_by: 'SECOND APPROVER',
+        person: resolvePersonName(voucher.approver2_name, voucher.approver2_name || '-'),
+        psno: getPSNumberFromName(voucher.approver2_name),
+        action: voucher.approver2_status === 'approved' ? 'Approved' : (voucher.approver2_status || '-'),
+        date: voucher.approver2_date ? formatDate(voucher.approver2_date) : '-',
+      },
+    ],
+    invoice_no: voucher.invoice_number,
+    invoice_date: voucher.invoice_date,
+    nature_of_expenses: voucher.nature_of_expenses,
+    service_category: '',
+    description: voucher.description,
+    supplier_name: voucher.supplier,
+    supplier_code: supplierCode,
+    supplier_address: supplierAddress,
+    po_number: voucher.po_number || '',
+    po_date: poDate,
+    po_amount: poAmount,
+    dept_code: deptCode,
+    basic_amount: voucher.basic_amount,
+    gross_amount: voucher.gross_amount,
+    project_code: voucher.project_code,
+    project_name: voucher.project_name,
+    items: pdfItems,
+  };
+
+  const jccId = formatJccId(voucher.id);
+  const downloadFilename = `${jccId}.pdf`;
+  const tempDir = path.join(__dirname, '../temp');
+  if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir, { recursive: true });
+  }
+
+  const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+  const pdfPath = path.join(tempDir, `${jccId}-${uniqueSuffix}.pdf`);
+
+  await generateJCCPDF(pdfData, pdfPath);
+
+  if (!fs.existsSync(pdfPath)) {
+    throw createHttpError(500, 'Failed to generate PDF file');
+  }
+
+  return { pdfPath, downloadFilename };
+};
+
+const sendVoucherPdfDownload = async (res, voucherId) => {
+  const { pdfPath, downloadFilename } = await createVoucherPdfArtifact(voucherId);
+
+  res.download(pdfPath, downloadFilename, (downloadError) => {
+    if (downloadError) {
+      console.error('Error sending PDF:', downloadError);
+    }
+
+    try {
+      if (fs.existsSync(pdfPath)) {
+        fs.unlinkSync(pdfPath);
+      }
+    } catch (cleanupError) {
+      console.error('Error deleting temp PDF:', cleanupError);
+    }
+  });
+};
+
+const renderSupplierAckPage = ({ title, message, token, voucherContext = null, showForm = false, isError = false }) => {
+  const safeTitle = escapeHtml(title);
+  const safeMessage = escapeHtml(message);
+  const safeSupplier = escapeHtml(voucherContext?.supplier || '-');
+  const safeInvoice = escapeHtml(voucherContext?.invoice_number || '-');
+  const safeAmount = escapeHtml(voucherContext?.basic_amount ?? '-');
+  const safeJccId = escapeHtml(formatJccId(voucherContext?.voucher_id || voucherContext?.id || 0));
+  const safePdfUrl = token ? `/api/jcc/supplier/ack/${encodeURIComponent(token)}/pdf` : '#';
+
+  const statusBoxStyle = isError
+    ? 'background:#FEF2F2;border:1px solid #FCA5A5;color:#7F1D1D;'
+    : 'background:#ECFDF5;border:1px solid #6EE7B7;color:#064E3B;';
+
+  return `
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>${safeTitle}</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 0; background: #f8fafc; color: #0f172a; }
+          .wrap { max-width: 760px; margin: 36px auto; background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; }
+          h1 { margin: 0 0 10px 0; font-size: 24px; }
+          .status { padding: 12px; border-radius: 8px; margin: 14px 0 20px 0; ${statusBoxStyle} }
+          table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+          td { border: 1px solid #e2e8f0; padding: 8px 10px; font-size: 14px; }
+          td:first-child { width: 220px; font-weight: 600; background: #f8fafc; }
+          .actions { margin-top: 18px; display: flex; gap: 10px; flex-wrap: wrap; }
+          .btn { display: inline-block; border: 0; border-radius: 8px; padding: 10px 14px; font-weight: 600; text-decoration: none; cursor: pointer; }
+          .btn-primary { background: #2563eb; color: #fff; }
+          .btn-success { background: #047857; color: #fff; }
+          .btn-danger { background: #b91c1c; color: #fff; }
+          textarea { width: 100%; min-height: 88px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; resize: vertical; }
+          .hint { font-size: 12px; color: #64748b; margin-top: 6px; }
+        </style>
+      </head>
+      <body>
+        <div class="wrap">
+          <h1>${safeTitle}</h1>
+          <div class="status">${safeMessage}</div>
+          ${voucherContext ? `
+            <table>
+              <tr><td>JCC Number</td><td>${safeJccId}</td></tr>
+              <tr><td>Supplier</td><td>${safeSupplier}</td></tr>
+              <tr><td>Invoice Number</td><td>${safeInvoice}</td></tr>
+              <tr><td>Amount (INR)</td><td>${safeAmount}</td></tr>
+            </table>
+            <div class="actions">
+              <a class="btn btn-primary" href="${safePdfUrl}">Download JCC PDF</a>
+            </div>
+          ` : ''}
+          ${showForm ? `
+            <form method="post" style="margin-top: 22px;">
+              <label for="remarks" style="display:block;font-weight:600;margin-bottom:6px;">Remarks (optional)</label>
+              <textarea id="remarks" name="remarks" maxlength="1000" placeholder="Add remarks if needed"></textarea>
+              <div class="hint">Selecting Reject will mark this JCC as rejected by supplier.</div>
+              <div class="actions">
+                <button type="submit" name="action" value="acknowledged" class="btn btn-success">Acknowledge JCC</button>
+                <button type="submit" name="action" value="rejected" class="btn btn-danger">Reject JCC</button>
+              </div>
+            </form>
+          ` : ''}
+        </div>
+      </body>
+    </html>
+  `;
+};
+
 // Get list of final approvers
 router.get('/final-approvers', authenticateToken, (req, res) => {
   try {
@@ -500,6 +1149,48 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
       approver2,  // Selected final approver from dropdown
     } = req.body;
 
+    const normalizedClaimedDate = String(claimedDate || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedClaimedDate)) {
+      return res.status(400).json({ error: 'Claim Date is invalid' });
+    }
+
+    const claimedDateObj = new Date(`${normalizedClaimedDate}T00:00:00`);
+    if (Number.isNaN(claimedDateObj.getTime())) {
+      return res.status(400).json({ error: 'Claim Date is invalid' });
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const minClaimDate = new Date(today);
+    minClaimDate.setDate(minClaimDate.getDate() - CLAIM_DATE_LOOKBACK_DAYS);
+
+    if (claimedDateObj < minClaimDate || claimedDateObj > today) {
+      return res.status(400).json({ error: `Claim Date must be within the last ${CLAIM_DATE_LOOKBACK_DAYS} days` });
+    }
+
+    const normalizedInvoiceDate = String(invoiceDate || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedInvoiceDate)) {
+      return res.status(400).json({ error: 'Invoice Date is invalid' });
+    }
+
+    const invoiceDateObj = new Date(`${normalizedInvoiceDate}T00:00:00`);
+    if (Number.isNaN(invoiceDateObj.getTime())) {
+      return res.status(400).json({ error: 'Invoice Date is invalid' });
+    }
+
+    const minInvoiceDate = new Date(today);
+    minInvoiceDate.setDate(minInvoiceDate.getDate() - INVOICE_DATE_LOOKBACK_DAYS);
+
+    if (invoiceDateObj < minInvoiceDate || invoiceDateObj > today) {
+      return res.status(400).json({ error: `Invoice Date must be within the last ${INVOICE_DATE_LOOKBACK_DAYS} days` });
+    }
+
+    const creatorRecord = db.prepare('SELECT id, name, email, ps_number FROM users WHERE id = ?').get(req.user.id);
+    const creatorName = creatorRecord?.name || req.user.name || '';
+    const creatorEmail = creatorRecord?.email || req.user.email || '';
+    const creatorPsNumber = creatorRecord?.ps_number || req.user.ps_number || '';
+
     // Parse materials and use first entry's project data as fallback
     const materialsArr = parseVoucherMaterials(req.body);
     const materialLikeKeys = Object.keys(req.body || {}).filter((key) =>
@@ -521,17 +1212,26 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
       return res.status(400).json({ error: 'Please select Approver 1 (Manager)' });
     }
 
+    const approver1User = findUserByName(approver1);
+    if (!approver1User) {
+      return res.status(400).json({ error: 'Selected Approver 1 was not found in User Management' });
+    }
+
     // Validate approver2 was selected
     if (!approver2 || approver2.trim() === '') {
-      // return res.status(400).json({ error: 'Please select Approver 2 (Final Approver)' });
-      // For backward compatibility or testing, we might want to fail soft, but user requested dropdown.
-      // Let's enforce it if the frontend sends it.
+      return res.status(400).json({ error: 'Please select Approver 2 (Final Approver)' });
     }
 
     // Get Final Approver details
-    let finalApproverName = 'Girish Pakhode'; // Fallback
-    if (approver2) {
-      finalApproverName = approver2;
+    let finalApproverName = '';
+    const finalApproverUser = findUserByName(approver2);
+    if (!finalApproverUser) {
+      return res.status(400).json({ error: 'Selected Final Approver was not found in User Management' });
+    }
+    finalApproverName = finalApproverUser.name;
+
+    if (approver1User.id === finalApproverUser.id) {
+      return res.status(400).json({ error: 'Approver 1 and Final Approver must be different users' });
     }
 
     // Only the assignee can create a voucher from an assigned invoice.
@@ -603,12 +1303,12 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
       req.user.id,
       claimedBy,
       department,
-      claimedDate,
+      normalizedClaimedDate,
       supplier,
       expenseBookingLocation,
       description,
       invoiceNumber,
-      invoiceDate,
+      normalizedInvoiceDate,
       basicAmount,
       grossAmount,
       natureOfExpenses,
@@ -617,7 +1317,7 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
       effectiveProjectName,
       projectAmount,
       attachmentPath,
-      approver1,                 // Selected manager
+      approver1User.name,        // Canonical manager name from users table
       finalApproverName,         // Selected final approver
       'pending',                 // approver1_status
       'waiting',                 // approver2_status (waiting for level 1)
@@ -761,19 +1461,18 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
         claimedBy,
         natureOfExpenses,
         expenseBookingLocation,
-        creatorPsNumber: req.user.ps_number || '',
-        approver1Name: approver1,
+        creatorPsNumber: creatorPsNumber,
+        approver1Name: approver1User.name,
         approver2Name: finalApproverName
       };
 
       const creatorData = {
-        name: req.user.name,
-        email: req.user.email
+        name: creatorName,
+        email: creatorEmail
       };
 
-      // Look up approvers by name to get their email + id
-      const approver1User = findUserByName(approver1);
-      const approver2User = finalApproverName ? findUserByName(finalApproverName) : null;
+      // Canonical approver records from users table
+      const approver2User = finalApproverUser;
 
       // Send emails asynchronously — always runs (creator email is independent of approvers)
       notifyVoucherCreated(voucherData, creatorData, approver1User, approver2User)
@@ -788,7 +1487,7 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
         `).run(
           approver1User.id,
           'New JCC Pending Your Approval',
-          `JCC ${voucherData.voucherRequestId} from ${req.user.name} (${supplier}, ₹${basicAmount}) requires your Level 1 approval.`,
+          `JCC ${voucherData.voucherRequestId} from ${creatorName} (${supplier}, ₹${basicAmount}) requires your Level 1 approval.`,
           'warning'
         );
       }
@@ -801,7 +1500,7 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
         `).run(
           approver2User.id,
           'New JCC — Final Approval Will Be Required',
-          `JCC ${voucherData.voucherRequestId} from ${req.user.name} (${supplier}, ₹${basicAmount}) will need your final approval after Level 1.`,
+          `JCC ${voucherData.voucherRequestId} from ${creatorName} (${supplier}, ₹${basicAmount}) will need your final approval after Level 1.`,
           'info'
         );
       }
@@ -843,225 +1542,267 @@ router.get('/voucher-file/:id', authenticateToken, (req, res) => {
   }
 });
 
-// Download JCC PDF for approved voucher
+// Download JCC PDF for approved voucher (authenticated users)
 router.get(['/download-jcc-pdf/:id', '/voucher/:id/pdf', '/vouchers/:id/pdf'], authenticateToken, async (req, res) => {
   try {
-    // Get voucher with user details
-    const voucher = db.prepare(`
-      SELECT v.*, u.name as user_name, u.ps_number as creator_ps_number
-      FROM voucher_requests v
-      JOIN users u ON v.user_id = u.id
-      WHERE v.id = ?
-    `).get(req.params.id);
-
-    if (!voucher) {
-      return res.status(404).json({ error: 'Voucher not found' });
-    }
-
-    // Only allow download for fully approved vouchers
-    if (voucher.status !== 'approved') {
-      return res.status(403).json({ error: 'Voucher must be fully approved to download JCC PDF' });
-    }
-
-
-    // Helper to get PS number
-    const getPSNumberFromName = (name) => {
-      if (!name) return '-';
-      const u = findUserByName(name);
-      return u?.ps_number || '-';
-    };
-
-    // Helper to format date as DD-MM-YYYY
-    const formatDate = (dateStr) => {
-      if (!dateStr) return '-';
-      const d = new Date(dateStr);
-      return `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`;
-    };
-
-    // Auto-fetch supplier info from linked PO
-    let supplierCode = '';
-    let supplierAddress = '';
-    let poDate = '';
-    let poAmount = '';
-    if (voucher.po_number) {
-      const linkedPO = db.prepare(`
-        SELECT supplier_code, supplier_address, po_date, total_budget FROM purchase_orders WHERE po_number = ?
-      `).get(voucher.po_number);
-      if (linkedPO) {
-        supplierCode = linkedPO.supplier_code || '';
-        supplierAddress = linkedPO.supplier_address || '';
-        poDate = linkedPO.po_date || '';
-        poAmount = linkedPO.total_budget || '';
-      }
-    }
-
-    const deptCode = (() => {
-      const dept = (voucher.department || '').toUpperCase();
-      if (dept.includes('DOCUMENTATION') || dept.includes('TRAINING')) return '3559';
-      return '';
-    })();
-
-    const materialsQuery = db.prepare(`
-      SELECT amount, project_code, project_name 
-      FROM voucher_materials
-      WHERE voucher_id = ?
-      ORDER BY id ASC
-    `).all(voucher.id);
-
-    const normalizedMaterials = [...new Map(
-      materialsQuery.map((row) => {
-        const normalized = {
-          amount: normalizeDuplicateCsvPair(row.amount),
-          project_code: normalizeDuplicateCsvPair(row.project_code),
-          project_name: normalizeDuplicateCsvPair(row.project_name),
-        };
-        return [JSON.stringify(normalized), normalized];
-      })
-    ).values()].filter((row) => row.amount || row.project_code || row.project_name);
-
-    // If no materials strictly found, fallback to the single main project info
-    const isMaterialsEmpty = normalizedMaterials.length === 0;
-
-    const pdfItems = isMaterialsEmpty ? [{
-      loc: voucher.expense_booking_location || 'PEW',
-      dept: (() => {
-        const dept = (voucher.department || '').toUpperCase();
-        if (dept.includes('DOCUMENTATION') || dept.includes('TRAINING')) return 'DOC & TRNG';
-        return voucher.department;
-      })(),
-      dept_code: deptCode,
-      project: voucher.project_name || '',
-      project_code: voucher.project_code || '',
-      amount: voucher.basic_amount
-    }] : normalizedMaterials.map(m => ({
-      loc: voucher.expense_booking_location || 'PEW',
-      dept: (() => {
-        const dept = (voucher.department || '').toUpperCase();
-        if (dept.includes('DOCUMENTATION') || dept.includes('TRAINING')) return 'DOC & TRNG';
-        return voucher.department;
-      })(),
-      dept_code: deptCode,
-      project: m.project_name || '',
-      project_code: m.project_code || '',
-      amount: m.amount
-    }));
-
-
-    // Prepare PDF data
-    const pdfData = {
-      id: voucher.id,
-      voucher_number: `JCC${String(voucher.id).padStart(4, '0')}`,
-      claimed_by: voucher.claimed_by,
-      ps_number: voucher.creator_ps_number || '-',
-      department: (() => {
-        const dept = (voucher.department || '').toUpperCase();
-        if (dept.includes('DOCUMENTATION') || dept.includes('TRAINING')) return 'DOCUMENTATION & TRAINING';
-        return voucher.department;
-      })(),
-      claimed_date: voucher.claimed_date,
-      expense_booking_location: voucher.expense_booking_location,
-
-      // Map actions for the table
-      actions: [
-        {
-          action_by: 'INITIATOR',
-          person: voucher.user_name || '-',
-          psno: voucher.creator_ps_number || '-',
-          action: 'Voucher Initiated',
-          date: formatDate(voucher.claimed_date)
-        },
-        {
-          action_by: 'FIRST APPROVER',
-          person: voucher.approver1_name || '-',
-          psno: getPSNumberFromName(voucher.approver1_name),
-          action: voucher.approver1_status === 'approved' ? 'Approved' : (voucher.approver1_status || '-'),
-          date: voucher.approver1_date ? formatDate(voucher.approver1_date) : '-'
-        },
-        {
-          action_by: 'SECOND APPROVER',
-          person: voucher.approver2_name || '-',
-          psno: getPSNumberFromName(voucher.approver2_name),
-          action: voucher.approver2_status === 'approved' ? 'Approved' : (voucher.approver2_status || '-'),
-          date: voucher.approver2_date ? formatDate(voucher.approver2_date) : '-'
-        }
-      ],
-
-      invoice_no: voucher.invoice_number,
-      invoice_date: voucher.invoice_date,
-      nature_of_expenses: voucher.nature_of_expenses,
-      service_category: '',
-      description: voucher.description,
-
-      supplier_name: voucher.supplier,
-      supplier_code: supplierCode,
-      supplier_address: supplierAddress,
-      po_number: voucher.po_number || '',
-      po_date: poDate,
-      po_amount: poAmount,
-      dept_code: deptCode,
-
-      basic_amount: voucher.basic_amount,
-      gross_amount: voucher.gross_amount,
-      project_code: voucher.project_code,
-      project_name: voucher.project_name,
-      items: pdfItems
-    };
-
-    // Generate PDF in memory
-    const pdfFilename = `JCC${String(voucher.id).padStart(4, '0')}.pdf`;
-    const pdfPath = path.join(__dirname, '../temp', pdfFilename);
-
-    // Ensure temp directory exists
-    const tempDir = path.join(__dirname, '../temp');
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
-    }
-
-    // Generate PDF
-    try {
-      console.log('Generating PDF with data:', JSON.stringify(pdfData, null, 2));
-
-      console.log('Calling generateJCCPDF...');
-      await generateJCCPDF(pdfData, pdfPath);
-      console.log('generateJCCPDF finished. PDF generated successfully at:', pdfPath);
-
-      // Verify file exists
-      if (!fs.existsSync(pdfPath)) {
-        throw new Error(`PDF file not created at ${pdfPath}`);
-      }
-      const stats = fs.statSync(pdfPath);
-      console.log(`PDF file size: ${stats.size} bytes`);
-
-    } catch (pdfErr) {
-      console.error('Error in generateJCCPDF:', pdfErr);
-      return res.status(500).json({ error: 'Failed to generate PDF: ' + pdfErr.message });
-    }
-
-    // Send PDF file as download
-    res.download(pdfPath, pdfFilename, (err) => {
-      // Clean up temp file after sending
-      if (err) {
-        console.error('Error sending PDF:', err);
-        // If headers are already sent, we can't send a 500
-      }
-      try {
-        if (fs.existsSync(pdfPath)) {
-          fs.unlinkSync(pdfPath);
-          console.log('Temp PDF deleted:', pdfPath);
-        }
-      } catch (unlinkErr) {
-        console.error('Error deleting temp PDF:', unlinkErr);
-      }
-    });
-
-
+    await sendVoucherPdfDownload(res, req.params.id);
   } catch (error) {
     console.error('Error generating JCC PDF:', error);
-    try {
-      const fs = require('fs');
-      fs.appendFileSync('server_error.log', `${new Date().toISOString()} - PDF Gen Error: ${error.stack}\n`);
-    } catch (e) { console.error('Failed to write log', e); }
-    res.status(500).json({ error: 'Failed to generate JCC PDF' });
+    return res.status(error.statusCode || 500).json({ error: error.message || 'Failed to generate JCC PDF' });
+  }
+});
+
+// Send approved voucher JCC to supplier email for acknowledgement
+router.post('/vouchers/:id/send-to-supplier', authenticateToken, authorizeRoles('admin', 'coordinator', 'manager', 'final_approver'), async (req, res) => {
+  try {
+    const result = await dispatchVoucherToSupplier({
+      voucherId: req.params.id,
+      actorUser: req.user,
+      req,
+    });
+
+    return res.json({
+      message: `JCC sent to supplier (${result.recipientEmail})`,
+      recipientEmail: result.recipientEmail,
+      ackUrl: result.ackUrl,
+      pdfUrl: result.pdfUrl,
+      expiresAt: result.expiresAt,
+    });
+  } catch (error) {
+    console.error('Error sending JCC to supplier:', error);
+    return res.status(error.statusCode || 500).json({ error: error.message || 'Failed to send JCC to supplier' });
+  }
+});
+
+// Public supplier acknowledgement landing page
+router.get('/supplier/ack/:token', (req, res) => {
+  const token = req.params.token;
+  const tokenContext = getSupplierTokenContext(token);
+
+  if (!tokenContext) {
+    return res.status(404).send(renderSupplierAckPage({
+      title: 'Invalid acknowledgement link',
+      message: 'This supplier acknowledgement link is invalid. Please request a fresh link.',
+      isError: true,
+    }));
+  }
+
+  if (isSupplierTokenExpired(tokenContext.expires_at)) {
+    db.prepare(`
+      UPDATE voucher_requests
+      SET supplier_ack_status = CASE WHEN supplier_ack_status = 'pending' THEN 'expired' ELSE supplier_ack_status END
+      WHERE id = ?
+    `).run(tokenContext.voucher_id);
+
+    insertSupplierAckEvent({
+      voucherId: tokenContext.voucher_id,
+      tokenId: tokenContext.token_id,
+      eventType: 'link_expired',
+      eventByEmail: tokenContext.recipient_email,
+    });
+
+    return res.status(410).send(renderSupplierAckPage({
+      title: 'Acknowledgement link expired',
+      message: 'This link has expired. Please contact the InFloAI team to receive a fresh acknowledgement email.',
+      voucherContext: tokenContext,
+      isError: true,
+    }));
+  }
+
+  const alreadySubmitted = ['acknowledged', 'rejected'].includes(String(tokenContext.supplier_ack_status || '').toLowerCase()) || Boolean(tokenContext.used_at);
+
+  insertSupplierAckEvent({
+    voucherId: tokenContext.voucher_id,
+    tokenId: tokenContext.token_id,
+    eventType: 'link_opened',
+    eventByEmail: tokenContext.recipient_email,
+  });
+
+  if (alreadySubmitted) {
+    return res.send(renderSupplierAckPage({
+      title: 'Response already submitted',
+      message: `This JCC has already been marked as ${tokenContext.supplier_ack_status || 'processed'}.`,
+      voucherContext: tokenContext,
+    }));
+  }
+
+  return res.send(renderSupplierAckPage({
+    title: 'Supplier JCC Acknowledgement',
+    message: 'Please review the JCC PDF and submit your response.',
+    token,
+    voucherContext: tokenContext,
+    showForm: true,
+  }));
+});
+
+// Public supplier acknowledgement action
+router.post('/supplier/ack/:token', async (req, res) => {
+  const token = req.params.token;
+  const tokenContext = getSupplierTokenContext(token);
+
+  if (!tokenContext) {
+    return res.status(404).send(renderSupplierAckPage({
+      title: 'Invalid acknowledgement link',
+      message: 'This supplier acknowledgement link is invalid. Please request a fresh link.',
+      isError: true,
+    }));
+  }
+
+  if (isSupplierTokenExpired(tokenContext.expires_at)) {
+    db.prepare(`
+      UPDATE voucher_requests
+      SET supplier_ack_status = CASE WHEN supplier_ack_status = 'pending' THEN 'expired' ELSE supplier_ack_status END
+      WHERE id = ?
+    `).run(tokenContext.voucher_id);
+
+    insertSupplierAckEvent({
+      voucherId: tokenContext.voucher_id,
+      tokenId: tokenContext.token_id,
+      eventType: 'action_expired',
+      eventByEmail: tokenContext.recipient_email,
+    });
+
+    return res.status(410).send(renderSupplierAckPage({
+      title: 'Acknowledgement link expired',
+      message: 'This link has expired. Please contact the InFloAI team to receive a fresh acknowledgement email.',
+      voucherContext: tokenContext,
+      isError: true,
+    }));
+  }
+
+  const action = String(req.body.action || '').trim().toLowerCase();
+  const remarks = String(req.body.remarks || '').trim().slice(0, 1000);
+
+  if (!SUPPLIER_ACK_ALLOWED_ACTIONS.has(action)) {
+    return res.status(400).send(renderSupplierAckPage({
+      title: 'Invalid response',
+      message: 'Please choose either Acknowledge JCC or Reject JCC.',
+      token,
+      voucherContext: tokenContext,
+      showForm: true,
+      isError: true,
+    }));
+  }
+
+  const alreadySubmitted = ['acknowledged', 'rejected'].includes(String(tokenContext.supplier_ack_status || '').toLowerCase()) || Boolean(tokenContext.used_at);
+  if (alreadySubmitted) {
+    return res.send(renderSupplierAckPage({
+      title: 'Response already submitted',
+      message: `This JCC has already been marked as ${tokenContext.supplier_ack_status || 'processed'}.`,
+      voucherContext: tokenContext,
+    }));
+  }
+
+  db.prepare(`
+    UPDATE voucher_requests
+    SET supplier_ack_status = ?,
+        supplier_ack_at = datetime('now'),
+        supplier_ack_by_email = ?,
+        supplier_ack_remarks = ?
+    WHERE id = ?
+  `).run(action, tokenContext.recipient_email, remarks || null, tokenContext.voucher_id);
+
+  db.prepare(`
+    UPDATE voucher_supplier_ack_tokens
+    SET used_at = datetime('now')
+    WHERE voucher_id = ? AND used_at IS NULL
+  `).run(tokenContext.voucher_id);
+
+  insertSupplierAckEvent({
+    voucherId: tokenContext.voucher_id,
+    tokenId: tokenContext.token_id,
+    eventType: action,
+    eventByEmail: tokenContext.recipient_email,
+    remarks,
+  });
+
+  const voucherForNotifications = {
+    id: tokenContext.voucher_id,
+    user_id: tokenContext.user_id,
+    supplier: tokenContext.supplier,
+    approver1_name: tokenContext.approver1_name,
+    approver2_name: tokenContext.approver2_name,
+  };
+
+  try {
+    await Promise.all([
+      sendSupplierAckReceiptEmail({
+        recipientEmail: tokenContext.recipient_email,
+        voucherId: tokenContext.voucher_id,
+        supplierName: tokenContext.supplier,
+        action,
+        remarks,
+      }),
+      sendInternalSupplierAckEmails({
+        voucher: voucherForNotifications,
+        action,
+        remarks,
+        supplierEmail: tokenContext.recipient_email,
+      }),
+    ]);
+  } catch (emailError) {
+    console.error('Error sending supplier acknowledgement emails:', emailError);
+  }
+
+  return res.send(renderSupplierAckPage({
+    title: 'Response recorded successfully',
+    message: `Thank you. ${formatJccId(tokenContext.voucher_id)} has been marked as ${action}.`,
+    voucherContext: tokenContext,
+  }));
+});
+
+// Public supplier tokenized JCC PDF download
+router.get('/supplier/ack/:token/pdf', async (req, res) => {
+  const token = req.params.token;
+  const tokenContext = getSupplierTokenContext(token);
+
+  if (!tokenContext) {
+    return res.status(404).send(renderSupplierAckPage({
+      title: 'Invalid PDF link',
+      message: 'This PDF link is invalid. Please use the latest supplier email link.',
+      isError: true,
+    }));
+  }
+
+  if (isSupplierTokenExpired(tokenContext.expires_at)) {
+    db.prepare(`
+      UPDATE voucher_requests
+      SET supplier_ack_status = CASE WHEN supplier_ack_status = 'pending' THEN 'expired' ELSE supplier_ack_status END
+      WHERE id = ?
+    `).run(tokenContext.voucher_id);
+
+    insertSupplierAckEvent({
+      voucherId: tokenContext.voucher_id,
+      tokenId: tokenContext.token_id,
+      eventType: 'pdf_expired',
+      eventByEmail: tokenContext.recipient_email,
+    });
+
+    return res.status(410).send(renderSupplierAckPage({
+      title: 'PDF link expired',
+      message: 'This secure PDF link has expired. Please request a fresh supplier email.',
+      voucherContext: tokenContext,
+      isError: true,
+    }));
+  }
+
+  insertSupplierAckEvent({
+    voucherId: tokenContext.voucher_id,
+    tokenId: tokenContext.token_id,
+    eventType: 'pdf_downloaded',
+    eventByEmail: tokenContext.recipient_email,
+  });
+
+  try {
+    await sendVoucherPdfDownload(res, tokenContext.voucher_id);
+  } catch (error) {
+    console.error('Error downloading tokenized JCC PDF:', error);
+    return res.status(error.statusCode || 500).send(renderSupplierAckPage({
+      title: 'Unable to download PDF',
+      message: error.message || 'Failed to download JCC PDF',
+      voucherContext: tokenContext,
+      isError: true,
+    }));
   }
 });
 
@@ -1150,7 +1891,9 @@ router.get('/vouchers/:id/payment-log', authenticateToken, (req, res) => {
     const voucher = db.prepare(`
       SELECT id, supplier, invoice_number, basic_amount, status, payment_status,
              payment_reference, payment_remarks, payment_submitted_at, payment_initiated_at,
-             payment_debited_at, payment_settled_at, payment_failed_at, payment_reversed_at
+             payment_debited_at, payment_settled_at, payment_failed_at, payment_reversed_at,
+             supplier_ack_status, supplier_ack_email, supplier_ack_sent_at,
+             supplier_ack_expires_at, supplier_ack_at, supplier_ack_by_email, supplier_ack_remarks
       FROM voucher_requests
       WHERE id = ?
     `).get(voucherId);
@@ -1173,7 +1916,7 @@ router.get('/vouchers/:id/payment-log', authenticateToken, (req, res) => {
   }
 });
 
-router.post('/vouchers/:id/payment-status', authenticateToken, authorizeRoles('admin', 'coordinator', 'manager', 'final_approver'), (req, res) => {
+router.post('/vouchers/:id/payment-status', authenticateToken, authorizeRoles('admin', 'coordinator', 'manager', 'final_approver'), async (req, res) => {
   try {
     const voucherId = req.params.id;
     const { status, referenceNo, remarks, amount, actionSource } = req.body;
@@ -1204,6 +1947,15 @@ router.post('/vouchers/:id/payment-status', authenticateToken, authorizeRoles('a
           error: `Invalid status transition from ${PAYMENT_STATUS_META[currentStatus] || currentStatus} to ${PAYMENT_STATUS_META[status] || status}`,
         });
       }
+    }
+
+    let supplierDispatch = null;
+    if (status === 'submitted_to_vendor' && currentStatus !== 'submitted_to_vendor') {
+      supplierDispatch = await dispatchVoucherToSupplier({
+        voucherId,
+        actorUser: req.user,
+        req,
+      });
     }
 
     const timestampAssignment = setPaymentTimestamps(status);
@@ -1260,6 +2012,7 @@ router.post('/vouchers/:id/payment-status', authenticateToken, authorizeRoles('a
       message: 'Payment status updated successfully',
       status,
       label: PAYMENT_STATUS_META[status],
+      supplierDispatch,
     });
   } catch (error) {
     console.error('Error updating voucher payment status:', error);

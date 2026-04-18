@@ -24,10 +24,14 @@ import ReturnTrackerPage from './pages/ReturnTrackerPage';
 import MonthlyVoucherTrackingPage from './pages/MonthlyVoucherTrackingPage';
 import ReminderHistoryPage from './pages/ReminderHistoryPage';
 import AdminLogsPage from './pages/AdminLogsPage';
+import FeedbackPage from './pages/FeedbackPage';
+import AdminFeedbackPage from './pages/AdminFeedbackPage';
 
 import AppShell from './components/AppShell';
 
 const SHOW_ADMIN_LOGS = import.meta.env.VITE_SHOW_ADMIN_LOGS === 'true';
+const ENABLE_ASSET_MODULE = import.meta.env.VITE_ENABLE_ASSET_MODULE === 'true';
+const ENABLE_FEEDBACK_MODULE = import.meta.env.VITE_ENABLE_FEEDBACK === 'true';
 
 const ProtectedRoute = ({ children, allowedRoles }) => {
     const { user, loading } = useAuth();
@@ -283,21 +287,49 @@ const AppContent = () => {
                         } />
 
                         <Route path="/assets" element={
-                            <ProtectedRoute allowedRoles={['admin']}>
-                                <AssetTrackerPage />
-                            </ProtectedRoute>
+                            ENABLE_ASSET_MODULE ? (
+                                <ProtectedRoute allowedRoles={['admin']}>
+                                    <AssetTrackerPage />
+                                </ProtectedRoute>
+                            ) : (
+                                <Navigate to="/" replace />
+                            )
                         } />
 
                         <Route path="/return-tracker" element={
-                            <ProtectedRoute allowedRoles={['admin']}>
-                                <ReturnTrackerPage />
-                            </ProtectedRoute>
+                            ENABLE_ASSET_MODULE ? (
+                                <ProtectedRoute allowedRoles={['admin']}>
+                                    <ReturnTrackerPage />
+                                </ProtectedRoute>
+                            ) : (
+                                <Navigate to="/" replace />
+                            )
                         } />
 
                         <Route path="/reminder-history" element={
                             <ProtectedRoute allowedRoles={['admin']}>
                                 <ReminderHistoryPage />
                             </ProtectedRoute>
+                        } />
+
+                        <Route path="/feedback" element={
+                            ENABLE_FEEDBACK_MODULE ? (
+                                <ProtectedRoute>
+                                    <FeedbackPage />
+                                </ProtectedRoute>
+                            ) : (
+                                <Navigate to="/" replace />
+                            )
+                        } />
+
+                        <Route path="/admin-feedback" element={
+                            ENABLE_FEEDBACK_MODULE ? (
+                                <ProtectedRoute allowedRoles={['admin']}>
+                                    <AdminFeedbackPage />
+                                </ProtectedRoute>
+                            ) : (
+                                <Navigate to="/" replace />
+                            )
                         } />
 
                         {SHOW_ADMIN_LOGS && (

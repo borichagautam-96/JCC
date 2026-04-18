@@ -106,11 +106,15 @@ router.post('/', authenticateToken, authorizeRoles('admin'), (req, res) => {
             vendorCode,
             vendorName,
             address,
+            vendorAddress,
             contactNumber,
             mailId,
+            emailId,
             bpId,
             bpName,
             city,
+            poNo,
+            poNumber,
             country,
             ndaDate,
             ndaExpiryDate,
@@ -123,9 +127,33 @@ router.post('/', authenticateToken, authorizeRoles('admin'), (req, res) => {
         } = req.body;
 
         const normalizedVendorName = resolveVendorName(vendorName, bpName);
+        const resolvedVendorAddress = toTrimmedString(vendorAddress || address);
+        const resolvedMailId = toTrimmedString(emailId || mailId);
 
         if (!normalizedVendorName) {
-            return res.status(400).json({ error: 'BP Name or Vendor Name is required' });
+            return res.status(400).json({ error: 'Vendor is required' });
+        }
+
+        let finalVendorCode = toTrimmedString(vendorCode);
+        if (!finalVendorCode) {
+            return res.status(400).json({ error: 'Vendor code is required' });
+        }
+
+        if (!resolvedVendorAddress) {
+            return res.status(400).json({ error: 'Vendor address is required' });
+        }
+
+        const resolvedPoNo = toTrimmedString(poNo || poNumber || country);
+
+        const existingByCode = db.prepare(`
+            SELECT id
+            FROM vendors
+            WHERE LOWER(TRIM(vendor_code)) = LOWER(TRIM(?))
+            LIMIT 1
+        `).get(finalVendorCode);
+
+        if (existingByCode) {
+            return res.status(400).json({ error: 'Vendor code already exists' });
         }
 
         const existingByName = db.prepare(`
@@ -137,16 +165,6 @@ router.post('/', authenticateToken, authorizeRoles('admin'), (req, res) => {
 
         if (existingByName) {
             return res.status(400).json({ error: 'Vendor Name already exists' });
-        }
-
-        let finalVendorCode = toTrimmedString(vendorCode);
-        if (!finalVendorCode) {
-            // Auto-generate code when admin only provides vendor name.
-            finalVendorCode = generateVendorCode();
-        }
-
-        if (!finalVendorCode) {
-            return res.status(500).json({ error: 'Failed to generate vendor code' });
         }
 
         const result = db.prepare(`
@@ -173,13 +191,13 @@ router.post('/', authenticateToken, authorizeRoles('admin'), (req, res) => {
         `).run(
             finalVendorCode,
             normalizedVendorName,
-            toTrimmedString(address),
+            resolvedVendorAddress,
             toTrimmedString(contactNumber),
-            toTrimmedString(mailId),
+            resolvedMailId,
             toTrimmedString(bpId),
             toTrimmedString(bpName) || normalizedVendorName,
             toTrimmedString(city),
-            toTrimmedString(country),
+            resolvedPoNo,
             toTrimmedString(ndaDate),
             toTrimmedString(ndaExpiryDate),
             toTrimmedString(ndaPeriodYear),
@@ -234,7 +252,8 @@ router.post('/import', authenticateToken, authorizeRoles('admin'), handleVendorF
         const bpNameColumnIndex = findColumnIndex(headerRow, ['bp name']);
         const vendorNameColumnIndex = findColumnIndex(headerRow, ['vendor name']);
         const cityColumnIndex = findColumnIndex(headerRow, ['city']);
-        const countryColumnIndex = findColumnIndex(headerRow, ['country']);
+        const poNoColumnIndex = findColumnIndex(headerRow, ['po no', 'po number', 'pono', 'country']);
+        const addressColumnIndex = findColumnIndex(headerRow, ['vendor address', 'address']);
         const ndaDateColumnIndex = findColumnIndex(headerRow, ['date of nda', 'nda date']);
         const ndaExpiryDateColumnIndex = findColumnIndex(headerRow, ['expiry date of nda', 'nda expiry date']);
         const ndaPeriodYearColumnIndex = findColumnIndex(headerRow, ['period of nda in year', 'nda period']);
@@ -256,10 +275,11 @@ router.post('/import', authenticateToken, authorizeRoles('admin'), handleVendorF
                 return {
                     vendorCode: getCellValue(row, vendorCodeColumnIndex),
                     vendorName,
+                    address: getCellValue(row, addressColumnIndex),
                     bpId: getCellValue(row, bpIdColumnIndex),
                     bpName: bpName || vendorName,
                     city: getCellValue(row, cityColumnIndex),
-                    country: getCellValue(row, countryColumnIndex),
+                    poNo: getCellValue(row, poNoColumnIndex),
                     ndaDate: getCellValue(row, ndaDateColumnIndex),
                     ndaExpiryDate: getCellValue(row, ndaExpiryDateColumnIndex),
                     ndaPeriodYear: getCellValue(row, ndaPeriodYearColumnIndex),
@@ -274,7 +294,7 @@ router.post('/import', authenticateToken, authorizeRoles('admin'), handleVendorF
             .filter((entry) => entry.vendorName.length > 0);
 
         if (parsedRows.length === 0) {
-            return res.status(400).json({ error: 'No BP Name or Vendor Name values found in Excel file' });
+            return res.status(400).json({ error: 'No Vendor Name values found in Excel file' });
         }
 
         const uniqueIncomingRows = Array.from(new Map(
@@ -331,13 +351,13 @@ router.post('/import', authenticateToken, authorizeRoles('admin'), handleVendorF
                 insertStmt.run(
                     finalVendorCode,
                     entry.vendorName,
-                    '',
+                    entry.address,
                     '',
                     entry.mailId,
                     entry.bpId,
                     entry.bpName || entry.vendorName,
                     entry.city,
-                    entry.country,
+                    entry.poNo,
                     entry.ndaDate,
                     entry.ndaExpiryDate,
                     entry.ndaPeriodYear,
@@ -375,11 +395,15 @@ router.put('/:id', authenticateToken, authorizeRoles('admin'), (req, res) => {
             vendorCode,
             vendorName,
             address,
+            vendorAddress,
             contactNumber,
             mailId,
+            emailId,
             bpId,
             bpName,
             city,
+            poNo,
+            poNumber,
             country,
             ndaDate,
             ndaExpiryDate,
@@ -393,22 +417,31 @@ router.put('/:id', authenticateToken, authorizeRoles('admin'), (req, res) => {
         const { id } = req.params;
 
         const normalizedVendorName = resolveVendorName(vendorName, bpName);
+        const resolvedVendorAddress = toTrimmedString(vendorAddress || address);
+        const resolvedMailId = toTrimmedString(emailId || mailId);
         if (!normalizedVendorName) {
-            return res.status(400).json({ error: 'BP Name or Vendor Name is required' });
+            return res.status(400).json({ error: 'Vendor is required' });
         }
 
         let finalVendorCode = toTrimmedString(vendorCode);
         if (!finalVendorCode) {
-            const existingVendor = db.prepare('SELECT vendor_code FROM vendors WHERE id = ?').get(id);
-            finalVendorCode = toTrimmedString(existingVendor?.vendor_code);
+            return res.status(400).json({ error: 'Vendor code is required' });
         }
 
-        if (!finalVendorCode) {
-            finalVendorCode = generateVendorCode();
+        if (!resolvedVendorAddress) {
+            return res.status(400).json({ error: 'Vendor address is required' });
         }
 
-        if (!finalVendorCode) {
-            return res.status(500).json({ error: 'Failed to resolve vendor code' });
+        const existingByCode = db.prepare(`
+            SELECT id
+            FROM vendors
+            WHERE LOWER(TRIM(vendor_code)) = LOWER(TRIM(?))
+              AND id != ?
+            LIMIT 1
+        `).get(finalVendorCode, id);
+
+        if (existingByCode) {
+            return res.status(400).json({ error: 'Vendor code already exists' });
         }
 
         db.prepare(`
@@ -434,13 +467,13 @@ router.put('/:id', authenticateToken, authorizeRoles('admin'), (req, res) => {
         `).run(
             finalVendorCode,
             normalizedVendorName,
-            toTrimmedString(address),
+            resolvedVendorAddress,
             toTrimmedString(contactNumber),
-            toTrimmedString(mailId),
+            resolvedMailId,
             toTrimmedString(bpId),
             toTrimmedString(bpName) || normalizedVendorName,
             toTrimmedString(city),
-            toTrimmedString(country),
+            toTrimmedString(poNo || poNumber || country),
             toTrimmedString(ndaDate),
             toTrimmedString(ndaExpiryDate),
             toTrimmedString(ndaPeriodYear),

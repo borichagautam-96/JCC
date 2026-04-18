@@ -70,6 +70,68 @@ const logLoginFailure = ({ user, statusCode, reason, metadata = {}, deviceId, ip
     });
 };
 
+const PS_NUMBER_PATTERN = /^\d+$/;
+
+const getPsNumberDomain = () => {
+    const normalized = String(env.ldapPsNumberDomain || '').trim().toLowerCase().replace(/^@+/, '');
+    return normalized || 'ltdic.com';
+};
+
+const normalizeIdentifier = (identifier) => String(identifier || '').trim();
+
+const parseLoginIdentifier = (identifier) => {
+    const normalized = normalizeIdentifier(identifier);
+    const psNumberDomain = getPsNumberDomain();
+    const psNumberDomainSuffix = `@${psNumberDomain}`;
+    const normalizedLower = normalized.toLowerCase();
+
+    if (!normalized) {
+        return {
+            lookupIdentifier: '',
+            ldapIdentifier: '',
+            provisioningIdentifier: '',
+            validationError: 'Username or PS Number is required',
+        };
+    }
+
+    if (normalizedLower.endsWith(psNumberDomainSuffix)) {
+        const psNumber = normalized.slice(0, -psNumberDomainSuffix.length).trim();
+        if (PS_NUMBER_PATTERN.test(psNumber)) {
+            return {
+                lookupIdentifier: psNumber,
+                ldapIdentifier: `${psNumber}@${psNumberDomain}`,
+                provisioningIdentifier: psNumber,
+                validationError: null,
+            };
+        }
+    }
+
+    if (PS_NUMBER_PATTERN.test(normalized)) {
+        return {
+            lookupIdentifier: normalized,
+            ldapIdentifier: `${normalized}@${psNumberDomain}`,
+            provisioningIdentifier: normalized,
+            validationError: null,
+        };
+    }
+
+    if (normalized.includes('@')) {
+        return {
+            lookupIdentifier: '',
+            ldapIdentifier: '',
+            provisioningIdentifier: '',
+            validationError: 'Use username or PS Number to sign in',
+        };
+    }
+
+    return {
+        lookupIdentifier: normalized,
+        ldapIdentifier: normalized,
+        provisioningIdentifier: normalized,
+        validationError: null,
+    };
+};
+
 const findUserByIdentifier = (identifier) => {
     const normalized = normalizeIdentifier(identifier);
 
@@ -77,23 +139,20 @@ const findUserByIdentifier = (identifier) => {
         return null;
     }
 
-    // Allow sign-in with PS number, full email, or email username (before @).
+    // Allow sign-in with PS number or username (email prefix before @).
     return db.prepare(`
         SELECT *
         FROM users
         WHERE ps_number = ?
-           OR lower(email) = lower(?)
            OR (
                 instr(email, '@') > 1
                 AND lower(substr(email, 1, instr(email, '@') - 1)) = lower(?)
            )
         LIMIT 1
-    `).get(normalized, normalized, normalized);
+    `).get(normalized, normalized);
 };
 
 const canUseLocalDbLogin = (user) => Boolean(user) && env.ldapAllowLocalDbLogin;
-
-const normalizeIdentifier = (identifier) => String(identifier || '').trim();
 
 const normalizeOptionalEmail = (email) => {
     if (typeof email !== 'string') {
@@ -240,18 +299,34 @@ const authenticateWithLocalPassword = ({ user, password, identifier, deviceId, i
     return user;
 };
 
-const authenticateWithLdapMode = async ({ identifier, password, user, deviceId, ipAddress, userAgent, res }) => {
+const authenticateWithLdapMode = async ({
+    identifier,
+    ldapIdentifier,
+    provisioningIdentifier,
+    password,
+    user,
+    deviceId,
+    ipAddress,
+    userAgent,
+    res,
+}) => {
     if (user && !enforceAccountLockPolicy({ user, deviceId, ipAddress, userAgent, identifier, res })) {
         return null;
     }
 
+    const ldapUsername = normalizeIdentifier(ldapIdentifier || identifier);
+    const ldapProvisioningIdentifier = normalizeIdentifier(provisioningIdentifier || identifier);
+
     const ldapResult = await authenticateWithLdap({
-        username: identifier,
+        username: ldapUsername,
         password,
     });
 
     if (ldapResult.authenticated) {
-        const { user: ldapUser, errorCode, errorMessage } = upsertLdapUser({ psNumber: identifier, profile: ldapResult.profile });
+        const { user: ldapUser, errorCode, errorMessage } = upsertLdapUser({
+            psNumber: ldapProvisioningIdentifier,
+            profile: ldapResult.profile,
+        });
         if (!ldapUser) {
             return handleLdapProvisioningFailure({
                 errorCode,
@@ -327,6 +402,34 @@ const authenticateWithLdapMode = async ({ identifier, password, user, deviceId, 
     });
 
     return null;
+};
+
+const authenticateLoginUser = async ({
+    identifier,
+    ldapIdentifier,
+    provisioningIdentifier,
+    password,
+    user,
+    deviceId,
+    ipAddress,
+    userAgent,
+    res,
+}) => {
+    if (env.ldapEnabled) {
+        return authenticateWithLdapMode({
+            identifier,
+            ldapIdentifier,
+            provisioningIdentifier,
+            password,
+            user,
+            deviceId,
+            ipAddress,
+            userAgent,
+            res,
+        });
+    }
+
+    return authenticateWithLocalPassword({ user, password, identifier, deviceId, ipAddress, userAgent, res });
 };
 
 const enforceAccountLockPolicy = ({ user, deviceId, ipAddress, userAgent, identifier, res }) => {
@@ -530,14 +633,25 @@ router.post('/login', loginLimiter, validateRequest(loginSchema), async (req, re
     try {
         const { identifier: rawIdentifier, psNumber, ps_number, password } = req.body;
         const sessionConfig = getSessionConfig();
-        const identifier = normalizeIdentifier(rawIdentifier || psNumber || ps_number);
+        const loginIdentifier = parseLoginIdentifier(rawIdentifier || psNumber || ps_number);
+        const identifier = loginIdentifier.lookupIdentifier;
+        const ldapIdentifier = loginIdentifier.ldapIdentifier;
+        const provisioningIdentifier = loginIdentifier.provisioningIdentifier;
         const deviceId = req.headers['x-device-id'];
         const userAgent = req.headers['user-agent'] || '';
         const ipAddress = req.ip || req.connection?.remoteAddress || '';
 
-        if (!identifier) {
-            logLoginFailure({ statusCode: 400, reason: 'missing_identifier', deviceId, ipAddress, userAgent });
-            return res.status(400).json({ error: 'Username, email, or PS Number is required' });
+        if (loginIdentifier.validationError) {
+            const normalizedRawIdentifier = normalizeIdentifier(rawIdentifier || psNumber || ps_number);
+            logLoginFailure({
+                statusCode: 400,
+                reason: normalizedRawIdentifier ? 'invalid_identifier' : 'missing_identifier',
+                metadata: normalizedRawIdentifier ? { identifier: normalizedRawIdentifier } : {},
+                deviceId,
+                ipAddress,
+                userAgent,
+            });
+            return res.status(400).json({ error: loginIdentifier.validationError });
         }
 
         if (!deviceId) {
@@ -549,30 +663,20 @@ router.post('/login', loginLimiter, validateRequest(loginSchema), async (req, re
 
         console.log('Login attempt for:', identifier, '| Device:', deviceId?.substring(0, 8) + '...');
 
-        if (env.ldapEnabled) {
-            user = await authenticateWithLdapMode({
-                identifier,
-                password,
-                user,
-                deviceId,
-                ipAddress,
-                userAgent,
-                res,
-            });
-
-            if (!user) {
-                return;
-            }
-        } else {
-            user = authenticateWithLocalPassword({ user, password, identifier, deviceId, ipAddress, userAgent, res });
-            if (!user) {
-                return;
-            }
-        }
+        user = await authenticateLoginUser({
+            identifier,
+            ldapIdentifier,
+            provisioningIdentifier,
+            password,
+            user,
+            deviceId,
+            ipAddress,
+            userAgent,
+            res,
+        });
 
         if (!user) {
-            logLoginFailure({ statusCode: 400, reason: 'user_not_found_post_auth', metadata: { identifier }, deviceId, ipAddress, userAgent });
-            return res.status(400).json({ error: 'Invalid credentials' });
+            return;
         }
 
         if (Number(user.failed_login_attempts || 0) > 0 || user.locked_until) {

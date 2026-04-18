@@ -57,7 +57,7 @@ const LoginPage = () => {
                         <h1 className="jcc-login-title">
                             InFloAI
                         </h1>
-                        <p className="jcc-login-subtitle">Sign in with username, email, or PS Number</p>
+                        <p className="jcc-login-subtitle">Sign in with username or PS Number</p>
                     </div>
 
                     {error && (
@@ -69,7 +69,7 @@ const LoginPage = () => {
                     <form onSubmit={handleSubmit}>
                         <div className="input-group">
                             <label className="jcc-login-label" htmlFor="jcc-ps-number">
-                                Username / Email / PS Number *
+                                Username / PS Number *
                             </label>
                             <div className="jcc-login-input-wrap">
                                 <input
@@ -77,7 +77,7 @@ const LoginPage = () => {
                                     type="text"
                                     name="psNumber"
                                     className="input-field jcc-login-input"
-                                    placeholder="Enter username, email, or PS Number"
+                                    placeholder="Enter username or PS Number"
                                     value={formData.psNumber}
                                     onChange={handleChange}
                                     required

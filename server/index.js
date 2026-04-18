@@ -14,6 +14,7 @@ import letterRoutes from './routes/letters.js';
 import purchaseOrderRoutes from './routes/purchaseOrders.js';
 import vendorRoutes from './routes/vendors.js';
 import assetRoutes from './routes/assets.js';
+import feedbackRoutes from './routes/feedback.js';
 import { startReturnReminderScheduler } from './services/returnReminderService.js';
 import { startJccApprovalReminderScheduler } from './services/jccApprovalReminderService.js';
 import { startActivityLogRetentionScheduler } from './services/activityLogRetentionService.js';
@@ -72,6 +73,9 @@ app.use('/api/letters', letterRoutes);
 app.use('/api/purchase-orders', purchaseOrderRoutes);
 app.use('/api/vendors', vendorRoutes);
 app.use('/api/assets', assetRoutes);
+if (env.feedbackApiEnabled) {
+    app.use('/api/feedback', feedbackRoutes);
+}
 
 // Health check
 app.get('/api/health', (req, res) => {

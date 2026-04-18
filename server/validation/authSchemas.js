@@ -33,7 +33,7 @@ export const loginSchema = z.object({
             if (!value.identifier && !value.psNumber && !value.ps_number) {
                 ctx.addIssue({
                     code: z.ZodIssueCode.custom,
-                    message: 'Username, email, or PS Number is required',
+                    message: 'Username or PS Number is required',
                     path: ['identifier'],
                 });
             }

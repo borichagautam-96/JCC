@@ -5,6 +5,25 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import '../voucher-styles.css';
 import { getVendorNames } from '../utils/vendorList';
 
+const CLAIM_DATE_LOOKBACK_DAYS = 15;
+const INVOICE_DATE_LOOKBACK_DAYS = 15;
+
+const toDateInputValue = (date) => new Date(date).toISOString().split('T')[0];
+
+const getTodayDateValue = () => toDateInputValue(new Date());
+
+const getMinClaimDateValue = () => {
+    const date = new Date();
+    date.setDate(date.getDate() - CLAIM_DATE_LOOKBACK_DAYS);
+    return toDateInputValue(date);
+};
+
+const getMinInvoiceDateValue = () => {
+    const date = new Date();
+    date.setDate(date.getDate() - INVOICE_DATE_LOOKBACK_DAYS);
+    return toDateInputValue(date);
+};
+
 const VoucherRequestPage = () => {
     let authContext;
     try {
@@ -30,7 +49,7 @@ const VoucherRequestPage = () => {
         // Initiator Details
         claimedBy: user?.name || '',
         department: 'Documentation & Training',
-        claimedDate: new Date().toISOString().split('T')[0],
+        claimedDate: getTodayDateValue(),
 
         // Voucher Header
         supplier: extractedData.vendorName || extractedData.vendor_name || '',
@@ -232,6 +251,26 @@ const VoucherRequestPage = () => {
         setSuccess('');
 
         try {
+            const minClaimDate = getMinClaimDateValue();
+            const maxClaimDate = getTodayDateValue();
+            const claimedDateValue = String(formData.claimedDate || '').trim();
+            if (!claimedDateValue) {
+                throw new Error('Claim Date is required');
+            }
+            if (claimedDateValue < minClaimDate || claimedDateValue > maxClaimDate) {
+                throw new Error(`Claim Date must be within the last ${CLAIM_DATE_LOOKBACK_DAYS} days`);
+            }
+
+            const minInvoiceDate = getMinInvoiceDateValue();
+            const maxInvoiceDate = getTodayDateValue();
+            const invoiceDateValue = String(formData.invoiceDate || '').trim();
+            if (!invoiceDateValue) {
+                throw new Error('Invoice Date is required');
+            }
+            if (invoiceDateValue < minInvoiceDate || invoiceDateValue > maxInvoiceDate) {
+                throw new Error(`Invoice Date must be within the last ${INVOICE_DATE_LOOKBACK_DAYS} days`);
+            }
+
             // Validation: Gross Amount must be higher than Basic Amount
             const basicAmount = parseFloat(formData.basicAmount) || 0;
             const grossAmount = parseFloat(formData.grossAmount) || 0;
@@ -324,7 +363,7 @@ const VoucherRequestPage = () => {
             setFormData({
                 claimedBy: user?.name || '',
                 department: 'Documentation & Training',
-                claimedDate: new Date().toISOString().split('T')[0],
+                claimedDate: getTodayDateValue(),
                 supplier: '',
                 expenseBookingLocation: '',
                 description: '',
@@ -433,6 +472,8 @@ const VoucherRequestPage = () => {
                                     className="input-field"
                                     value={formData.claimedDate}
                                     onChange={handleChange}
+                                    min={getMinClaimDateValue()}
+                                    max={getTodayDateValue()}
                                     required
                                 />
                             </div>
@@ -527,12 +568,8 @@ const VoucherRequestPage = () => {
                                     className="input-field"
                                     value={formData.invoiceDate}
                                     onChange={handleChange}
-                                    min={(() => {
-                                        const date = new Date();
-                                        date.setMonth(date.getMonth() - 2);
-                                        return date.toISOString().split('T')[0];
-                                    })()}
-                                    max={new Date().toISOString().split('T')[0]}
+                                    min={getMinInvoiceDateValue()}
+                                    max={getTodayDateValue()}
                                     required
                                 />
                             </div>

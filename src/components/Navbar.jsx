@@ -15,11 +15,14 @@ import {
     ReceiptText,
     Building2,
     KeyRound,
+    MessageSquareText,
     Activity,
     LogOut,
 } from 'lucide-react';
 
 const SHOW_ADMIN_LOGS = import.meta.env.VITE_SHOW_ADMIN_LOGS === 'true';
+const ENABLE_ASSET_MODULE = import.meta.env.VITE_ENABLE_ASSET_MODULE === 'true';
+const ENABLE_FEEDBACK_MODULE = import.meta.env.VITE_ENABLE_FEEDBACK === 'true';
 
 const Navbar = ({ isOpen }) => {
     const { user, logout } = useAuth();
@@ -89,14 +92,18 @@ const Navbar = ({ isOpen }) => {
 
                 {(user?.role === 'admin') && (
                     <>
-                        <Link to="/assets" className={navClass(isActive('/assets'))}>
-                            <Laptop size={18} />
-                            <span>Asset Tracker</span>
-                        </Link>
-                        <Link to="/return-tracker" className={navClass(isActive('/return-tracker'))}>
-                            <RefreshCcw size={18} />
-                            <span>Asset Management</span>
-                        </Link>
+                        {ENABLE_ASSET_MODULE && (
+                            <>
+                                <Link to="/assets" className={navClass(isActive('/assets'))}>
+                                    <Laptop size={18} />
+                                    <span>Asset Tracker</span>
+                                </Link>
+                                <Link to="/return-tracker" className={navClass(isActive('/return-tracker'))}>
+                                    <RefreshCcw size={18} />
+                                    <span>Asset Management</span>
+                                </Link>
+                            </>
+                        )}
                         <Link to="/reminder-history" className={navClass(isActive('/reminder-history'))}>
                             <BellRing size={18} />
                             <span>Reminder History</span>
@@ -143,6 +150,13 @@ const Navbar = ({ isOpen }) => {
                             <Users size={18} />
                             <span>User Management</span>
                         </Link>
+
+                        {ENABLE_FEEDBACK_MODULE && (
+                            <Link to="/admin-feedback" className={navClass(isActive('/admin-feedback'))}>
+                                <MessageSquareText size={18} />
+                                <span>Feedback Inbox</span>
+                            </Link>
+                        )}
 
                         {SHOW_ADMIN_LOGS && (
                             <Link to="/admin-logs" className={navClass(isActive('/admin-logs'))}>

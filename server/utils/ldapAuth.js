@@ -58,6 +58,36 @@ const getEntryValue = (entry, key) => {
     return '';
 };
 
+const getEntryValueByKeys = (entry, keys = []) => {
+    if (!entry || typeof entry !== 'object' || !Array.isArray(keys) || keys.length === 0) {
+        return '';
+    }
+
+    // Try direct matches first.
+    for (const key of keys) {
+        const value = getEntryValue(entry, key);
+        if (value) {
+            return value;
+        }
+    }
+
+    // Then try case-insensitive matches from entry keys.
+    const entryKeys = Object.keys(entry);
+    for (const key of keys) {
+        const foundKey = entryKeys.find((entryKey) => entryKey.toLowerCase() === String(key).toLowerCase());
+        if (!foundKey) {
+            continue;
+        }
+
+        const value = getEntryValue(entry, foundKey);
+        if (value) {
+            return value;
+        }
+    }
+
+    return '';
+};
+
 const buildBindUser = (username, domain) => {
     const trimmedUsername = String(username || '').trim();
     const effectiveDomain = toNonEmptyString(domain) || toNonEmptyString(env.ldapDomain);
@@ -163,15 +193,21 @@ const mapLdapErrorCode = (error) => {
 };
 
 const normalizeProfile = (entry, username) => {
-    const displayName = getEntryValue(entry, 'displayName');
-    const commonName = getEntryValue(entry, 'cn');
-    const directoryName = getEntryValue(entry, 'name');
-    const mail = getEntryValue(entry, 'mail');
-    const principalName = getEntryValue(entry, 'userPrincipalName');
+    const firstName = getEntryValueByKeys(entry, ['givenName', 'firstname', 'firstName']);
+    const surname = getEntryValueByKeys(entry, ['sn', 'surname', 'lastName', 'lastname']);
+
+    const combinedName = [firstName, surname].filter(Boolean).join(' ').trim();
+    const displayName = getEntryValueByKeys(entry, ['displayName']);
+    const commonName = getEntryValueByKeys(entry, ['cn']);
+    const directoryName = getEntryValueByKeys(entry, ['name']);
+    const mail = getEntryValueByKeys(entry, ['mail']);
+    const principalName = getEntryValueByKeys(entry, ['userPrincipalName']);
 
     return {
         username: String(username || '').trim(),
-        fullName: displayName || commonName || directoryName || String(username || '').trim(),
+        fullName: combinedName || displayName || commonName || directoryName || String(username || '').trim(),
+        firstName: firstName || null,
+        surname: surname || null,
         email: mail || null,
         principalName: principalName || null,
     };
@@ -212,7 +248,7 @@ export const authenticateWithLdap = async ({ username, password, domain } = {}) 
         const { searchEntries } = await client.search(baseDn, {
             scope: 'sub',
             filter,
-            attributes: ['cn', 'displayName', 'mail', 'name', 'userPrincipalName'],
+            attributes: ['cn', 'displayName', 'mail', 'name', 'userPrincipalName', 'givenName', 'sn', 'surname'],
         });
 
         const entry = Array.isArray(searchEntries) && searchEntries.length > 0 ? searchEntries[0] : null;

@@ -619,6 +619,39 @@ const initDatabase = async () => {
     console.error('Error adding voucher payment columns:', error);
   }
 
+  // Add supplier acknowledgement columns to voucher_requests
+  try {
+    const voucherInfo = db.exec("PRAGMA table_info(voucher_requests)");
+    const voucherColumns = voucherInfo.length > 0 ? voucherInfo[0].values : [];
+    const voucherColumnNames = voucherColumns.map(col => col[1]);
+
+    const supplierAckColumns = [
+      { name: 'supplier_ack_status', type: "TEXT DEFAULT 'not_sent'" },
+      { name: 'supplier_ack_email', type: 'TEXT' },
+      { name: 'supplier_ack_sent_at', type: 'DATETIME' },
+      { name: 'supplier_ack_expires_at', type: 'DATETIME' },
+      { name: 'supplier_ack_at', type: 'DATETIME' },
+      { name: 'supplier_ack_by_email', type: 'TEXT' },
+      { name: 'supplier_ack_remarks', type: 'TEXT' }
+    ];
+
+    let didAddSupplierAckColumn = false;
+    supplierAckColumns.forEach(col => {
+      if (!voucherColumnNames.includes(col.name)) {
+        db.exec(`ALTER TABLE voucher_requests ADD COLUMN ${col.name} ${col.type}`);
+        didAddSupplierAckColumn = true;
+      }
+    });
+
+    if (didAddSupplierAckColumn) {
+      saveDatabase();
+    }
+
+    console.log('✓ Supplier acknowledgement columns checked/added');
+  } catch (error) {
+    console.error('Error adding supplier acknowledgement columns:', error);
+  }
+
   db.run(`
     CREATE TABLE IF NOT EXISTS voucher_payment_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -871,6 +904,42 @@ const initDatabase = async () => {
     )
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS voucher_supplier_ack_tokens (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      voucher_id INTEGER NOT NULL,
+      recipient_email TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at DATETIME NOT NULL,
+      used_at DATETIME,
+      created_by INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (voucher_id) REFERENCES voucher_requests(id),
+      FOREIGN KEY (created_by) REFERENCES users(id)
+    )
+  `);
+
+  db.run('CREATE INDEX IF NOT EXISTS idx_voucher_supplier_ack_tokens_voucher_id ON voucher_supplier_ack_tokens(voucher_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_voucher_supplier_ack_tokens_expires_at ON voucher_supplier_ack_tokens(expires_at)');
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS voucher_supplier_ack_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      voucher_id INTEGER NOT NULL,
+      token_id INTEGER,
+      event_type TEXT NOT NULL,
+      event_by_email TEXT,
+      remarks TEXT,
+      metadata TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (voucher_id) REFERENCES voucher_requests(id),
+      FOREIGN KEY (token_id) REFERENCES voucher_supplier_ack_tokens(id)
+    )
+  `);
+
+  db.run('CREATE INDEX IF NOT EXISTS idx_voucher_supplier_ack_events_voucher_id ON voucher_supplier_ack_events(voucher_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_voucher_supplier_ack_events_event_type ON voucher_supplier_ack_events(event_type)');
+
   // Email event audit log — tracks every send attempt (success/failure)
   db.run(`
     CREATE TABLE IF NOT EXISTS email_event_logs (
@@ -889,6 +958,46 @@ const initDatabase = async () => {
 
   db.run('CREATE INDEX IF NOT EXISTS idx_email_event_logs_status ON email_event_logs(status)');
   db.run('CREATE INDEX IF NOT EXISTS idx_email_event_logs_created_at ON email_event_logs(created_at)');
+
+  const feedbackTableExists = (db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='feedback_submissions'")?.[0]?.values?.length || 0) > 0;
+  const feedbackStatusIndexExists = (db.exec("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_feedback_submissions_status'")?.[0]?.values?.length || 0) > 0;
+  const feedbackCreatedAtIndexExists = (db.exec("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_feedback_submissions_created_at'")?.[0]?.values?.length || 0) > 0;
+  const feedbackUserIndexExists = (db.exec("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_feedback_submissions_user_id'")?.[0]?.values?.length || 0) > 0;
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS feedback_submissions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      feedback_type TEXT NOT NULL,
+      rating INTEGER,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      module_path TEXT,
+      steps_to_reproduce TEXT,
+      expected_result TEXT,
+      actual_result TEXT,
+      attachment_path TEXT,
+      contact_allowed INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'new',
+      priority TEXT DEFAULT 'medium',
+      assigned_to INTEGER,
+      admin_note TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      resolved_at DATETIME,
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (assigned_to) REFERENCES users(id)
+    )
+  `);
+
+  db.run('CREATE INDEX IF NOT EXISTS idx_feedback_submissions_status ON feedback_submissions(status)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_feedback_submissions_created_at ON feedback_submissions(created_at)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_feedback_submissions_user_id ON feedback_submissions(user_id)');
+
+  if (!feedbackTableExists || !feedbackStatusIndexExists || !feedbackCreatedAtIndexExists || !feedbackUserIndexExists) {
+    saveDatabase();
+    console.log('✓ Feedback table and indexes checked/added');
+  }
 
   // ===== DEVICE BINDING & SINGLE SESSION TABLES =====
 

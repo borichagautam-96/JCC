@@ -3,6 +3,8 @@ import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { getVendorNames } from '../utils/vendorList';
 import './vendor-upload-taxhacker.css';
 
+const SHOW_ANALYZE_WITH_AI_BUTTON = false;
+
 const VendorUploadPage = () => {
     const [files, setFiles] = useState([]);
     const [activeFileIndex, setActiveFileIndex] = useState(0);
@@ -468,7 +470,7 @@ const VendorUploadPage = () => {
                             })}
                         </div>
 
-                        {activeFile && (
+                        {SHOW_ANALYZE_WITH_AI_BUTTON && activeFile && (
                             <button
                                 type="button"
                                 onClick={handleAnalyzeWithAI}

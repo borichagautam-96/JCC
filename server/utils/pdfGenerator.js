@@ -193,7 +193,7 @@ export const generateJCCPDF = (d, out) =>
             d.actions.forEach(act => {
                 const aVals = [
                     (act.action_by || "").toUpperCase(),
-                    (act.person || "").toUpperCase(),
+                    (act.person || ""),
                     act.psno || "-",
                     act.action || "",
                     act.date || ""
