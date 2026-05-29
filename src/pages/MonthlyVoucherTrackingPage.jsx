@@ -108,7 +108,7 @@ const MonthlyVoucherTrackingPage = () => {
     <div className="container page-shell fade-in">
       <div className="page-header">
         <div>
-          <h1 className="page-title">Monthly Voucher Tracking</h1>
+          <h1 className="page-title">Monthly Claim Tracking</h1>
           <p className="page-subtitle">Generate monthly billing snapshots and review vendor-level totals in one dedicated workspace.</p>
         </div>
       </div>
@@ -116,8 +116,8 @@ const MonthlyVoucherTrackingPage = () => {
       <section className="asset-voucher-section" style={{ marginTop: 0 }}>
         <div className="asset-voucher-header">
           <div>
-            <h3 className="asset-voucher-title">Voucher Summary</h3>
-            <p className="asset-voucher-subtitle">Create and review monthly voucher totals by vendor.</p>
+            <h3 className="asset-voucher-title">Claim Summary</h3>
+            <p className="asset-voucher-subtitle">Create and review monthly claim totals by vendor.</p>
           </div>
           <div className="asset-voucher-metrics">
             <div className="asset-voucher-metric">
@@ -163,10 +163,10 @@ const MonthlyVoucherTrackingPage = () => {
           <button onClick={handleGenerateMonthly} className="btn btn-primary">Generate</button>
         </div>
 
-        {summaryLoading ? <p>Loading monthly vouchers...</p> : (
+        {summaryLoading ? <p>Loading monthly claims...</p> : (
           <>
             <div className="asset-voucher-grid">
-              {monthlySummary.length === 0 && <p style={{ color: '#6B7280' }}>No monthly vouchers generated for this month.</p>}
+              {monthlySummary.length === 0 && <p style={{ color: '#6B7280' }}>No monthly claims generated for this month.</p>}
               {monthlySummary.map((voucher) => (
                 <div key={voucher.id} className="asset-voucher-card">
                   <div style={{ fontWeight: 700 }}>{voucher.vendor_name}</div>
@@ -179,14 +179,14 @@ const MonthlyVoucherTrackingPage = () => {
             <div className="asset-voucher-section" style={{ marginTop: '1rem', border: '1px solid #E5E7EB', borderRadius: '12px', padding: '1rem' }}>
               <h4 style={{ margin: '0 0 0.6rem 0', fontSize: '1.05rem', fontWeight: 700 }}>Created By User</h4>
               {creatorSummary.length === 0 ? (
-                <p style={{ color: '#6B7280', margin: 0 }}>No creator-wise voucher data for this month.</p>
+                <p style={{ color: '#6B7280', margin: 0 }}>No creator-wise claim data for this month.</p>
               ) : (
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.95rem' }}>
                     <thead>
                       <tr style={{ textAlign: 'left', borderBottom: '1px solid #E5E7EB' }}>
                         <th style={{ padding: '0.55rem 0.4rem' }}>User</th>
-                        <th style={{ padding: '0.55rem 0.4rem' }}>Vouchers Created</th>
+                        <th style={{ padding: '0.55rem 0.4rem' }}>Claims Created</th>
                         <th style={{ padding: '0.55rem 0.4rem' }}>Total Amount</th>
                       </tr>
                     </thead>

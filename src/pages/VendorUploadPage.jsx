@@ -1,9 +1,43 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
-import { getVendorNames } from '../utils/vendorList';
 import './vendor-upload-taxhacker.css';
 
 const SHOW_ANALYZE_WITH_AI_BUTTON = false;
+
+// Canonical vendor list — mirrors VendorManagementPage TEMP_ALLOWED_VENDOR_NAMES, sorted A-Z
+// This is used as the guaranteed fallback so the dropdown is ALWAYS populated immediately.
+const DEFAULT_VENDOR_NAMES = [
+    'ALLWYN JUMBO PRINTS AND EXCHANGER PVT LTD',
+    'Armoured Vehicles Nigam Limited',
+    'Asha Furniture Works',
+    'Balaji Arts',
+    'Bharat Electronics Limited',
+    'CHANDRAHAS SHETTY',
+    'DDSPLM Pvt. Ltd.',
+    'Delos Consulting Pvt. Ltd.',
+    'DesignTech Systems Pvt. Ltd.',
+    'GenieHR Solutions Pvt. Ltd.',
+    'Global Publishing Solutions Ltd.',
+    'Hornbill Studios Pvt Ltd',
+    'JUSTVFX STUDIOS',
+    'LOUISCIAGA OVERSEAS PVT. LTD',
+    'MICROPOINT COMPUTERS PRIVATE LIMITED',
+    'Pentagon System And Services Pvt. Ltd',
+    'PEREVODRU',
+    'PEREVODRU GLOBAL TRANSLATION SERVICES',
+    'Pixlar Art Creation',
+    'RAC IT SOLUTIONS PVT. LTD.',
+    'Schneider Electric India Pvt. Limited (SEIPL)',
+    'Shezarweb Technologies',
+    'Shivam Computers',
+    'SIEMENS INDUSTRY SOFTWARE (INDIA)',
+    'Smartify Software Solutions LLP',
+    'Somshanti Enterprises',
+    'Track On Courier',
+    'Urgent Courier',
+    'Voice Kraft Productions',
+    'White Globe Pvt. Ltd.',
+].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
 
 const VendorUploadPage = () => {
     const [files, setFiles] = useState([]);
@@ -16,7 +50,9 @@ const VendorUploadPage = () => {
     const [error, setError] = useState('');
     const [isFullScreen, setIsFullScreen] = useState(false);
     const [previewZoom, setPreviewZoom] = useState(100);
-    const [supplierOptions, setSupplierOptions] = useState([]);
+    // Pre-seeded with DEFAULT_VENDOR_NAMES so the dropdown is never empty.
+    // The API call in useEffect will update this with the live DB list.
+    const [vendorNames, setVendorNames] = useState(DEFAULT_VENDOR_NAMES);
     const fileInputRef = useRef(null);
     const { getToken } = useAuth();
     const [users, setUsers] = useState([]); // Restore missing state
@@ -70,14 +106,8 @@ const VendorUploadPage = () => {
         });
     };
 
-    const uploadVendorOptions = useMemo(() => {
-        const base = getVendorNames(extractedData?.vendorName || '');
-        const merged = [...new Set([...base, ...supplierOptions].filter(Boolean))].sort((a, b) => a.localeCompare(b));
-        if (extractedData?.vendorName && !merged.includes(extractedData.vendorName)) {
-            return [extractedData.vendorName, ...merged];
-        }
-        return merged;
-    }, [extractedData?.vendorName, supplierOptions]);
+    // Vendor names come exclusively from Vendor Management (vendors table)
+    const uploadVendorOptions = vendorNames;
 
     const handleVendorSelection = (value) => {
         setExtractedData({ ...extractedData, vendorName: value });
@@ -201,22 +231,38 @@ const VendorUploadPage = () => {
         };
         fetchUsers();
 
-        const fetchSupplierOptions = async () => {
+        const fetchVendorNames = async () => {
             try {
-                const response = await fetch('/api/jcc/po-suppliers', {
+                const response = await fetch('/api/vendors/names', {
                     headers: { 'Authorization': `Bearer ${getToken()}`, 'X-Device-ID': getDeviceId() }
                 });
 
                 if (response.ok) {
                     const data = await response.json();
-                    setSupplierOptions(Array.isArray(data) ? data : []);
+                    if (Array.isArray(data) && data.length > 0) {
+                        // Merge API response with fallback list — deduplicate case-insensitively, sort A-Z
+                        const combined = [...data];
+                        const lowerSet = new Set(data.map((n) => n.toLowerCase()));
+                        for (const name of DEFAULT_VENDOR_NAMES) {
+                            if (!lowerSet.has(name.toLowerCase())) {
+                                combined.push(name);
+                            }
+                        }
+                        combined.sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
+                        setVendorNames(combined);
+                    }
+                    // If API returns empty array, keep the pre-seeded DEFAULT_VENDOR_NAMES (no-op)
+                } else {
+                    console.error('Failed to fetch vendor names:', response.status);
+                    // Keep pre-seeded DEFAULT_VENDOR_NAMES — no state update needed
                 }
-            } catch (supplierError) {
-                console.error('Error fetching supplier options:', supplierError);
+            } catch (vendorError) {
+                console.error('Error fetching vendor names:', vendorError);
+                // Keep pre-seeded DEFAULT_VENDOR_NAMES — no state update needed
             }
         };
 
-        fetchSupplierOptions();
+        fetchVendorNames();
     }, []); // Run once on mount
 
     const handleFileSelect = (e) => {
@@ -331,9 +377,14 @@ const VendorUploadPage = () => {
                 body: formData,
             });
 
+            // Read body once as text to safely handle JSON and HTML error pages
+            const responseText = await response.text();
+            let responseData = null;
+            try { responseData = JSON.parse(responseText); } catch { /* non-JSON response */ }
+
             if (response.ok) {
-                const result = await response.json();
-                setSuccess(`✅ ${result.message} The user can now see this invoice in their "Assigned Invoices" page.`);
+                const result = responseData || {};
+                setSuccess(`✅ ${result.message || 'Invoice assigned successfully!'} The user can now see this invoice in their "Assigned Invoices" page.`);
 
                 setFiles((prev) => {
                     const removedFile = prev[activeFileIndex];
@@ -358,8 +409,8 @@ const VendorUploadPage = () => {
                     return next;
                 });
             } else {
-                const errorData = await response.json();
-                throw new Error(errorData.error || 'Assignment failed');
+                const serverError = responseData?.error || responseData?.message;
+                throw new Error(serverError || `Server error (${response.status}): Please check your connection and try again.`);
             }
         } catch (err) {
             const errorMessage = err.message || 'Failed to upload invoice. Please try again.';
@@ -382,8 +433,15 @@ const VendorUploadPage = () => {
                     </header>
                 ) : (
                     <div className="th-empty-state">
-                        <svg className="th-empty-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M12 4v4m0 8v4m8-8h-4M8 12H4m12.364-5.657-2.828 2.828M10.464 15.536l-2.828 2.828m8.728 0-2.828-2.828m-1.172-7.071L7.636 5.636" />
+                        <svg className="th-empty-icon" fill="none" stroke="currentColor" viewBox="0 0 64 64" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+                            {/* Document body */}
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 8a4 4 0 0 1 4-4h20l12 12v36a4 4 0 0 1-4 4H18a4 4 0 0 1-4-4V8z" />
+                            {/* Folded corner */}
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M38 4v12h12" />
+                            {/* Upload arrow */}
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M32 44v-14m0 0-5 5m5-5 5 5" />
+                            {/* Lines on document */}
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M22 54h8" />
                         </svg>
                         <p className="th-empty-title">Everything is clear! Congrats!</p>
                         <p className="th-empty-subtitle">Drag and drop new files here to analyze</p>

@@ -1,0 +1,283 @@
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&display=swap');
+
+.complete-profile-shell {
+    --cp-bg-1: #f4f8ff;
+    --cp-bg-2: #e9f5ff;
+    --cp-ink: #0b1736;
+    --cp-muted: #42526b;
+    --cp-border: #c7d7ea;
+    --cp-panel: rgba(255, 255, 255, 0.9);
+    --cp-accent: #0d63d7;
+    --cp-accent-2: #00a4d6;
+
+    position: relative;
+    min-height: 100vh;
+    overflow: hidden;
+    padding: 28px 16px;
+    background: radial-gradient(circle at 15% 20%, #d9f4ff 0, transparent 45%),
+        radial-gradient(circle at 90% 85%, #d5e4ff 0, transparent 40%),
+        linear-gradient(160deg, var(--cp-bg-1), var(--cp-bg-2));
+    font-family: 'Sora', 'Inter', 'Segoe UI', sans-serif;
+}
+
+.complete-profile-aurora {
+    position: absolute;
+    pointer-events: none;
+    border-radius: 999px;
+    filter: blur(30px);
+    opacity: 0.55;
+}
+
+.complete-profile-aurora-one {
+    height: 260px;
+    width: 260px;
+    left: -80px;
+    top: -40px;
+    background: #a0d9ff;
+    animation: cpFloatOne 8s ease-in-out infinite;
+}
+
+.complete-profile-aurora-two {
+    height: 320px;
+    width: 320px;
+    right: -120px;
+    bottom: -120px;
+    background: #a3b9ff;
+    animation: cpFloatTwo 10s ease-in-out infinite;
+}
+
+.complete-profile-grid {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image: linear-gradient(rgba(18, 60, 109, 0.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(18, 60, 109, 0.06) 1px, transparent 1px);
+    background-size: 32px 32px;
+    mask-image: radial-gradient(circle at center, black 25%, transparent 80%);
+}
+
+.complete-profile-layout {
+    position: relative;
+    z-index: 1;
+    margin: 0 auto;
+    max-width: 1024px;
+    border: 1px solid var(--cp-border);
+    border-radius: 24px;
+    background: rgba(255, 255, 255, 0.6);
+    backdrop-filter: blur(4px);
+    overflow: hidden;
+    display: grid;
+    grid-template-columns: 1fr;
+}
+
+.complete-profile-brand-panel {
+    padding: 28px 24px;
+    border-bottom: 1px solid var(--cp-border);
+    background: linear-gradient(145deg, rgba(255, 255, 255, 0.75), rgba(216, 236, 255, 0.72));
+    animation: cpReveal 420ms ease-out;
+}
+
+.complete-profile-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid #8cc8ff;
+    border-radius: 999px;
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    color: #0b56b7;
+    background: rgba(255, 255, 255, 0.75);
+}
+
+.complete-profile-brand-panel h1 {
+    margin-top: 16px;
+    margin-bottom: 8px;
+    color: var(--cp-ink);
+    font-size: clamp(1.6rem, 3vw, 2.1rem);
+    font-weight: 800;
+    line-height: 1.2;
+}
+
+.complete-profile-brand-panel p {
+    margin: 0;
+    color: var(--cp-muted);
+    max-width: 38ch;
+    font-size: 0.98rem;
+}
+
+.complete-profile-info-list {
+    display: grid;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+.complete-profile-info-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border: 1px solid #bcd5ef;
+    background: rgba(255, 255, 255, 0.75);
+    border-radius: 14px;
+    padding: 10px 12px;
+    color: #23395b;
+    font-size: 0.88rem;
+}
+
+.complete-profile-info-item strong {
+    color: #103f86;
+}
+
+.complete-profile-form-panel {
+    padding: 28px 24px;
+    background: var(--cp-panel);
+    animation: cpReveal 520ms ease-out;
+}
+
+.complete-profile-form-panel h2 {
+    margin: 0;
+    font-size: 1.72rem;
+    font-weight: 800;
+    color: var(--cp-ink);
+}
+
+.complete-profile-form-subtitle {
+    margin-top: 8px;
+    margin-bottom: 18px;
+    color: var(--cp-muted);
+}
+
+.complete-profile-error {
+    border: 1px solid #f2b6c0;
+    background: #fff2f4;
+    color: #b72644;
+    border-radius: 12px;
+    padding: 10px 12px;
+    margin-bottom: 14px;
+    font-size: 0.88rem;
+    font-weight: 600;
+}
+
+.complete-profile-form {
+    display: grid;
+    gap: 8px;
+}
+
+.complete-profile-form label {
+    margin-top: 6px;
+    color: #1f3150;
+    font-size: 0.9rem;
+    font-weight: 700;
+}
+
+.complete-profile-input-wrap {
+    position: relative;
+}
+
+.complete-profile-input-icon {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #4e6c95;
+}
+
+.complete-profile-input-wrap input {
+    width: 100%;
+    border: 1px solid #b9cde6;
+    border-radius: 12px;
+    background: #ffffff;
+    color: #122847;
+    font-size: 0.95rem;
+    padding: 11px 12px 11px 40px;
+    transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.complete-profile-input-wrap input:focus {
+    outline: none;
+    border-color: #1773e6;
+    background: #f8fcff;
+}
+
+.complete-profile-submit {
+    margin-top: 12px;
+    width: 100%;
+    border: 0;
+    border-radius: 12px;
+    color: white;
+    font-size: 0.96rem;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+    padding: 12px 16px;
+    cursor: pointer;
+    background: linear-gradient(90deg, var(--cp-accent), var(--cp-accent-2), var(--cp-accent));
+    background-size: 200% auto;
+    transition: transform 0.18s ease, background-position 0.3s ease, opacity 0.2s ease;
+}
+
+.complete-profile-submit:hover {
+    transform: translateY(-1px);
+    background-position: 100% center;
+}
+
+.complete-profile-submit:disabled {
+    opacity: 0.58;
+    cursor: not-allowed;
+    transform: none;
+}
+
+@media (min-width: 900px) {
+    .complete-profile-shell {
+        padding: 40px 22px;
+    }
+
+    .complete-profile-layout {
+        grid-template-columns: minmax(260px, 1.15fr) minmax(360px, 1fr);
+    }
+
+    .complete-profile-brand-panel {
+        border-bottom: 0;
+        border-right: 1px solid var(--cp-border);
+        padding: 38px 34px;
+    }
+
+    .complete-profile-form-panel {
+        padding: 38px 34px;
+    }
+}
+
+@keyframes cpFloatOne {
+    0% {
+        transform: translate(0, 0);
+    }
+    50% {
+        transform: translate(16px, 14px);
+    }
+    100% {
+        transform: translate(0, 0);
+    }
+}
+
+@keyframes cpFloatTwo {
+    0% {
+        transform: translate(0, 0);
+    }
+    50% {
+        transform: translate(-18px, -12px);
+    }
+    100% {
+        transform: translate(0, 0);
+    }
+}
+
+@keyframes cpReveal {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}

@@ -1,4 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -1389,5 +1391,398 @@ select.input-field {
         max-width: none;
         min-width: 0;
         width: 100%;
+    }
+}
+
+/* Team modal */
+.team-modal-overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    background: rgba(15, 23, 42, 0.45);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    z-index: 1400;
+    animation: team-overlay-fade 220ms ease both;
+}
+
+.team-modal-card {
+    position: relative;
+    width: min(900px, 94vw);
+    max-height: 90vh;
+    background: linear-gradient(180deg, #ffffff 0%, #f1f5f9 100%);
+    border: 1px solid #cbd5e1;
+    border-radius: 24px;
+    padding: 1.6rem;
+    font-family: 'Space Grotesk', 'Inter', 'Segoe UI', sans-serif;
+    color: #1e293b;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(15, 23, 42, 0.18), 0 4px 16px rgba(15, 23, 42, 0.08);
+    animation: team-card-in 320ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+
+.team-modal-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: linear-gradient(rgba(148, 163, 184, 0.12) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(148, 163, 184, 0.12) 1px, transparent 1px);
+    background-size: 48px 48px;
+    mask-image: radial-gradient(circle at 20% 20%, rgba(0, 0, 0, 0.3), transparent 70%);
+    pointer-events: none;
+}
+
+.team-modal-card > * {
+    position: relative;
+    z-index: 1;
+}
+
+.team-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1.2rem;
+}
+
+.team-modal-title {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    font-weight: 600;
+}
+
+.team-modal-title h3 {
+    margin: 0;
+    font-size: 1.25rem;
+    letter-spacing: -0.01em;
+    color: #0f172a;
+}
+
+.team-modal-subtitle {
+    margin: 0.2rem 0 0;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: rgba(51, 65, 85, 0.75);
+    font-family: 'Space Mono', 'Space Grotesk', 'Inter', sans-serif;
+}
+
+.team-modal-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: rgba(14, 165, 233, 0.12);
+    color: #0284c7;
+    border: 1px solid rgba(14, 165, 233, 0.3);
+}
+
+.team-modal-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.team-release-badge {
+    padding: 0.35rem 0.7rem;
+    border-radius: 999px;
+    border: 1px solid rgba(2, 132, 199, 0.4);
+    color: #0284c7;
+    background: rgba(14, 165, 233, 0.08);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-family: 'Space Mono', 'Space Grotesk', 'Inter', sans-serif;
+    white-space: nowrap;
+}
+
+.team-modal-close {
+    border: 1px solid #cbd5e1;
+    background: #f1f5f9;
+    color: #475569;
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+}
+
+.team-modal-close:hover {
+    transform: translateY(-1px);
+    background: #e2e8f0;
+    border-color: #94a3b8;
+}
+
+.team-modal-body {
+    display: grid;
+    grid-template-columns: minmax(240px, 1fr) minmax(320px, 2.2fr);
+    gap: 1.2rem;
+    align-items: stretch;
+}
+
+.team-blueprint-panel {
+    position: relative;
+    background: rgba(241, 245, 249, 0.95);
+    color: #1e293b;
+    padding: 1.4rem;
+    border-radius: 18px;
+    border: 1px solid #cbd5e1;
+    overflow: hidden;
+    min-height: 240px;
+    animation: team-panel-in 340ms ease both;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.team-blueprint-panel::after {
+    content: '';
+    position: absolute;
+    width: 240px;
+    height: 240px;
+    right: -80px;
+    bottom: -120px;
+    background: radial-gradient(circle, rgba(14, 165, 233, 0.12), transparent 68%);
+}
+
+.team-blueprint-kicker {
+    margin: 0 0 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    font-size: 0.68rem;
+    color: rgba(71, 85, 105, 0.85);
+    font-family: 'Space Mono', 'Space Grotesk', 'Inter', sans-serif;
+}
+
+.team-blueprint-title {
+    margin: 0 0 0.45rem;
+    font-size: 1.35rem;
+    color: #0f172a;
+}
+
+/* Info cards inside the blueprint panel */
+.team-info-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    margin-top: 0.8rem;
+    flex: 1;
+}
+
+.team-info-card {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 0.6rem 0.85rem;
+    transition: background 180ms ease, border-color 180ms ease;
+}
+
+.team-info-card:hover {
+    background: #f0f9ff;
+    border-color: #7dd3fc;
+}
+
+.team-info-card-icon {
+    font-size: 1.2rem;
+    line-height: 1;
+    flex-shrink: 0;
+    width: 26px;
+    text-align: center;
+}
+
+.team-info-card-label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.13em;
+    color: #64748b;
+    font-family: 'Space Mono', 'Space Grotesk', 'Inter', sans-serif;
+    line-height: 1;
+    margin-bottom: 0.22rem;
+}
+
+.team-info-card-value {
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: #0f172a;
+    line-height: 1;
+}
+
+.team-info-card-live {
+    color: #16a34a;
+}
+
+.team-modal-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 0.9rem;
+}
+
+.team-member-card {
+    text-align: center;
+    padding: 1.1rem 0.95rem;
+    border-radius: 18px;
+    border: 1px dashed #cbd5e1;
+    background: rgba(255, 255, 255, 0.75);
+    animation: team-member-in 320ms ease both;
+}
+
+.team-avatar {
+    width: 220px;
+    height: 220px;
+    border-radius: 14px;
+    margin: 0 auto 0.8rem;
+    padding: 2px;
+    background: linear-gradient(140deg, rgba(56, 189, 248, 0.8), rgba(34, 197, 94, 0.5));
+}
+
+.team-avatar-inner {
+    width: 100%;
+    height: 100%;
+    border-radius: 12px;
+    background: #f0f9ff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: #0284c7;
+}
+
+.team-avatar-image {
+    width: 100%;
+    height: 100%;
+    border-radius: 14px;
+    object-fit: cover;
+    filter: contrast(1.08) saturate(1.05) brightness(1.02);
+}
+
+.team-name {
+    font-weight: 600;
+    color: #1e293b;
+    font-size: 0.92rem;
+}
+
+.team-role {
+    margin-top: 0.2rem;
+    font-size: 0.75rem;
+    color: #64748b;
+}
+
+.team-email {
+    margin-top: 0.2rem;
+    font-size: 0.72rem;
+    color: #94a3b8;
+}
+
+.team-card-placeholder {
+    display: grid;
+    gap: 0.4rem;
+    justify-items: center;
+    margin-top: 0.2rem;
+}
+
+.team-card-placeholder span {
+    display: block;
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.4);
+}
+
+.team-card-placeholder span:first-child {
+    width: 70%;
+}
+
+.team-card-placeholder span:last-child {
+    width: 45%;
+}
+
+.team-modal-footer {
+    margin-top: 1.3rem;
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: #94a3b8;
+    border-top: 1px solid #e2e8f0;
+    padding-top: 0.9rem;
+}
+
+@keyframes team-overlay-fade {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes team-card-in {
+    from {
+        opacity: 0;
+        transform: translateY(18px) scale(0.96);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+@keyframes team-member-in {
+    from {
+        opacity: 0;
+        transform: translateY(10px) scale(0.98);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+@keyframes team-panel-in {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@media (max-width: 720px) {
+    .team-modal-body {
+        grid-template-columns: 1fr;
+    }
+
+    .team-modal-card {
+        padding: 1.25rem;
+        border-radius: 18px;
+    }
+
+    .team-modal-actions {
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+}
+
+@media (max-width: 560px) {
+    .team-modal-footer {
+        flex-direction: column;
+        align-items: flex-start;
+        letter-spacing: 0.12em;
     }
 }

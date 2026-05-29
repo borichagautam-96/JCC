@@ -1,0 +1,464 @@
+/* ============================================================
+   SOP PAGE — InFloAI Standard Operating Procedure
+   ============================================================ */
+
+.sop-shell {
+  min-height: 100vh;
+  background: #F8FAFC;
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+}
+
+/* ── Header ─────────────────────────────────────── */
+.sop-header {
+  background: linear-gradient(135deg, #1E3A5F 0%, #0066CC 100%);
+  padding: 2rem 2.5rem;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.sop-header-left h1 {
+  margin: 0 0 0.35rem 0;
+  font-size: 1.7rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.sop-header-left p {
+  margin: 0;
+  opacity: 0.8;
+  font-size: 0.93rem;
+}
+
+.sop-header-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 999px;
+  padding: 0.3rem 0.85rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  margin-bottom: 0.6rem;
+  backdrop-filter: blur(4px);
+}
+
+.sop-export-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: white;
+  color: #0066CC;
+  border: none;
+  border-radius: 10px;
+  padding: 0.65rem 1.35rem;
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.15);
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.sop-export-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.2);
+}
+
+.sop-export-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ── Search Bar ─────────────────────────────────── */
+.sop-search-bar {
+  background: white;
+  border-bottom: 1px solid #E2E8F0;
+  padding: 1rem 2.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.sop-search-wrap {
+  position: relative;
+  flex: 1;
+  max-width: 480px;
+}
+
+.sop-search-wrap svg {
+  position: absolute;
+  left: 0.9rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #94A3B8;
+  pointer-events: none;
+}
+
+.sop-search-input {
+  width: 100%;
+  padding: 0.6rem 0.9rem 0.6rem 2.5rem;
+  border: 1.5px solid #E2E8F0;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  background: #F8FAFC;
+  color: #1E293B;
+  outline: none;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+}
+
+.sop-search-input:focus {
+  border-color: #0066CC;
+  background: white;
+}
+
+/* ── Layout ─────────────────────────────────────── */
+.sop-layout {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 0;
+  align-items: start;
+  padding: 2rem 2rem 2rem 2.5rem;
+  gap: 1.5rem;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+/* ── Sidebar Tabs ────────────────────────────────── */
+.sop-tabs {
+  position: sticky;
+  top: 1rem;
+  background: white;
+  border: 1px solid #E2E8F0;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+}
+
+.sop-tabs-title {
+  padding: 0.85rem 1rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #94A3B8;
+  border-bottom: 1px solid #E2E8F0;
+}
+
+.sop-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: none;
+  background: none;
+  text-align: left;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border-left: 3px solid transparent;
+}
+
+.sop-tab-btn:hover {
+  background: #F8FAFC;
+  color: #1E293B;
+}
+
+.sop-tab-btn.active {
+  background: #EFF6FF;
+  color: #0066CC;
+  font-weight: 600;
+  border-left-color: #0066CC;
+}
+
+.sop-tab-btn.active svg {
+  color: #0066CC;
+}
+
+/* ── Content Area ────────────────────────────────── */
+.sop-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.sop-section {
+  background: white;
+  border: 1px solid #E2E8F0;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+
+.sop-section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 1.2rem 1.5rem;
+  border-bottom: 1px solid #F1F5F9;
+  background: #FAFBFF;
+}
+
+.sop-section-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sop-section-header h2 {
+  margin: 0 0 0.15rem 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #0F172A;
+}
+
+.sop-section-header p {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #64748B;
+}
+
+.sop-steps {
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+/* ── Step Card ───────────────────────────────────── */
+.sop-step {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  padding: 0.9rem 1rem;
+  border-radius: 10px;
+  border: 1px solid #F1F5F9;
+  background: #FAFBFF;
+  transition: border-color 0.15s;
+}
+
+.sop-step:hover {
+  border-color: #BFDBFE;
+}
+
+.sop-step-num {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: #0066CC;
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.sop-step-body h4 {
+  margin: 0 0 0.2rem 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #1E293B;
+}
+
+.sop-step-body p {
+  margin: 0;
+  font-size: 0.83rem;
+  color: #64748B;
+  line-height: 1.55;
+}
+
+/* ── Tip / Warning ───────────────────────────────── */
+.sop-tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  background: #FFFBEB;
+  border: 1px solid #FDE68A;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-top: 0.25rem;
+}
+
+.sop-tip p {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #92400E;
+  line-height: 1.5;
+}
+
+.sop-info {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  background: #EFF6FF;
+  border: 1px solid #BFDBFE;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-top: 0.25rem;
+}
+
+.sop-info p {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #1E40AF;
+  line-height: 1.5;
+}
+
+/* ── Role Badge ──────────────────────────────────── */
+.sop-role-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* ── No Results ──────────────────────────────────── */
+.sop-empty {
+  text-align: center;
+  padding: 3rem 2rem;
+  color: #94A3B8;
+}
+
+.sop-empty svg {
+  margin-bottom: 1rem;
+  opacity: 0.4;
+}
+
+.sop-empty h3 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.1rem;
+  color: #64748B;
+}
+
+/* ── PDF content wrapper ─────────────────────────── */
+#sop-pdf-root {
+  font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+  color: #0F172A;
+  background: white;
+}
+
+.sop-pdf-cover {
+  background: linear-gradient(135deg, #1E3A5F, #0066CC);
+  color: white;
+  padding: 3rem 2.5rem;
+  margin-bottom: 0;
+}
+
+.sop-pdf-cover h1 {
+  font-size: 2rem;
+  margin: 0 0 0.5rem 0;
+  font-weight: 800;
+}
+
+.sop-pdf-cover p {
+  opacity: 0.8;
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.sop-pdf-section {
+  padding: 1.5rem 2.5rem;
+  page-break-inside: avoid;
+  border-bottom: 1px solid #E2E8F0;
+}
+
+.sop-pdf-section h2 {
+  font-size: 1.15rem;
+  color: #0066CC;
+  margin: 0 0 1rem 0;
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid #BFDBFE;
+}
+
+.sop-pdf-step {
+  display: flex;
+  gap: 0.85rem;
+  margin-bottom: 0.75rem;
+  align-items: flex-start;
+}
+
+.sop-pdf-step-num {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #0066CC;
+  color: white;
+  font-size: 0.72rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.sop-pdf-step-body strong {
+  display: block;
+  font-size: 0.88rem;
+  color: #1E293B;
+  margin-bottom: 0.15rem;
+}
+
+.sop-pdf-step-body span {
+  font-size: 0.82rem;
+  color: #475569;
+}
+
+/* ── Responsive ──────────────────────────────────── */
+@media (max-width: 768px) {
+  .sop-layout {
+    grid-template-columns: 1fr;
+    padding: 1rem;
+  }
+
+  .sop-tabs {
+    position: static;
+    display: flex;
+    overflow-x: auto;
+    border-radius: 8px;
+    gap: 0;
+  }
+
+  .sop-tabs-title { display: none; }
+
+  .sop-tab-btn {
+    flex-shrink: 0;
+    border-left: none;
+    border-bottom: 3px solid transparent;
+    padding: 0.6rem 1rem;
+  }
+
+  .sop-tab-btn.active {
+    border-bottom-color: #0066CC;
+    border-left-color: transparent;
+  }
+
+  .sop-header {
+    padding: 1.25rem 1rem;
+  }
+
+  .sop-search-bar {
+    padding: 0.75rem 1rem;
+  }
+}

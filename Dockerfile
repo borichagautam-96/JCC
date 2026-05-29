@@ -6,8 +6,13 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install all dependencies (including dev for build)
-RUN npm ci
+# Configure npm for more resilient network fetches, then install dependencies
+RUN npm config set registry https://registry.npmjs.org/ \
+    && npm config set fetch-retries 5 \
+    && npm config set fetch-retry-factor 10 \
+    && npm config set fetch-retry-mintimeout 20000 \
+    && npm config set fetch-retry-maxtimeout 120000 \
+    && npm ci
 
 # Copy source code
 COPY . .
@@ -25,10 +30,19 @@ WORKDIR /app
 
 # Copy package files and install production dependencies only
 COPY package*.json ./
-RUN npm ci --omit=dev
+# Make production install more resilient as well
+RUN npm config set registry https://registry.npmjs.org/ \
+    && npm config set fetch-retries 5 \
+    && npm config set fetch-retry-factor 10 \
+    && npm config set fetch-retry-mintimeout 20000 \
+    && npm config set fetch-retry-maxtimeout 120000 \
+    && npm ci --omit=dev
 
 # Copy built frontend from builder stage
 COPY --from=builder /app/dist ./dist
+
+# Copy public assets to dist to ensure static images are packaged
+COPY --from=builder /app/public ./dist
 
 # Copy source assets (images, logos, etc.) for runtime access
 COPY --from=builder /app/src/assets ./src/assets

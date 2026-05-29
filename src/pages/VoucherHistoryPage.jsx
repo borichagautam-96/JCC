@@ -520,7 +520,7 @@ const VoucherHistoryPage = () => {
                                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-700">AMOUNT</th>
                                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-700">PO NO.</th>
                                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-700">STATUS</th>
-                                <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-700">PAYMENT</th>
+
                                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-700">SUPPLIER ACK</th>
                                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-700">CREATED BY</th>
                                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-700">DATE</th>
@@ -530,7 +530,7 @@ const VoucherHistoryPage = () => {
                         <tbody>
                             {filteredVouchers.length === 0 ? (
                                 <tr>
-                                    <td colSpan="12" className="px-4 py-12 text-center text-sm text-slate-500">
+                                    <td colSpan="9" className="px-4 py-12 text-center text-sm text-slate-500">
                                         {searchTerm ? `No vouchers found matching "${searchTerm}"` : 'No vouchers found'}
                                     </td>
                                 </tr>
@@ -550,7 +550,7 @@ const VoucherHistoryPage = () => {
                                         </td>
                                         <td className="px-4 py-3 text-sm text-slate-700">{voucher.po_number || '-'}</td>
                                         <td className="px-4 py-3">{getStatusBadge(voucher.status)}</td>
-                                        <td className="px-4 py-3">{renderPaymentBadge(voucher.payment_status)}</td>
+
                                         <td className="px-4 py-3">
                                             <div className="flex flex-col gap-1">
                                                 {renderSupplierAckBadge(voucher.supplier_ack_status)}
@@ -571,34 +571,7 @@ const VoucherHistoryPage = () => {
                                         </td>
                                         <td className="px-4 py-3">
                                             <div className="flex items-center gap-2">
-                                                {voucher.status === 'approved' && canUpdatePayment && voucher.supplier_ack_status !== 'acknowledged' && (
-                                                    <button
-                                                        onClick={() => handleSendToSupplier(voucher)}
-                                                        className="rounded-md bg-indigo-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
-                                                        title="Send JCC PDF and acknowledgement link to supplier"
-                                                    >
-                                                        {voucher.supplier_ack_status === 'pending' ? 'Resend to Supplier' : 'Send to Supplier'}
-                                                    </button>
-                                                )}
 
-                                                {voucher.status === 'approved' && (
-                                                    <button
-                                                        onClick={() => openPaymentLog(voucher)}
-                                                        className="rounded-md bg-blue-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-700"
-                                                    >
-                                                        Payment Log
-                                                    </button>
-                                                )}
-
-                                                {voucher.status === 'approved' && voucher.payment_status === 'pending_payment' && canUpdatePayment && (
-                                                    <button
-                                                        onClick={() => handleApprovePayment(voucher)}
-                                                        className="rounded-md bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
-                                                        title="Approve pending payment"
-                                                    >
-                                                        Approve Payment
-                                                    </button>
-                                                )}
 
                                                 {(voucher.status === 'approved' || voucher.status === 'processed') && (
                                                     <button

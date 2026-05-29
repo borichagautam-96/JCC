@@ -213,8 +213,9 @@ const normalizeProfile = (entry, username) => {
     };
 };
 
-export const authenticateWithLdap = async ({ username, password, domain } = {}) => {
+export const authenticateWithLdap = async ({ username, searchUsername, password, domain } = {}) => {
     const trimmedUsername = String(username || '').trim();
+    const trimmedSearchUsername = String(searchUsername || '').trim() || trimmedUsername;
     const rawPassword = typeof password === 'string' ? password : '';
 
     if (!trimmedUsername || !rawPassword) {
@@ -244,7 +245,7 @@ export const authenticateWithLdap = async ({ username, password, domain } = {}) 
             };
         }
 
-        const filter = buildSearchFilter(trimmedUsername);
+        const filter = buildSearchFilter(trimmedSearchUsername);
         const { searchEntries } = await client.search(baseDn, {
             scope: 'sub',
             filter,
@@ -255,7 +256,7 @@ export const authenticateWithLdap = async ({ username, password, domain } = {}) 
 
         return {
             authenticated: true,
-            profile: normalizeProfile(entry, trimmedUsername),
+            profile: normalizeProfile(entry, trimmedSearchUsername),
             baseDn,
         };
     } catch (error) {

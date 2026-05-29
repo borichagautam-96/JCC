@@ -252,9 +252,17 @@ const AssignedInvoicesPage = () => {
                                     </td>
                                 </tr>
                             ) : assignedInvoices.map((invoice) => {
-                                const canAccept = isAssignedToCurrentUser(invoice) && !invoice.accepted_at;
-                                const canCreateVoucher = isAssignedToCurrentUser(invoice) && invoice.status !== 'voucher_created';
-                                const acceptedStatus = invoice.accepted_at ? 'Accepted' : 'Pending';
+                                const isVoucherCreated = invoice.status === 'voucher_created';
+                                const acceptedStatus = isVoucherCreated
+                                    ? 'Claim Submitted'
+                                    : invoice.accepted_at
+                                        ? 'Accepted'
+                                        : 'Pending';
+                                const statusClass = isVoucherCreated
+                                    ? 'status-approved'
+                                    : invoice.accepted_at
+                                        ? 'status-info'
+                                        : 'status-pending';
 
                                 return (
                                     <React.Fragment key={invoice.id}>
@@ -265,13 +273,13 @@ const AssignedInvoicesPage = () => {
                                             <td>{invoice.assigned_by_name || invoice.uploader_name || '-'}</td>
                                             {isAdmin && <td>{invoice.assigned_to_name || invoice.assigned_to || '-'}</td>}
                                             <td>
-                                                <span className={`status-badge ${invoice.accepted_at ? 'status-approved' : 'status-pending'}`}>
+                                                <span className={`status-badge ${statusClass}`}>
                                                     {acceptedStatus}
                                                 </span>
                                             </td>
                                             <td style={{ minWidth: '250px' }}>
                                                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                                    {canAccept && (
+                                                    {isAssignedToCurrentUser(invoice) && !invoice.accepted_at && !isVoucherCreated && (
                                                         <button
                                                             onClick={() => handleAcceptInvoice(invoice.id)}
                                                             className="btn btn-sm"
@@ -280,7 +288,7 @@ const AssignedInvoicesPage = () => {
                                                             Accept
                                                         </button>
                                                     )}
-                                                    {canCreateVoucher && (
+                                                    {isAssignedToCurrentUser(invoice) && !isVoucherCreated && (
                                                         <button
                                                             onClick={() => handleCreateVoucher(invoice)}
                                                             className="btn btn-sm btn-primary"

@@ -3,6 +3,12 @@ import { Link, useLocation } from 'react-router-dom';
 import { Menu, MessageSquarePlus } from 'lucide-react';
 import Navbar from './Navbar';
 import NotificationBell from './NotificationBell';
+import TeamModal from './TeamModal';
+
+// Routes where the full app shell (sidebar, header, notifications) should NOT be rendered
+// even if the user is authenticated. This prevents API calls that can cause redirect loops
+// for users who haven't yet completed their profile.
+const SHELL_BYPASS_ROUTES = new Set(['/complete-profile']);
 
 const SHOW_ADMIN_LOGS = import.meta.env.VITE_SHOW_ADMIN_LOGS === 'true';
 const ENABLE_FEEDBACK_MODULE = import.meta.env.VITE_ENABLE_FEEDBACK === 'true';
@@ -11,8 +17,8 @@ const pageTitleMap = {
   '/': 'Dashboard',
   '/upload': 'Upload Invoice',
   '/assigned-invoices': 'Assigned Invoices',
-  '/create-voucher': 'Create Voucher',
-  '/voucher-history': 'Voucher History',
+  '/create-voucher': 'Create Request',
+  '/voucher-history': 'Claim History',
   '/assets': 'Asset Tracker',
   '/return-tracker': 'Asset Management',
   '/coordinator': 'Pending Approvals',
@@ -20,13 +26,13 @@ const pageTitleMap = {
   '/vendors': 'Vendor Management',
   '/feedback': 'Feedback',
   '/admin-feedback': 'Feedback Inbox',
-  '/change-password': 'Change Password',
   '/user-management': 'User Management',
   '/admin-logs': 'Admin Logs',
   '/customers': 'Customers',
   '/projects': 'Projects',
   '/letters/incoming': 'Incoming Letters',
   '/letters/templates': 'Letter Templates',
+  '/sop': 'Help & SOP',
 };
 
 const resolvePageTitle = (pathname) => {
@@ -40,6 +46,7 @@ const resolvePageTitle = (pathname) => {
 const AppShell = ({ user, children }) => {
   const location = useLocation();
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(true);
+  const [isTeamOpen, setIsTeamOpen] = React.useState(false);
 
   const globalFooter = (
     <footer className="">
@@ -47,7 +54,7 @@ const AppShell = ({ user, children }) => {
     </footer>
   );
 
-  if (!user) {
+  if (!user || SHELL_BYPASS_ROUTES.has(location.pathname)) {
     return (
       <div className="app-global-layout">
         <div className="app-global-content">{children}</div>
@@ -58,7 +65,7 @@ const AppShell = ({ user, children }) => {
 
   return (
     <div className="app-global-layout min-h-screen bg-slate-50 text-slate-900">
-      <Navbar isOpen={isSidebarOpen} />
+      <Navbar isOpen={isSidebarOpen} onOpenTeam={() => setIsTeamOpen(true)} />
 
       <div className={`app-global-content transition-all duration-300 ${isSidebarOpen ? 'md:ml-72' : 'md:ml-0'}`}>
         <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-slate-200 bg-white px-4 md:px-6">
@@ -96,6 +103,8 @@ const AppShell = ({ user, children }) => {
       </div>
 
       {globalFooter}
+
+      <TeamModal isOpen={isTeamOpen} onClose={() => setIsTeamOpen(false)} />
     </div>
   );
 };

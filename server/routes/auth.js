@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import db from '../database.js';
 import { JWT_SECRET, authenticateToken } from '../middleware/auth.js';
 import { validateRequest } from '../middleware/validateRequest.js';
-import { authLimiter, loginLimiter } from '../middleware/rateLimit.js';
+import { authLimiter } from '../middleware/rateLimit.js';
 import { env } from '../config/env.js';
 import { getIntSetting } from '../utils/appSettings.js';
 import { buildSessionConfig } from '../utils/sessionConfig.js';
@@ -164,24 +164,54 @@ const normalizeOptionalEmail = (email) => {
 
 const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
 
+const buildFallbackLdapEmail = (psNumber) => {
+    const normalizedPsNumber = normalizeIdentifier(psNumber);
+    if (!normalizedPsNumber) {
+        return '';
+    }
+
+    return `${normalizedPsNumber}@${env.ldapPsNumberDomain}`.toLowerCase();
+};
+
+const resolveLdapEmail = ({ profile, psNumber }) => {
+    const candidateEmails = [
+        normalizeOptionalEmail(profile?.email),
+        normalizeOptionalEmail(profile?.principalName),
+        buildFallbackLdapEmail(psNumber),
+    ];
+
+    return candidateEmails.find((email) => isValidEmail(email)) || '';
+};
+
+const isLikelyAutoProvisionedProfile = (user) => {
+    const normalizedPsNumber = normalizeIdentifier(user?.ps_number);
+    const normalizedName = normalizeIdentifier(user?.name).toLowerCase();
+    const normalizedEmail = normalizeOptionalEmail(user?.email);
+    const fallbackEmail = buildFallbackLdapEmail(normalizedPsNumber);
+
+    if (!normalizedPsNumber) {
+        return false;
+    }
+
+    // If name is still just the PS number or email is fallback-generated,
+    // we treat this account as not yet profile-completed.
+    return normalizedName === normalizedPsNumber.toLowerCase() || normalizedEmail === fallbackEmail;
+};
+
+const isProfileFullyVerified = (user) => {
+    return Number(user?.profile_completed ?? 0) === 1 && Boolean(user?.profile_verified_at);
+};
+
 const upsertLdapUser = ({ psNumber, profile }) => {
     const normalizedPsNumber = normalizeIdentifier(psNumber);
     const fullName = String(profile?.fullName || normalizedPsNumber).trim() || normalizedPsNumber;
-    const ldapEmail = normalizeOptionalEmail(profile?.email);
+    const ldapEmail = resolveLdapEmail({ profile, psNumber: normalizedPsNumber });
 
     if (!ldapEmail) {
         return {
             user: null,
             errorCode: 'LDAP_EMAIL_MISSING',
-            errorMessage: 'LDAP email attribute (mail) is missing. Please update the LDAP profile with a valid email.',
-        };
-    }
-
-    if (!isValidEmail(ldapEmail)) {
-        return {
-            user: null,
-            errorCode: 'LDAP_EMAIL_INVALID',
-            errorMessage: 'LDAP email attribute is invalid. Please update the LDAP profile with a valid email.',
+            errorMessage: 'Unable to resolve a valid LDAP email address for this account.',
         };
     }
 
@@ -211,12 +241,37 @@ const upsertLdapUser = ({ psNumber, profile }) => {
         const placeholderPassword = bcrypt.hashSync(`ldap:${uuidv4()}`, 10);
 
         const result = db.prepare(`
-            INSERT INTO users (ps_number, name, email, password, role, must_change_password)
-            VALUES (?, ?, ?, ?, ?, 0)
+            INSERT INTO users (ps_number, name, email, password, role, must_change_password, profile_completed, profile_verified_at)
+            VALUES (?, ?, ?, ?, ?, 0, 0, NULL)
         `).run(normalizedPsNumber, fullName, ldapEmail, placeholderPassword, env.ldapDefaultRole);
 
         return {
             user: db.prepare('SELECT * FROM users WHERE id = ?').get(result.lastInsertRowid),
+            errorCode: null,
+            errorMessage: null,
+        };
+    }
+
+    const persistedPsNumber = user.ps_number || normalizedPsNumber;
+    const hasVerifiedProfile = Boolean(user.profile_verified_at);
+    let isProfileCompleted = Number(user.profile_completed ?? 0) === 1 && hasVerifiedProfile;
+
+    if (!hasVerifiedProfile || (isProfileCompleted && isLikelyAutoProvisionedProfile(user))) {
+        db.prepare('UPDATE users SET profile_completed = 0, profile_verified_at = NULL WHERE id = ?').run(user.id);
+        user = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+        isProfileCompleted = false;
+    }
+
+    if (isProfileCompleted) {
+        db.prepare(`
+            UPDATE users
+            SET ps_number = ?,
+                must_change_password = 0
+            WHERE id = ?
+        `).run(persistedPsNumber, user.id);
+
+        return {
+            user: db.prepare('SELECT * FROM users WHERE id = ?').get(user.id),
             errorCode: null,
             errorMessage: null,
         };
@@ -230,8 +285,6 @@ const upsertLdapUser = ({ psNumber, profile }) => {
             errorMessage: 'LDAP email is already linked to another account. Contact administrator.',
         };
     }
-
-    const persistedPsNumber = user.ps_number || normalizedPsNumber;
 
     db.prepare(`
         UPDATE users
@@ -319,6 +372,7 @@ const authenticateWithLdapMode = async ({
 
     const ldapResult = await authenticateWithLdap({
         username: ldapUsername,
+        searchUsername: ldapProvisioningIdentifier,
         password,
     });
 
@@ -604,6 +658,8 @@ router.post('/register', authLimiter, validateRequest(registerSchema), (req, res
             role || 'vendor'
         );
 
+        db.prepare("UPDATE users SET profile_verified_at = datetime('now') WHERE id = ?").run(result.lastInsertRowid);
+
         const user = { id: result.lastInsertRowid, name, email, role: role || 'vendor' };
         const token = jwt.sign(user, JWT_SECRET, { expiresIn: sessionConfig.jwtExpiresIn });
 
@@ -629,7 +685,7 @@ router.post('/register', authLimiter, validateRequest(registerSchema), (req, res
 });
 
 // Login with Device Binding + Single Session enforcement
-router.post('/login', loginLimiter, validateRequest(loginSchema), async (req, res) => {
+router.post('/login', validateRequest(loginSchema), async (req, res) => {
     try {
         const { identifier: rawIdentifier, psNumber, ps_number, password } = req.body;
         const sessionConfig = getSessionConfig();
@@ -709,6 +765,8 @@ router.post('/login', loginLimiter, validateRequest(loginSchema), async (req, re
             role: user.role,
             ps_number: user.ps_number || null,
             must_change_password: user.must_change_password || 0,
+            profile_completed: isProfileFullyVerified(user) ? 1 : 0,
+            profile_verified_at: user.profile_verified_at || null,
             session_token: sessionToken  // Embed session token in JWT for validation
         };
         const token = jwt.sign(userData, JWT_SECRET, { expiresIn: sessionConfig.jwtExpiresIn });

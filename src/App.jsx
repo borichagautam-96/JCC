@@ -9,7 +9,7 @@ import DashboardPage from './pages/DashboardPage';
 import VoucherRequestPage from './pages/VoucherRequestPage';
 import VoucherHistoryPage from './pages/VoucherHistoryPage';
 import UserManagementPage from './pages/UserManagementPage';
-import ChangePasswordPage from './pages/ChangePasswordPage';
+import CompleteProfilePage from './pages/CompleteProfilePage';
 import CustomerManagementPage from './pages/CustomerManagementPage';
 import AssignedInvoicesPage from './pages/AssignedInvoicesPage';
 import ProjectManagementPage from './pages/ProjectManagementPage';
@@ -26,6 +26,7 @@ import ReminderHistoryPage from './pages/ReminderHistoryPage';
 import AdminLogsPage from './pages/AdminLogsPage';
 import FeedbackPage from './pages/FeedbackPage';
 import AdminFeedbackPage from './pages/AdminFeedbackPage';
+import SOPPage from './pages/SOPPage';
 
 import AppShell from './components/AppShell';
 
@@ -49,18 +50,15 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
         return <Navigate to="/login" />;
     }
 
-    // Check if user must change password
-    const mustChangePassword = localStorage.getItem('must_change_password') === 'true';
-    const isChangePasswordPage = location.pathname === '/change-password';
+    const isCompleteProfilePage = location.pathname === '/complete-profile';
+    const isProfileCompleted = Number(user?.profile_completed ?? 0) === 1;
 
-    // If user must change password and is not already on change-password page, redirect
-    if (mustChangePassword && !isChangePasswordPage) {
-        return <Navigate to="/change-password" replace />;
+    if (!isProfileCompleted && !isCompleteProfilePage) {
+        return <Navigate to="/complete-profile" replace />;
     }
 
-    // If user is on change-password page and must change password, allow access regardless of role
-    if (isChangePasswordPage && mustChangePassword) {
-        return children;
+    if (isCompleteProfilePage && isProfileCompleted) {
+        return <Navigate to="/" replace />;
     }
 
     if (allowedRoles && !allowedRoles.includes(user.role)) {
@@ -78,6 +76,7 @@ const AppContent = () => {
 
     useEffect(() => {
         if (!user) return;
+        if (Number(user?.profile_completed ?? 1) !== 1) return;
 
         const token = getToken();
         if (!token) return;
@@ -125,6 +124,7 @@ const AppContent = () => {
 
     useEffect(() => {
         if (!user) return undefined;
+        if (Number(user?.profile_completed ?? 1) !== 1) return undefined;
         const token = getToken();
         if (!token) return undefined;
 
@@ -155,7 +155,19 @@ const AppContent = () => {
     return (
         <AppShell user={user}>
                     <Routes>
-                        <Route path="/login" element={user ? <Navigate to="/" /> : <LoginPage />} />
+                        <Route
+                            path="/login"
+                            element={user ? <Navigate to={Number(user?.profile_completed ?? 0) === 1 ? "/" : "/complete-profile"} replace /> : <LoginPage />}
+                        />
+
+                        <Route
+                            path="/complete-profile"
+                            element={
+                                <ProtectedRoute>
+                                    <CompleteProfilePage />
+                                </ProtectedRoute>
+                            }
+                        />
 
                         <Route
                             path="/"
@@ -346,17 +358,11 @@ const AppContent = () => {
                             </ProtectedRoute>
                         } />
 
-
-
-                        <Route
-                            path="/change-password"
-                            element={
-                                <ProtectedRoute allowedRoles={['admin']}>
-                                    <ChangePasswordPage />
-                                </ProtectedRoute>
-                            }
-                        />
-
+                        <Route path="/sop" element={
+                            <ProtectedRoute>
+                                <SOPPage />
+                            </ProtectedRoute>
+                        } />
                     </Routes>
         </AppShell>
     );

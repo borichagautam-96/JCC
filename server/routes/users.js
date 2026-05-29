@@ -16,6 +16,7 @@ const normalizeRoleList = (input, fallback = []) => {
 const router = express.Router();
 const PASSWORD_POLICY_REGEX = /^(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
 const PASSWORD_POLICY_MESSAGE = 'New password must be at least 8 characters and include at least one number and one special character';
+const SIMPLE_EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const getTableColumnSet = (tableName) => {
     try {
@@ -293,6 +294,7 @@ router.get('/', authenticateToken, authorizeRoles(['admin']), (req, res) => {
 
         const optionalUserColumns = [
             'must_change_password',
+            'profile_completed',
             'registered_device_id',
             'device_bound_at',
             'device_user_agent',
@@ -336,7 +338,7 @@ router.get('/', authenticateToken, authorizeRoles(['admin']), (req, res) => {
 router.get('/me', authenticateToken, (req, res) => {
     try {
         const user = db.prepare(`
-            SELECT u.id, u.ps_number, u.name, u.email, u.role, u.manager_id,
+            SELECT u.id, u.ps_number, u.name, u.email, u.role, u.manager_id, u.profile_completed,
                    m.name as manager_name
             FROM users u
             LEFT JOIN users m ON u.manager_id = m.id
@@ -353,12 +355,59 @@ router.get('/me', authenticateToken, (req, res) => {
             name: user.name,
             email: user.email,
             role: user.role,
+            profile_completed: Number(user.profile_completed || 0),
             manager_id: user.manager_id,
             manager_name: user.manager_name || null
         });
     } catch (error) {
         console.error('Error fetching current user:', error);
         res.status(500).json({ error: 'Failed to fetch user info' });
+    }
+});
+
+router.post('/complete-profile', authenticateToken, (req, res) => {
+    try {
+        const userId = req.user.id;
+        const name = String(req.body?.name || '').trim();
+        const email = String(req.body?.email || '').trim().toLowerCase();
+
+        if (!name || !email) {
+            return res.status(400).json({ error: 'Name and email are required.' });
+        }
+
+        if (!SIMPLE_EMAIL_REGEX.test(email)) {
+            return res.status(400).json({ error: 'Please enter a valid email address.' });
+        }
+
+        const user = db.prepare('SELECT id FROM users WHERE id = ?').get(userId);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const emailConflict = db.prepare('SELECT id FROM users WHERE email = ? AND id != ?').get(email, userId);
+        if (emailConflict) {
+            return res.status(409).json({ error: 'This email is already linked to another account.' });
+        }
+
+        db.prepare(`
+            UPDATE users
+            SET name = ?,
+                email = ?,
+                profile_completed = 1,
+                profile_verified_at = datetime('now')
+            WHERE id = ?
+        `).run(name, email, userId);
+
+        const updatedUser = db.prepare(`
+            SELECT id, ps_number, name, email, role, must_change_password, profile_completed, profile_verified_at
+            FROM users
+            WHERE id = ?
+        `).get(userId);
+
+        return res.json({ user: updatedUser });
+    } catch (error) {
+        console.error('Error completing profile:', error);
+        return res.status(500).json({ error: 'Failed to complete profile' });
     }
 });
 
@@ -404,8 +453,8 @@ router.post('/add', authenticateToken, authorizeRoles(['admin']), async (req, re
 
         // Insert new user (must_change_password defaults to 1)
         db.prepare(`
-            INSERT INTO users (ps_number, name, email, password, role, must_change_password)
-            VALUES (?, ?, ?, ?, ?, 1)
+            INSERT INTO users (ps_number, name, email, password, role, must_change_password, profile_completed, profile_verified_at)
+            VALUES (?, ?, ?, ?, ?, 1, 0, NULL)
         `).run(ps_number, name, email.toLowerCase(), hashedPassword, role.toLowerCase());
 
         res.status(201).json({

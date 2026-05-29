@@ -17,10 +17,11 @@
 }
 
 .th-empty-icon {
-  width: 46px;
-  height: 46px;
+  width: 80px;
+  height: 80px;
   color: #6b7280;
-  margin-bottom: 10px;
+  margin-bottom: 16px;
+  opacity: 0.75;
 }
 
 .th-empty-title {

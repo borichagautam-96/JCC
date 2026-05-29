@@ -435,12 +435,14 @@ const DashboardPage = () => {
                                             <td style={{ width: '240px', minWidth: '240px', verticalAlign: 'middle', textAlign: 'center', paddingRight: '1.25rem' }}>
                                                 {isAssignedToCurrentUser(invoice) ? (
                                                     <div style={actionGroupStyle}>
-                                                        <button
-                                                            className="btn btn-sm btn-primary"
-                                                            onClick={() => navigate('/create-voucher', { state: { invoiceData: invoice } })}
-                                                        >
-                                                            Create Voucher
-                                                        </button>
+                                                        {invoice.status !== 'voucher_created' && (
+                                                            <button
+                                                                className="btn btn-sm btn-primary"
+                                                                onClick={() => navigate('/create-voucher', { state: { invoiceData: invoice } })}
+                                                            >
+                                                                Create Voucher
+                                                            </button>
+                                                        )}
                                                         <button
                                                             style={trackButtonStyle}
                                                             onClick={() => handleTrackAssignment(invoice)}

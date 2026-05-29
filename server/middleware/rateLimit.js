@@ -14,6 +14,7 @@ export const apiLimiter = rateLimit({
     ...baseOptions,
     windowMs: 15 * 60 * 1000,
     max: 600,
+    skip: (req) => req.path === '/auth/login' || req.originalUrl.startsWith('/api/auth/login'),
 });
 
 export const authLimiter = rateLimit({

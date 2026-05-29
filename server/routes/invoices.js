@@ -206,7 +206,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
     storage,
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+    limits: { fileSize: 100 * 1024 * 1024 }, // 100MB limit
     fileFilter: (req, file, cb) => {
         const extname = path.extname(file.originalname).toLowerCase();
         const mime = String(file.mimetype || '').toLowerCase();
@@ -416,15 +416,13 @@ router.get('/assigned', authenticateToken, validateRequest(assignedInvoicesSchem
                 SELECT i.*, u.name as uploader_name
                 FROM invoices i
                 LEFT JOIN users u ON i.user_id = u.id
-                WHERE i.status IN ('assigned', 'pending', 'voucher_created')
                 ORDER BY COALESCE(i.assigned_at, i.created_at) DESC
             `).all()
             : db.prepare(`
                 SELECT i.*, u.name as uploader_name
                 FROM invoices i
                 LEFT JOIN users u ON i.user_id = u.id
-                WHERE i.status IN ('assigned', 'pending', 'voucher_created')
-                AND (
+                WHERE (
                     i.assigned_to_user_id = ?
                     OR i.assigned_to = ?
                     OR i.assigned_to = ?
@@ -600,7 +598,7 @@ router.use((err, req, res, next) => {
 
     if (err instanceof multer.MulterError) {
         if (err.code === 'LIMIT_FILE_SIZE') {
-            return res.status(400).json({ error: 'File is too large. Maximum size is 10MB.' });
+            return res.status(400).json({ error: 'File is too large. Maximum size is 100MB.' });
         }
         return res.status(400).json({ error: err.message || 'Upload failed' });
     }

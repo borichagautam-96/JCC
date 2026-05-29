@@ -767,12 +767,12 @@ const UserManagementPage = () => {
                                                     <button
                                                         onClick={() => handleEdit(user)}
                                                         style={{
-                                                            padding: '0.35rem 0.85rem',
+                                                            padding: '0.28rem 0.7rem',
                                                             background: '#3B82F6',
                                                             color: 'white',
                                                             border: 'none',
                                                             borderRadius: '6px',
-                                                            fontSize: '0.82rem',
+                                                            fontSize: '0.79rem',
                                                             fontWeight: 600,
                                                             cursor: 'pointer',
                                                             transition: 'all 0.2s ease',
@@ -787,12 +787,12 @@ const UserManagementPage = () => {
                                                         <button
                                                             onClick={() => handleUnbindDevice(user.id)}
                                                             style={{
-                                                                padding: '0.35rem 0.85rem',
+                                                                padding: '0.28rem 0.7rem',
                                                                 background: '#F59E0B',
                                                                 color: 'white',
                                                                 border: 'none',
                                                                 borderRadius: '6px',
-                                                                fontSize: '0.82rem',
+                                                                fontSize: '0.79rem',
                                                                 fontWeight: 600,
                                                                 cursor: 'pointer',
                                                                 transition: 'all 0.2s ease',
@@ -805,38 +805,16 @@ const UserManagementPage = () => {
                                                             Unbind
                                                         </button>
                                                     )}
-                                                    {user.active_session && (
-                                                        <button
-                                                            onClick={() => handleEndSession(user.id)}
-                                                            style={{
-                                                                padding: '0.35rem 0.85rem',
-                                                                background: '#8B5CF6',
-                                                                color: 'white',
-                                                                border: 'none',
-                                                                borderRadius: '6px',
-                                                                fontSize: '0.82rem',
-                                                                fontWeight: 600,
-                                                                cursor: 'pointer',
-                                                                transition: 'all 0.2s ease',
-                                                                boxShadow: '0 1px 3px rgba(139, 92, 246, 0.25)'
-                                                            }}
-                                                            onMouseEnter={e => e.target.style.opacity = '0.85'}
-                                                            onMouseLeave={e => e.target.style.opacity = '1'}
-                                                            title="End active session"
-                                                        >
-                                                            Kick
-                                                        </button>
-                                                    )}
                                                     <button
                                                         onClick={() => handleDelete(user.id)}
                                                         style={{
-                                                            padding: '0.35rem 0.85rem',
+                                                            padding: '0.28rem 0.7rem',
                                                             background: '#EF4444',
                                                             color: 'white',
                                                             border: 'none',
                                                             borderRadius: '6px',
                                                             cursor: 'pointer',
-                                                            fontSize: '0.82rem',
+                                                            fontSize: '0.79rem',
                                                             fontWeight: 600,
                                                             transition: 'all 0.2s ease',
                                                             boxShadow: '0 1px 3px rgba(239, 68, 68, 0.25)'

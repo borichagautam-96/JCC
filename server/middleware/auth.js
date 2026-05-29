@@ -4,6 +4,25 @@ import { env } from '../config/env.js';
 
 const JWT_SECRET = env.jwtSecret;
 
+const PROFILE_COMPLETION_ALLOWLIST = new Set([
+    '/api/auth/logout',
+    '/api/users/me',
+    '/api/users/complete-profile',
+    '/api/users/change-password',
+]);
+
+const canBypassProfileCompletion = (req) => {
+    if (PROFILE_COMPLETION_ALLOWLIST.has(req.originalUrl)) {
+        return true;
+    }
+
+    if (req.originalUrl.startsWith('/api/users/complete-profile')) {
+        return true;
+    }
+
+    return false;
+};
+
 export const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader?.split(' ')[1];
@@ -63,6 +82,24 @@ export const authenticateToken = (req, res, next) => {
             const now = new Date();
             if (now - lastSeen > 60000) {
                 db.prepare('UPDATE active_sessions SET last_seen = datetime(\'now\') WHERE id = ?').run(activeSession.id);
+            }
+        }
+
+        const currentUser = db.prepare('SELECT profile_completed, profile_verified_at FROM users WHERE id = ?').get(verified.id);
+        const knownProfileCompletion = currentUser
+            ? true
+            : (verified.profile_completed !== undefined || verified.profile_verified_at !== undefined);
+
+        if (knownProfileCompletion) {
+            const profileCompleted = Number(currentUser?.profile_completed ?? verified.profile_completed ?? 0) === 1;
+            const profileVerifiedAt = currentUser?.profile_verified_at ?? verified.profile_verified_at ?? null;
+            const isProfileFullyVerified = profileCompleted && Boolean(profileVerifiedAt);
+
+            if (!isProfileFullyVerified && !canBypassProfileCompletion(req)) {
+                return res.status(403).json({
+                    error: 'Please complete your profile to continue.',
+                    code: 'PROFILE_INCOMPLETE',
+                });
             }
         }
 

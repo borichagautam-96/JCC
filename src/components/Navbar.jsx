@@ -14,17 +14,17 @@ import {
     Users,
     ReceiptText,
     Building2,
-    KeyRound,
     MessageSquareText,
     Activity,
     LogOut,
+    BookOpen,
 } from 'lucide-react';
 
 const SHOW_ADMIN_LOGS = import.meta.env.VITE_SHOW_ADMIN_LOGS === 'true';
 const ENABLE_ASSET_MODULE = import.meta.env.VITE_ENABLE_ASSET_MODULE === 'true';
 const ENABLE_FEEDBACK_MODULE = import.meta.env.VITE_ENABLE_FEEDBACK === 'true';
 
-const Navbar = ({ isOpen }) => {
+const Navbar = ({ isOpen, onOpenTeam }) => {
     const { user, logout } = useAuth();
     const navigate = useNavigate();
     const location = useLocation();
@@ -55,7 +55,17 @@ const Navbar = ({ isOpen }) => {
                         <h2 className="m-0 text-xl font-semibold tracking-tight text-slate-900">InFloAI</h2>
                     </div>
                 </div>
-                <h2 className="mt-3 text-xs font-semibold tracking-tight text-blue-600">Developed by Development Team(D&T)</h2>
+                {onOpenTeam ? (
+                    <button
+                        type="button"
+                        className="mt-3 text-xs font-semibold tracking-tight text-blue-600 transition hover:text-blue-700"
+                        onClick={onOpenTeam}
+                    >
+                        Developed by Development Team (D&T)
+                    </button>
+                ) : (
+                    <h2 className="mt-3 text-xs font-semibold tracking-tight text-blue-600">Developed by Development Team (D&T)</h2>
+                )}
             </div>
 
             <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
@@ -81,13 +91,13 @@ const Navbar = ({ isOpen }) => {
                 {(user?.role === 'initiator' || user?.role === 'user' || user?.role === 'admin') && (
                     <Link to="/create-voucher" className={navClass(isActive('/create-voucher'))}>
                         <PlusSquare size={18} />
-                        <span>Create Voucher</span>
+                        <span>Create Request</span>
                     </Link>
                 )}
 
                 <Link to="/voucher-history" className={navClass(isActive('/voucher-history'))}>
                     <History size={18} />
-                    <span>Voucher History</span>
+                    <span>Claim History</span>
                 </Link>
 
                 {(user?.role === 'admin') && (
@@ -114,7 +124,7 @@ const Navbar = ({ isOpen }) => {
                 {(['admin', 'manager', 'coordinator', 'final_approver', 'initiator', 'user'].includes(user?.role)) && (
                     <Link to="/monthly-vouchers" className={navClass(isActive('/monthly-vouchers'))}>
                         <ReceiptText size={18} />
-                        <span>Monthly Vouchers</span>
+                        <span>Monthly Claims</span>
                     </Link>
                 )}
 
@@ -141,11 +151,6 @@ const Navbar = ({ isOpen }) => {
                             <span>Vendor Management</span>
                         </Link>
 
-                        <Link to="/change-password" className={navClass(isActive('/change-password'))}>
-                            <KeyRound size={18} />
-                            <span>Change Password</span>
-                        </Link>
-
                         <Link to="/user-management" className={navClass(isActive('/user-management'))}>
                             <Users size={18} />
                             <span>User Management</span>
@@ -167,6 +172,14 @@ const Navbar = ({ isOpen }) => {
                     </>
                 )}
             </nav>
+
+            {/* SOP / Help Link — visible to all roles */}
+            <div className="px-3 pb-2">
+                <Link to="/sop" className={navClass(isActive('/sop'))}>
+                    <BookOpen size={18} />
+                    <span>Help & SOP</span>
+                </Link>
+            </div>
 
             <div className="border-t border-slate-200 p-4">
                 <div className="mb-3 flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">

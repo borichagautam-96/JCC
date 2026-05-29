@@ -24,9 +24,8 @@ const LoginPage = () => {
         try {
             const user = await login(formData.psNumber, formData.password);
 
-            // Check if password change is required
-            if (user.requiresPasswordChange) {
-                navigate('/change-password');
+            if (user.requiresProfileCompletion) {
+                navigate('/complete-profile');
                 return;
             }
 

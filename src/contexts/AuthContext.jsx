@@ -108,7 +108,6 @@ export const AuthProvider = ({ children }) => {
             localStorage.removeItem('token');
             localStorage.removeItem('user');
             localStorage.removeItem('sessionExpiry');
-            localStorage.removeItem('must_change_password');
             setUser(null);
         } else if (token && userData) {
             // Session still valid - restore user
@@ -158,13 +157,8 @@ export const AuthProvider = ({ children }) => {
             localStorage.setItem('sessionExpiry', String(Date.now() + getSessionDurationMs(data.sessionTimeoutHours)));
             setUser(data.user);
 
-            // Check if user must change password (stored as 1 or 0 from SQLite)
-            if (data.user.must_change_password === 1 || data.user.must_change_password === true) {
-                localStorage.setItem('must_change_password', 'true');
-                return { ...data.user, requiresPasswordChange: true };
-            } else {
-                // Clear the flag if not required
-                localStorage.removeItem('must_change_password');
+            if (Number(data.user.profile_completed ?? 0) !== 1) {
+                return { ...data.user, requiresProfileCompletion: true };
             }
 
             return data.user;
@@ -227,11 +221,14 @@ export const AuthProvider = ({ children }) => {
         localStorage.removeItem('token');
         localStorage.removeItem('user');
         localStorage.removeItem('sessionExpiry');
-        localStorage.removeItem('must_change_password');
         setUser(null);
     };
 
     const getToken = () => localStorage.getItem('token');
+    const updateUser = (nextUser) => {
+        setUser(nextUser);
+        localStorage.setItem('user', JSON.stringify(nextUser));
+    };
     const dialog = useDialog();
 
     // ===== Global Fetch Interceptor for session invalidation =====
@@ -256,13 +253,16 @@ export const AuthProvider = ({ children }) => {
                     const isSessionFailure = body?.code && sessionErrors.includes(body.code);
                     const isGenericInvalidToken = response.status === 403 && String(body?.error || '').toLowerCase().includes('invalid token');
 
+                    if (body?.code === 'PROFILE_INCOMPLETE') {
+                        window.location.href = '/complete-profile';
+                    }
+
                     if (isSessionFailure || isGenericInvalidToken) {
                         console.warn(`[DeviceBind] Session terminated: ${body.code}`);
                         // Auto-logout without calling backend (session already dead)
                         localStorage.removeItem('token');
                         localStorage.removeItem('user');
                         localStorage.removeItem('sessionExpiry');
-                        localStorage.removeItem('must_change_password');
                         setUser(null);
                         // Show message to user
                         dialog.alert(body?.error || 'Your session has been terminated. Please log in again.');
@@ -282,7 +282,7 @@ export const AuthProvider = ({ children }) => {
     }, [user]);
 
     return (
-        <AuthContext.Provider value={{ user, login, register, logout, loading, getToken, getDeviceId: getDeviceId }}>
+        <AuthContext.Provider value={{ user, login, register, logout, loading, getToken, updateUser, getDeviceId: getDeviceId }}>
             {children}
         </AuthContext.Provider>
     );

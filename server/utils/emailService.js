@@ -10,7 +10,7 @@ const EMAIL_CONFIG = {
     // No auth — open relay via on-prem Exchange
 };
 
-const SENDER_ADDRESS = process.env.SMTP_SENDER || 'noreply@Lntdefence.com';
+const SENDER_ADDRESS = process.env.SMTP_SENDER || 'PESDT@larsentoubro.com';
 
 const createTransporter = () => {
     try {
@@ -60,43 +60,51 @@ const formatInvoiceDate = (dateStr) => {
 
 // Shared details table matching the L&T email format
 const detailsTable = (voucher) => `
-    <table style="border-collapse: collapse; font-size: 14px; margin: 12px 0; width: 100%;">
-        <tr>
-            <td style="padding: 5px 12px 5px 0; color: #333; width: 210px; white-space: nowrap;"><strong>Voucher Number</strong></td>
-            <td style="padding: 5px 0;">:&nbsp;&nbsp;${voucher.voucherRequestId || 'JCC No.'}</td>
-        </tr>
-        <tr>
-            <td style="padding: 5px 12px 5px 0; color: #333;"><strong>Claimed By</strong></td>
-            <td style="padding: 5px 0;">:&nbsp;&nbsp;${voucher.claimedBy || '-'}${voucher.creatorPsNumber ? `-${voucher.creatorPsNumber}` : ''}</td>
-        </tr>
-        <tr>
-            <td style="padding: 5px 12px 5px 0; color: #333;"><strong>Location</strong></td>
-            <td style="padding: 5px 0;">:&nbsp;&nbsp;${voucher.expenseBookingLocation || 'PEW'}</td>
-        </tr>
-        <tr>
-            <td style="padding: 5px 12px 5px 0; color: #333;"><strong>Supplier</strong></td>
-            <td style="padding: 5px 0;">:&nbsp;&nbsp;${voucher.supplier || '-'}</td>
-        </tr>
-        <tr>
-            <td style="padding: 5px 12px 5px 0; color: #333;"><strong>Basic Amount(INR)</strong></td>
-            <td style="padding: 5px 0;">:&nbsp;&nbsp;${voucher.basicAmount || '-'}</td>
-        </tr>
-        <tr>
-            <td style="padding: 5px 12px 5px 0; color: #333;"><strong>Gross Amount(INR)</strong></td>
-            <td style="padding: 5px 0;">:&nbsp;&nbsp;${voucher.grossAmount || '-'}</td>
-        </tr>
-        <tr>
-            <td style="padding: 5px 12px 5px 0; color: #333;"><strong>Invoice No.</strong></td>
-            <td style="padding: 5px 0;">:&nbsp;&nbsp;${voucher.invoiceNumber || '-'}</td>
-        </tr>
-        <tr>
-            <td style="padding: 5px 12px 5px 0; color: #333;"><strong>Invoice Date</strong></td>
-            <td style="padding: 5px 0;">:&nbsp;&nbsp;${formatInvoiceDate(voucher.invoiceDate)}</td>
-        </tr>
-        <tr>
-            <td style="padding: 5px 12px 5px 0; color: #333;"><strong>Nature Of Expense</strong></td>
-            <td style="padding: 5px 0;">:&nbsp;&nbsp;${voucher.natureOfExpenses || '-'}</td>
-        </tr>
+    <table style="border-collapse: collapse; font-size: 14px; margin: 12px 0; width: 100%; border: 2px solid #444;">
+        <thead>
+            <tr>
+                <th style="padding: 8px 12px; background-color: #1a1a2e; color: #ffffff; text-align: left; font-weight: bold; border: 1px solid #444; width: 40%;">Field</th>
+                <th style="padding: 8px 12px; background-color: #1a1a2e; color: #ffffff; text-align: left; font-weight: bold; border: 1px solid #444;">Information</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td style="padding: 7px 12px; border: 1px solid #555; background-color: #f5f5f5; font-weight: 600; color: #222;">JCC No.</td>
+                <td style="padding: 7px 12px; border: 1px solid #555; background-color: #f5f5f5; color: #222;">${voucher.voucherRequestId || '-'}</td>
+            </tr>
+            <tr>
+                <td style="padding: 7px 12px; border: 1px solid #555; background-color: #ffffff; font-weight: 600; color: #222;">Claimed By</td>
+                <td style="padding: 7px 12px; border: 1px solid #555; background-color: #ffffff; color: #222;">${voucher.claimedBy || '-'}${voucher.creatorPsNumber ? ` (${voucher.creatorPsNumber})` : ''}</td>
+            </tr>
+            <tr>
+                <td style="padding: 7px 12px; border: 1px solid #555; background-color: #f5f5f5; font-weight: 600; color: #222;">Location</td>
+                <td style="padding: 7px 12px; border: 1px solid #555; background-color: #f5f5f5; color: #222;">${voucher.expenseBookingLocation || '-'}</td>
+            </tr>
+            <tr>
+                <td style="padding: 7px 12px; border: 1px solid #555; background-color: #ffffff; font-weight: 600; color: #222;">Supplier</td>
+                <td style="padding: 7px 12px; border: 1px solid #555; background-color: #ffffff; color: #222;">${voucher.supplier || '-'}</td>
+            </tr>
+            <tr>
+                <td style="padding: 7px 12px; border: 1px solid #555; background-color: #f5f5f5; font-weight: 600; color: #222;">Basic Amount (INR)</td>
+                <td style="padding: 7px 12px; border: 1px solid #555; background-color: #f5f5f5; color: #222;">${voucher.basicAmount || '-'}</td>
+            </tr>
+            <tr>
+                <td style="padding: 7px 12px; border: 1px solid #555; background-color: #ffffff; font-weight: 600; color: #222;">Gross Amount (INR)</td>
+                <td style="padding: 7px 12px; border: 1px solid #555; background-color: #ffffff; color: #222;">${voucher.grossAmount || '-'}</td>
+            </tr>
+            <tr>
+                <td style="padding: 7px 12px; border: 1px solid #555; background-color: #f5f5f5; font-weight: 600; color: #222;">Invoice No.</td>
+                <td style="padding: 7px 12px; border: 1px solid #555; background-color: #f5f5f5; color: #222;">${voucher.invoiceNumber || '-'}</td>
+            </tr>
+            <tr>
+                <td style="padding: 7px 12px; border: 1px solid #555; background-color: #ffffff; font-weight: 600; color: #222;">Invoice Date</td>
+                <td style="padding: 7px 12px; border: 1px solid #555; background-color: #ffffff; color: #222;">${formatInvoiceDate(voucher.invoiceDate)}</td>
+            </tr>
+            <tr>
+                <td style="padding: 7px 12px; border: 1px solid #555; background-color: #f5f5f5; font-weight: 600; color: #222;">Nature of Expense</td>
+                <td style="padding: 7px 12px; border: 1px solid #555; background-color: #f5f5f5; color: #222;">${voucher.natureOfExpenses || '-'}</td>
+            </tr>
+        </tbody>
     </table>
 `;
 
@@ -136,7 +144,7 @@ const emailTemplates = {
         html: emailWrapper(`
             <p>Dear <strong>${creator.name}</strong>,</p>
             <p>
-                <strong>${voucher.voucherRequestId}</strong> has been submitted successfully and is pending approval.
+                <strong>${voucher.voucherRequestId}</strong> has been submitted successfully and is pending for approval.
             </p>
             <p>Its details are as follows:</p>
             ${detailsTable(voucher)}
@@ -148,17 +156,14 @@ const emailTemplates = {
     jccCreatedApprover1: (voucher, creator) => ({
         subject: `${voucher.voucherRequestId} has been submitted by ${voucher.claimedBy || creator.name} for approval`,
         html: emailWrapper(`
-            <p>
-                <strong>JCC No.: ${voucher.voucherRequestId}</strong> has been submitted by
-                <strong>${voucher.claimedBy || creator.name}</strong> for approval.<br/>
-                Kindly review the same.
-            </p>
-            <p>Its details are as follows:</p>
+            <p>${voucher.voucherRequestId} has been submitted by <strong>${voucher.claimedBy || creator.name}</strong> for your review and approval. Please find the details below for your reference:</p>
+            <p><strong>JCC Submission Details</strong></p>
             ${detailsTable(voucher)}
-            <p>
+            <p style="margin-top: 20px;">
+                To view invoice and to approve:&nbsp;
                 <a href="#" style="color: #0066CC; text-decoration: none; font-weight: 600;">Open Task</a>
                 &nbsp;|&nbsp;
-                <a href="#" style="color: #0066CC; text-decoration: none; font-weight: 600;">Open BPM</a>
+                <a href="#" style="color: #CC6600; text-decoration: none; font-weight: 600;">Open BPM</a>
                 <span style="color: #888; font-size: 12px;"> (Link to access the portal directly)</span>
             </p>
         `)
@@ -168,17 +173,15 @@ const emailTemplates = {
     jccCreatedFinalApprover: (voucher, creator) => ({
         subject: `${voucher.voucherRequestId} submitted — Your Final Approval will be required`,
         html: emailWrapper(`
-            <p>
-                <strong>JCC No.: ${voucher.voucherRequestId}</strong> has been submitted by
-                <strong>${voucher.claimedBy || creator.name}</strong>.<br/>
-                After Level 1 Manager approval, this JCC will require <strong>your Final Approval</strong>.
-            </p>
-            <p>Its details are as follows:</p>
+            <p>${voucher.voucherRequestId} has been submitted by <strong>${voucher.claimedBy || creator.name}</strong> for your review and approval. Please find the details below for your reference:</p>
+            <p>After Level 1 Manager approval, this JCC will require <strong>your Final Approval</strong>.</p>
+            <p><strong>JCC Submission Details</strong></p>
             ${detailsTable(voucher)}
-            <p>
+            <p style="margin-top: 20px;">
+                To view invoice and to approve:&nbsp;
                 <a href="#" style="color: #0066CC; text-decoration: none; font-weight: 600;">Open Task</a>
                 &nbsp;|&nbsp;
-                <a href="#" style="color: #0066CC; text-decoration: none; font-weight: 600;">Open BPM</a>
+                <a href="#" style="color: #CC6600; text-decoration: none; font-weight: 600;">Open BPM</a>
                 <span style="color: #888; font-size: 12px;"> (Link to access the portal directly)</span>
             </p>
         `)

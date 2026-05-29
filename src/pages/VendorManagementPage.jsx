@@ -116,6 +116,21 @@ const compactStyles = `
         white-space: normal;
     }
 
+    .vendor-compact .vendor-meta {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+        font-size: 0.78rem;
+        color: #475569;
+        white-space: normal;
+    }
+
+    .vendor-compact .vendor-meta-label {
+        font-weight: 600;
+        color: #0f172a;
+        margin-right: 0.35rem;
+    }
+
     .vendor-compact h3 {
         font-size: 1.18rem;
     }
@@ -212,12 +227,7 @@ const VendorManagementPage = () => {
 
     const filteredVendors = useMemo(() => {
         const needle = query.trim().toLowerCase();
-        const visibleVendors = vendors.filter((vendor) => {
-            const displayName = normalizeVendorName(vendor.bp_name || vendor.vendor_name);
-            return TEMP_ALLOWED_VENDOR_NAME_INDEX.has(displayName);
-        });
-
-        const sortedVendors = [...visibleVendors].sort((left, right) => {
+        const sortedVendors = [...vendors].sort((left, right) => {
             const leftName = normalizeVendorName(left.bp_name || left.vendor_name);
             const rightName = normalizeVendorName(right.bp_name || right.vendor_name);
 
@@ -243,6 +253,18 @@ const VendorManagementPage = () => {
                 vendor.vendor_code,
                 vendor.address,
                 vendor.mail_id,
+                vendor.bp_id,
+                vendor.bp_name,
+                vendor.city,
+                vendor.country,
+                vendor.nda_date,
+                vendor.nda_expiry_date,
+                vendor.nda_period_year,
+                vendor.project_name,
+                vendor.signed_hard_copy_depository_location,
+                vendor.signed_hard_copy_depository_location_fp,
+                vendor.item_type,
+                vendor.vendor_path,
             ];
 
             return searchableFields.some((field) => String(field || '').toLowerCase().includes(needle));
@@ -381,6 +403,7 @@ const VendorManagementPage = () => {
         }
     };
 
+
     return (
         <div className="container vendor-compact" style={{ paddingTop: '1.4rem', paddingBottom: '1.4rem', maxWidth: '1440px' }}>
             <style>{compactStyles}</style>
@@ -444,7 +467,7 @@ const VendorManagementPage = () => {
                                 {importing ? `Importing ${entityPluralLower}...` : `Upload Excel (${entitySingular} List)`}
                             </button>
                             <small style={{ display: 'block', marginTop: '0.5rem', color: '#64748b' }}>
-                                Upload .xlsx/.xls with columns like {entitySingular} Name, {entitySingular} Code, {entitySingular} Address and Email ID.
+                                Upload .xlsx/.xls with columns like {entitySingular} Name, {entitySingular} ID, {entitySingular} Address and Email ID.
                             </small>
                         </div>
                         <form onSubmit={handleCreateVendor}>
@@ -462,14 +485,14 @@ const VendorManagementPage = () => {
                             </div>
 
                             <div className="input-group">
-                                <label className="input-label" htmlFor="vendor-code-input">{entitySingular} Code *</label>
+                                <label className="input-label" htmlFor="vendor-code-input">{entitySingular} ID *</label>
                                 <input
                                     id="vendor-code-input"
                                     type="text"
                                     className="input-field"
                                     value={formData.vendorCode}
                                     onChange={(e) => updateField('vendorCode', e.target.value)}
-                                    placeholder={`Enter ${entitySingularLower} code`}
+                                    placeholder={`Enter ${entitySingularLower} id`}
                                     required
                                 />
                             </div>
@@ -514,7 +537,7 @@ const VendorManagementPage = () => {
                                 style={{ maxWidth: '360px' }}
                                 value={query}
                                 onChange={(e) => setQuery(e.target.value)}
-                                placeholder={`Search by ${entitySingularLower}, code, address or email`}
+                                placeholder={`Search by ${entitySingularLower}, id, address or email`}
                             />
                         </div>
 
@@ -530,7 +553,7 @@ const VendorManagementPage = () => {
                                         <tr>
                                             <th>#</th>
                                             <th>{entitySingular}</th>
-                                            <th>{entitySingular} Code</th>
+                                            <th>{entitySingular} ID</th>
                                             <th>{entitySingular} Address</th>
                                             <th>Email ID</th>
                                             <th>Action</th>

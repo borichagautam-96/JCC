@@ -405,8 +405,8 @@ const VoucherRequestPage = () => {
             <div className="fade-in">
                 {/* Header */}
                 <div className="voucher-hero">
-                    <h1>Create Voucher Request</h1>
-                    <p>Fill in the details below to submit a new voucher request</p>
+                    <h1>Create Claim Request</h1>
+                    <p>Fill in the details below to submit a new claim request</p>
                 </div>
 
                 {success && (
@@ -482,7 +482,7 @@ const VoucherRequestPage = () => {
                         {/* Voucher Header */}
                         <div className="glass-card voucher-section-card">
                             <div className="voucher-section-head">
-                                <h3 className="voucher-section-head-title">Voucher Header</h3>
+                                <h3 className="voucher-section-head-title">Claim Header</h3>
                             </div>
 
                             <div className="input-group">
@@ -790,7 +790,7 @@ const VoucherRequestPage = () => {
                             disabled={submitting}
                             className="btn btn-primary"
                         >
-                            {submitting ? 'Submitting...' : 'Submit Voucher Request'}
+                            {submitting ? 'Submitting...' : 'Submit Claim Request'}
                         </button>
 
                         <button

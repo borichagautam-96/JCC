@@ -85,6 +85,69 @@ const generateUniqueVendorCode = (existingCodes) => {
     return '';
 };
 
+// Canonical vendor names shown in Vendor Management — must stay in sync with VendorManagementPage.jsx TEMP_ALLOWED_VENDOR_NAMES
+const ALLOWED_VENDOR_NAMES = [
+    'ALLWYN JUMBO PRINTS AND EXCHANGER PVT LTD',
+    'Armoured Vehicles Nigam Limited',
+    'Asha Furniture Works',
+    'Balaji Arts',
+    'Bharat Electronics Limited',
+    'CHANDRAHAS SHETTY',
+    'DDSPLM Pvt. Ltd.',
+    'Delos Consulting Pvt. Ltd.',
+    'DesignTech Systems Pvt. Ltd.',
+    'GenieHR Solutions Pvt. Ltd.',
+    'Global Publishing Solutions Ltd.',
+    'Hornbill Studios Pvt Ltd',
+    'JUSTVFX STUDIOS',
+    'LOUISCIAGA OVERSEAS PVT. LTD',
+    'MICROPOINT COMPUTERS PRIVATE LIMITED',
+    'Pentagon System And Services Pvt. Ltd',
+    'PEREVODRU',
+    'PEREVODRU GLOBAL TRANSLATION SERVICES',
+    'Pixlar Art Creation',
+    'RAC IT SOLUTIONS PVT. LTD.',
+    'Schneider Electric India Pvt. Limited (SEIPL)',
+    'Shezarweb Technologies',
+    'Shivam Computers',
+    'SIEMENS INDUSTRY SOFTWARE (INDIA)',
+    'Smartify Software Solutions LLP',
+    'Somshanti Enterprises',
+    'Urgent Courier',
+    'Voice Kraft Productions',
+    'White Globe Pvt. Ltd.',
+    'Track On Courier',
+];
+
+// Get vendor names list (for dropdowns) — returns ONLY vendors visible in Vendor Management
+// Merges DB vendors (filtered to the whitelist) + the whitelist itself as guaranteed fallback
+// Accessible by: Any authenticated user
+router.get('/names', authenticateToken, (req, res) => {
+    try {
+        // Fetch all vendor_name values from DB
+        const dbVendors = db.prepare(`
+            SELECT DISTINCT vendor_name
+            FROM vendors
+            WHERE vendor_name IS NOT NULL
+              AND TRIM(vendor_name) != ''
+        `).all().map((v) => String(v.vendor_name).trim()).filter(Boolean);
+
+        const allowedLower = new Set(ALLOWED_VENDOR_NAMES.map((n) => n.toLowerCase()));
+
+        // Merge: include all DB vendors, then add canonical fallbacks not already present
+        const dbLowerSet = new Set(dbVendors.map((n) => n.toLowerCase()));
+        const fallback = ALLOWED_VENDOR_NAMES.filter((n) => !dbLowerSet.has(n.toLowerCase()));
+
+        const merged = [...new Set([...dbVendors, ...fallback])]
+            .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
+
+        res.json(merged);
+    } catch (error) {
+        console.error('Error fetching vendor names:', error);
+        res.status(500).json({ error: 'Failed to fetch vendor names' });
+    }
+});
+
 // Get all vendors
 // Accessible by: Admin only
 router.get('/', authenticateToken, authorizeRoles('admin'), (req, res) => {
@@ -248,22 +311,22 @@ router.post('/import', authenticateToken, authorizeRoles('admin'), handleVendorF
 
         const headerRow = Array.isArray(rows[0]) ? rows[0].map(normalizeHeader) : [];
 
-        const bpIdColumnIndex = findColumnIndex(headerRow, ['bp id']);
-        const bpNameColumnIndex = findColumnIndex(headerRow, ['bp name']);
-        const vendorNameColumnIndex = findColumnIndex(headerRow, ['vendor name']);
-        const cityColumnIndex = findColumnIndex(headerRow, ['city']);
-        const poNoColumnIndex = findColumnIndex(headerRow, ['po no', 'po number', 'pono', 'country']);
-        const addressColumnIndex = findColumnIndex(headerRow, ['vendor address', 'address']);
-        const ndaDateColumnIndex = findColumnIndex(headerRow, ['date of nda', 'nda date']);
-        const ndaExpiryDateColumnIndex = findColumnIndex(headerRow, ['expiry date of nda', 'nda expiry date']);
-        const ndaPeriodYearColumnIndex = findColumnIndex(headerRow, ['period of nda in year', 'nda period']);
-        const projectNameColumnIndex = findColumnIndex(headerRow, ['project name']);
-        const signedHardCopyLocationColumnIndex = findColumnIndex(headerRow, ['signed hard copy depository location']);
-        const signedHardCopyLocationFpColumnIndex = findColumnIndex(headerRow, ['signed hard copy depository location fp']);
-        const itemTypeColumnIndex = findColumnIndex(headerRow, ['item type']);
-        const pathColumnIndex = findColumnIndex(headerRow, ['path']);
-        const emailColumnIndex = findColumnIndex(headerRow, ['email', 'mail id', 'mail']);
-        const vendorCodeColumnIndex = findColumnIndex(headerRow, ['vendor code', 'code']);
+        const bpIdColumnIndex = findColumnIndex(headerRow, ['bp id', 'business partner id', 'business partner code']);
+        const bpNameColumnIndex = findColumnIndex(headerRow, ['bp name', 'business partner name']);
+        const vendorNameColumnIndex = findColumnIndex(headerRow, ['vendor name', 'vendor']);
+        const cityColumnIndex = findColumnIndex(headerRow, ['city', 'vendor city']);
+        const poNoColumnIndex = findColumnIndex(headerRow, ['po no', 'po number', 'pono', 'po#', 'po ref', 'purchase order', 'country']);
+        const addressColumnIndex = findColumnIndex(headerRow, ['vendor address', 'address', 'vendor addr']);
+        const ndaDateColumnIndex = findColumnIndex(headerRow, ['date of nda', 'nda date', 'nda signed date']);
+        const ndaExpiryDateColumnIndex = findColumnIndex(headerRow, ['expiry date of nda', 'nda expiry date', 'nda valid till', 'nda valid until']);
+        const ndaPeriodYearColumnIndex = findColumnIndex(headerRow, ['period of nda in year', 'nda period', 'nda period year', 'nda period years', 'nda years']);
+        const projectNameColumnIndex = findColumnIndex(headerRow, ['project name', 'project']);
+        const signedHardCopyLocationColumnIndex = findColumnIndex(headerRow, ['signed hard copy depository location', 'signed hard copy location', 'hard copy depository']);
+        const signedHardCopyLocationFpColumnIndex = findColumnIndex(headerRow, ['signed hard copy depository location fp', 'signed hard copy location fp', 'hard copy location fp']);
+        const itemTypeColumnIndex = findColumnIndex(headerRow, ['item type', 'item category', 'category']);
+        const pathColumnIndex = findColumnIndex(headerRow, ['path', 'vendor path']);
+        const emailColumnIndex = findColumnIndex(headerRow, ['email', 'email id', 'email address', 'mail id', 'mail']);
+        const vendorCodeColumnIndex = findColumnIndex(headerRow, ['vendor code', 'vendor id', 'code', 'vendorid']);
 
         const parsedRows = rows
             .slice(1)
@@ -301,12 +364,12 @@ router.post('/import', authenticateToken, authorizeRoles('admin'), handleVendorF
             parsedRows.map((entry) => [entry.vendorName.toLowerCase(), entry])
         ).values());
 
-        const existingRows = db.prepare('SELECT vendor_name, vendor_code FROM vendors').all();
-        const existingNames = new Set(existingRows.map((row) => toTrimmedString(row.vendor_name).toLowerCase()));
-        const existingCodes = new Set(existingRows.map((row) => toTrimmedString(row.vendor_code).toLowerCase()).filter(Boolean));
+        const existingCodes = new Set();
 
         let insertedCount = 0;
+        let updatedCount = 0;
         let skippedCount = 0;
+        let deletedCount = 0;
 
         const insertStmt = db.prepare(`
             INSERT INTO vendors (
@@ -331,14 +394,13 @@ router.post('/import', authenticateToken, authorizeRoles('admin'), handleVendorF
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
-        const importTransaction = db.transaction(() => {
-            uniqueIncomingRows.forEach((entry) => {
-                const normalizedName = entry.vendorName.toLowerCase();
-                if (existingNames.has(normalizedName)) {
-                    skippedCount += 1;
-                    return;
-                }
+        const deleteAllStmt = db.prepare('DELETE FROM vendors');
 
+        const importTransaction = db.transaction(() => {
+            const deleteResult = deleteAllStmt.run();
+            deletedCount = deleteResult?.changes || 0;
+
+            uniqueIncomingRows.forEach((entry) => {
                 let finalVendorCode = toTrimmedString(entry.vendorCode);
                 if (!finalVendorCode || existingCodes.has(finalVendorCode.toLowerCase())) {
                     finalVendorCode = generateUniqueVendorCode(existingCodes);
@@ -368,7 +430,6 @@ router.post('/import', authenticateToken, authorizeRoles('admin'), handleVendorF
                     entry.path,
                 );
 
-                existingNames.add(normalizedName);
                 existingCodes.add(finalVendorCode.toLowerCase());
                 insertedCount += 1;
             });
@@ -379,7 +440,9 @@ router.post('/import', authenticateToken, authorizeRoles('admin'), handleVendorF
         return res.json({
             message: 'Vendor import completed',
             inserted: insertedCount,
+            updated: updatedCount,
             skipped: skippedCount,
+            deleted: deletedCount,
             totalRows: parsedRows.length,
         });
     } catch (error) {
@@ -489,6 +552,17 @@ router.put('/:id', authenticateToken, authorizeRoles('admin'), (req, res) => {
     } catch (error) {
         console.error('Error updating vendor:', error);
         res.status(500).json({ error: 'Failed to update vendor' });
+    }
+});
+
+// Delete all vendors
+router.delete('/clear', authenticateToken, authorizeRoles('admin'), (req, res) => {
+    try {
+        const result = db.prepare('DELETE FROM vendors').run();
+        res.json({ message: 'All vendors deleted successfully', deleted: result?.changes || 0 });
+    } catch (error) {
+        console.error('Error deleting all vendors:', error);
+        res.status(500).json({ error: 'Failed to delete all vendors' });
     }
 });
 

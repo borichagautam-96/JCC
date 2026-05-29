@@ -35,6 +35,8 @@ const initDatabase = async () => {
       role TEXT NOT NULL CHECK(role IN ('vendor', 'coordinator', 'admin', 'manager', 'initiator', 'user', 'final_approver')),
       manager_id INTEGER,
       must_change_password INTEGER DEFAULT 1,
+      profile_completed INTEGER DEFAULT 1,
+      profile_verified_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (manager_id) REFERENCES users(id)
     )
@@ -1107,7 +1109,7 @@ const initDatabase = async () => {
     console.error('Error adding attachment_path column:', error);
   }
 
-  // Migration: Add ps_number and must_change_password to users table
+  // Migration: Add ps_number, must_change_password, profile_completed, and profile_verified_at to users table
   try {
     const userTableInfo = db.exec("PRAGMA table_info(users)");
     const userColumns = userTableInfo.length > 0 ? userTableInfo[0].values : [];
@@ -1122,6 +1124,20 @@ const initDatabase = async () => {
     if (!userColumnNames.includes('must_change_password')) {
       console.log('Adding must_change_password column to users table...');
       db.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 1');
+      saveDatabase();
+    }
+
+    if (!userColumnNames.includes('profile_completed')) {
+      console.log('Adding profile_completed column to users table...');
+      db.exec('ALTER TABLE users ADD COLUMN profile_completed INTEGER DEFAULT 1');
+      db.exec('UPDATE users SET profile_completed = 1 WHERE profile_completed IS NULL');
+      saveDatabase();
+    }
+
+    if (!userColumnNames.includes('profile_verified_at')) {
+      console.log('Adding profile_verified_at column to users table...');
+      db.exec('ALTER TABLE users ADD COLUMN profile_verified_at DATETIME');
+      db.exec("UPDATE users SET profile_verified_at = datetime('now') WHERE profile_completed = 1 AND profile_verified_at IS NULL");
       saveDatabase();
     }
 
@@ -1179,6 +1195,8 @@ const initDatabase = async () => {
           role TEXT NOT NULL CHECK(role IN ('vendor', 'coordinator', 'admin', 'manager', 'initiator', 'user', 'final_approver')),
           manager_id INTEGER,
           must_change_password INTEGER DEFAULT 1,
+          profile_completed INTEGER DEFAULT 1,
+          profile_verified_at DATETIME,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (manager_id) REFERENCES users(id)
         )
@@ -1187,13 +1205,13 @@ const initDatabase = async () => {
       // Copy all data from old table to new table
       // migrate 'vendor' role to 'initiator'
       db.exec(`
-        INSERT INTO users_new (id, ps_number, name, email, password, role, manager_id, must_change_password, created_at)
+         INSERT INTO users_new (id, ps_number, name, email, password, role, manager_id, must_change_password, profile_completed, profile_verified_at, created_at)
         SELECT id, ps_number, name, email, password, 
                CASE 
                  WHEN role = 'vendor' THEN 'initiator'
                  ELSE role
                END,
-               manager_id, must_change_password, created_at
+           manager_id, must_change_password, 1, datetime('now'), created_at
         FROM users
       `);
 

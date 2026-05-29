@@ -182,19 +182,19 @@ const CoordinatorPage = () => {
 
             if (response.ok) {
                 const data = await response.json();
-                await dialog.alert('Voucher approved successfully!');
+                await dialog.alert('Claim approved successfully!');
 
-                // PDF download removed - users can download manually from Voucher History page
+                // PDF download removed - users can download manually from Claim History page
 
                 closeVoucherModal();
                 fetchPendingData();
             } else {
                 const data = await response.json();
-                await dialog.alert(data.error || 'Failed to approve voucher');
+                await dialog.alert(data.error || 'Failed to approve claim');
             }
         } catch (error) {
-            console.error('Error approving voucher:', error);
-            await dialog.alert('Failed to approve voucher');
+            console.error('Error approving claim:', error);
+            await dialog.alert('Failed to approve claim');
         }
     };
 
@@ -222,16 +222,16 @@ const CoordinatorPage = () => {
             });
 
             if (response.ok) {
-                await dialog.alert('Voucher rejected');
+                await dialog.alert('Claim rejected');
                 closeVoucherModal();
                 fetchPendingData();
             } else {
                 const data = await response.json();
-                await dialog.alert(data.error || 'Failed to reject voucher');
+                await dialog.alert(data.error || 'Failed to reject claim');
             }
         } catch (error) {
-            console.error('Error rejecting voucher:', error);
-            await dialog.alert('Failed to reject voucher');
+            console.error('Error rejecting claim:', error);
+            await dialog.alert('Failed to reject claim');
         }
     };
 
@@ -254,20 +254,20 @@ const CoordinatorPage = () => {
                     marginBottom: '2rem'
                 }}>
                     <h1 style={{ margin: 0, fontSize: '1.75rem', color: 'white' }}>
-                        {user?.role === 'manager' || user?.role === 'final_approver' ? 'Approval Dashboard' : 'Verify Invoices & Approve Vouchers'}
+                        {user?.role === 'manager' || user?.role === 'final_approver' ? 'Approval Dashboard' : 'Verify Invoices & Approve Claims'}
                     </h1>
                     <p style={{ margin: '0.5rem 0 0 0', opacity: 0.9, color: 'white' }}>
                         {user?.role === 'manager'
-                            ? 'Review and approve pending voucher requests assigned to you'
-                            : 'Review OCR-extracted invoice data and approve pending voucher requests'}
+                            ? 'Review and approve pending claim requests assigned to you'
+                            : 'Review OCR-extracted invoice data and approve pending claim requests'}
                     </p>
                 </div>
 
-                {/* Pending Vouchers Section */}
+                {/* Pending Claims Section */}
                 {vouchers.length > 0 && (
                     <>
                         <h2 style={{ color: '#0066CC', marginBottom: '1rem', fontSize: '1.5rem' }}>
-                            Pending Vouchers ({vouchers.length})
+                            Pending Claims ({vouchers.length})
                         </h2>
                         <div className="card-grid" style={{ marginBottom: '2rem' }}>
                             {vouchers.map((voucher) => (
@@ -330,7 +330,7 @@ const CoordinatorPage = () => {
                             ))}
                         </div>
 
-                        {/* Voucher Details Modal */}
+                        {/* Claim Details Modal */}
                         {selectedVoucher && (
                             <div className="app-modal-backdrop">
                                 <div className="app-modal app-modal-lg" style={{ position: 'relative' }}>
@@ -356,13 +356,13 @@ const CoordinatorPage = () => {
                                     </button>
 
                                     <h2 style={{ marginBottom: '1.5rem', color: '#0066CC' }}>
-                                        Voucher Details - VR-{selectedVoucher.id}
+                                        Claim Details - VR-{selectedVoucher.id}
                                     </h2>
 
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', marginBottom: '2rem' }}>
                                         {/* Left Column - Details */}
                                         <div>
-                                            <h3 style={{ fontSize: '1.1rem', marginBottom: '1rem', color: '#1E293B' }}>Voucher Information</h3>
+                                            <h3 style={{ fontSize: '1.1rem', marginBottom: '1rem', color: '#1E293B' }}>Claim Information</h3>
 
                                             <div style={{ display: 'grid', gap: '0.75rem' }}>
                                                 <div style={{ padding: '0.75rem', background: '#F8F9FA', borderRadius: '6px' }}>
@@ -507,13 +507,13 @@ const CoordinatorPage = () => {
                                             onClick={() => handleRejectVoucher(selectedVoucher.id)}
                                             className="btn btn-danger"
                                         >
-                                            ✗ Reject Voucher
+                                            ✗ Reject Claim
                                         </button>
                                         <button
                                             onClick={() => handleApproveVoucher(selectedVoucher.id)}
                                             className="btn btn-success"
                                         >
-                                            ✓ Approve Voucher
+                                            ✓ Approve Claim
                                         </button>
                                     </div>
                                 </div>
@@ -534,7 +534,7 @@ const CoordinatorPage = () => {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                         </svg>
                         <h3>No Pending Items</h3>
-                        <p className="text-muted">All invoices and vouchers have been processed</p>
+                        <p className="text-muted">All invoices and claims have been processed</p>
                     </div>
                 ) : (
                     <div className="card-grid">
