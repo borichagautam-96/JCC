@@ -65,11 +65,15 @@ const bgTints = {
 /* ─── Auto-detect alert type from message ─── */
 function detectAlertType(message) {
     const m = (message || '').toLowerCase();
-    if (m.includes('success') || m.includes('created') || m.includes('updated') || m.includes('deleted') || m.includes('imported') || m.includes('released') || m.includes('approved') || m.includes('resubmitted') || m.includes('uploaded')) return 'success';
-    if (m.includes('fail') || m.includes('error') || m.includes('cannot') || m.includes('unable')) return 'error';
+    // Error keywords must be checked FIRST — they must win over positive words.
+    // e.g. "Cannot approve: claim status is approved" contains both 'cannot' AND
+    // 'approved', so without this ordering it would incorrectly show as success.
+    if (m.includes('fail') || m.includes('error') || m.includes('cannot') || m.includes('unable') || m.includes('invalid') || m.includes('denied') || m.includes('unauthorized')) return 'error';
     if (m.includes('please') || m.includes('provide') || m.includes('required')) return 'warning';
+    if (m.includes('success') || m.includes('created') || m.includes('updated') || m.includes('deleted') || m.includes('imported') || m.includes('released') || m.includes('approved') || m.includes('resubmitted') || m.includes('uploaded') || m.includes('verified') || m.includes('sent')) return 'success';
     return 'info';
 }
+
 
 /* ─── Inline Styles (CSS-in-JS) ─── */
 const styles = {
@@ -91,7 +95,7 @@ const styles = {
         opacity: 1,
     },
     card: {
-        background: '#ffffff',
+        background: 'var(--surface)',
         borderRadius: '16px',
         boxShadow: '0 25px 60px rgba(0,0,0,0.2), 0 0 0 1px rgba(0,0,0,0.05)',
         width: '100%',
@@ -138,13 +142,13 @@ const styles = {
         margin: '0 0 0.5rem',
         fontSize: '1.15rem',
         fontWeight: 700,
-        color: '#1F2937',
+        color: 'var(--text-strong)',
         lineHeight: 1.3,
     },
     message: {
         margin: 0,
         fontSize: '0.95rem',
-        color: '#4B5563',
+        color: 'var(--text-body)',
         lineHeight: 1.6,
         wordBreak: 'break-word',
     },
@@ -172,9 +176,9 @@ const styles = {
         boxShadow: `0 4px 14px ${accentColors[type]}40`,
     }),
     btnCancel: {
-        background: '#F3F4F6',
-        color: '#374151',
-        border: '1px solid #E5E7EB',
+        background: 'var(--surface-3)',
+        color: 'var(--text-body)',
+        border: '1px solid var(--border)',
     },
 };
 
@@ -222,6 +226,7 @@ const DialogBox = ({ dialog, onClose }) => {
 
     return (
         <div
+            className="lg-dialog-overlay"
             style={{
                 ...styles.overlay,
                 ...(visible && !exiting ? styles.overlayVisible : {}),
@@ -231,6 +236,7 @@ const DialogBox = ({ dialog, onClose }) => {
             }}
         >
             <div
+                className="lg-dialog-card"
                 style={{
                     ...styles.card,
                     ...(visible && !exiting ? styles.cardVisible : {}),
@@ -248,7 +254,11 @@ const DialogBox = ({ dialog, onClose }) => {
                         </div>
                     </div>
                     <h3 id="dialog-title" style={styles.title}>{titleText}</h3>
-                    <p style={styles.message}>{dialog.message}</p>
+                    <p style={styles.message}>
+                        {String(dialog.message || '').split('\n').map((line, i, arr) => (
+                            <React.Fragment key={i}>{line}{i < arr.length - 1 && <br />}</React.Fragment>
+                        ))}
+                    </p>
                 </div>
                 <div style={styles.footer}>
                     {isConfirm ? (
@@ -265,7 +275,7 @@ const DialogBox = ({ dialog, onClose }) => {
                                     e.target.style.transform = 'translateY(0)';
                                 }}
                             >
-                                Cancel
+                                {dialog.cancelLabel || 'Cancel'}
                             </button>
                             <button
                                 ref={primaryRef}
@@ -280,7 +290,7 @@ const DialogBox = ({ dialog, onClose }) => {
                                     e.target.style.boxShadow = `0 4px 14px ${accentColors[visualType]}40`;
                                 }}
                             >
-                                Confirm
+                                {dialog.confirmLabel || 'Confirm'}
                             </button>
                         </>
                     ) : (
@@ -337,6 +347,8 @@ export const DialogProvider = ({ children }) => {
                 message: String(message),
                 title: opts.title || undefined,
                 variant: opts.variant || 'confirm',
+                confirmLabel: opts.confirmLabel || undefined,
+                cancelLabel: opts.cancelLabel || undefined,
             }]);
         });
     }, []);

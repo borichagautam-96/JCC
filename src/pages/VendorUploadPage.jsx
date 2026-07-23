@@ -4,6 +4,17 @@ import './vendor-upload-taxhacker.css';
 
 const SHOW_ANALYZE_WITH_AI_BUTTON = false;
 
+// Animated PDF-extraction step sequence (visual only — overlays the real extract call).
+const EXTRACT_STEPS = [
+    '📄 Reading PDF…',
+    '🧠 AI detecting Invoice Number…',
+    '🏢 Reading Vendor Name…',
+    '📅 Extracting Invoice Date…',
+    '💰 Detecting Amount…',
+    '📑 Reading GST Details…',
+    '✅ Extraction Complete',
+];
+
 // Canonical vendor list — mirrors VendorManagementPage TEMP_ALLOWED_VENDOR_NAMES, sorted A-Z
 // This is used as the guaranteed fallback so the dropdown is ALWAYS populated immediately.
 const DEFAULT_VENDOR_NAMES = [
@@ -48,12 +59,34 @@ const VendorUploadPage = () => {
     const [uploading, setUploading] = useState(false);
     const [success, setSuccess] = useState('');
     const [error, setError] = useState('');
+    // Visual-only extraction progress sequence, driven off the real aiAnalyzing flag.
+    const [extractStep, setExtractStep] = useState(-1);
+    const wasExtractingRef = useRef(false);
+    useEffect(() => {
+        if (aiAnalyzing) {
+            wasExtractingRef.current = true;
+            setExtractStep(0);
+            const id = setInterval(() => {
+                setExtractStep((s) => (s < EXTRACT_STEPS.length - 2 ? s + 1 : s));
+            }, 280);
+            return () => clearInterval(id);
+        }
+        if (wasExtractingRef.current) {
+            wasExtractingRef.current = false;
+            setExtractStep(EXTRACT_STEPS.length - 1);
+            const t = setTimeout(() => setExtractStep(-1), 1100);
+            return () => clearTimeout(t);
+        }
+        return undefined;
+    }, [aiAnalyzing]);
+    const [isDragActive, setIsDragActive] = useState(false);
     const [isFullScreen, setIsFullScreen] = useState(false);
     const [previewZoom, setPreviewZoom] = useState(100);
     // Pre-seeded with DEFAULT_VENDOR_NAMES so the dropdown is never empty.
     // The API call in useEffect will update this with the live DB list.
     const [vendorNames, setVendorNames] = useState(DEFAULT_VENDOR_NAMES);
     const fileInputRef = useRef(null);
+    const dragCounter = useRef(0);
     const { getToken } = useAuth();
     const [users, setUsers] = useState([]); // Restore missing state
     const activeFile = files[activeFileIndex] || null;
@@ -269,6 +302,37 @@ const VendorUploadPage = () => {
         appendSelectedFiles(e.target.files);
     };
 
+    const handleDragEnter = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        dragCounter.current += 1;
+        setIsDragActive(true);
+    };
+
+    const handleDragLeave = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        dragCounter.current -= 1;
+        if (dragCounter.current <= 0) {
+            setIsDragActive(false);
+        }
+    };
+
+    const handleDragOver = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+    };
+
+    const handleDrop = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        dragCounter.current = 0;
+        setIsDragActive(false);
+        if (event.dataTransfer?.files?.length) {
+            appendSelectedFiles(event.dataTransfer.files);
+        }
+    };
+
     useEffect(() => {
         if (!activeFile) {
             setPreview(null);
@@ -284,6 +348,77 @@ const VendorUploadPage = () => {
             URL.revokeObjectURL(objectUrl);
         };
     }, [activeFile]);
+
+    const handleExtractWithPDF = async () => {
+        if (!activeFile) {
+            setError('Please select a file first');
+            return;
+        }
+
+        const fileType = String(activeFile.type || '').toLowerCase();
+        const fileName = String(activeFile.name || '').toLowerCase();
+        if (fileType !== 'application/pdf' && !fileName.endsWith('.pdf')) {
+            setError('Only PDF files are supported for OpenDataLoader extraction.');
+            return;
+        }
+
+        setAiAnalyzing(true);
+        setError('');
+        setSuccess('');
+
+        try {
+            const payload = new FormData();
+            payload.append('invoice', activeFile);
+
+            const response = await fetch('/api/invoices/extract-pdf', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${getToken()}`,
+                    'X-Device-ID': getDeviceId(),
+                },
+                body: payload,
+            });
+            console.log('=== DEBUG: PDF extraction response ===', response);
+            if (!response.ok) {
+                let errText = await response.text();
+                try {
+                    const json = JSON.parse(errText);
+                    if (json.error) errText = json.error;
+                } catch (e) {}
+                throw new Error(errText || 'PDF extraction failed');
+            }
+
+            const data = await response.json();
+
+            const merged = extractedData
+                ? {
+                    ...extractedData,
+                    ...data,
+                    vendorName: data.vendorName || extractedData.vendorName || '',
+                    invoiceNumber: data.invoiceNumber || extractedData.invoiceNumber || '',
+                    amount: data.amount || extractedData.amount || '',
+                    date: data.date || extractedData.date || '',
+                    poNumber: data.poNumber || extractedData.poNumber || '',
+                    rawText: data.rawText || extractedData.rawText || '',
+                }
+                : {
+                    ...data,
+                    vendorName: data.vendorName || '',
+                    invoiceNumber: data.invoiceNumber || '',
+                    amount: data.amount || '',
+                    date: data.date || '',
+                    poNumber: data.poNumber || '',
+                    rawText: data.rawText || '',
+                };
+
+            setExtractedData(merged);
+            setSuccess(`✓ PDF extraction complete! Invoice: ${merged.invoiceNumber || 'N/A'} | Amount: ${merged.amount || 'N/A'} | Date: ${merged.date || 'N/A'} | PO: ${merged.poNumber || 'N/A'}`);
+        } catch (err) {
+            setError(`PDF extraction failed: ${err.message}`);
+        } finally {
+            setAiAnalyzing(false);
+        }
+    };
 
     const handleAnalyzeWithAI = async () => {
         if (!activeFile) {
@@ -425,14 +560,28 @@ const VendorUploadPage = () => {
     const hasFileSelected = files.length > 0;
 
     return (
-        <div className="container th-page-shell" style={{ paddingTop: 'var(--spacing-2xl)', paddingBottom: 'var(--spacing-2xl)' }}>
+        <div
+            className="container th-page-shell"
+            style={{ paddingTop: 'var(--spacing-2xl)', paddingBottom: 'var(--spacing-2xl)' }}
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+        >
             <div className="fade-in">
                 {hasFileSelected ? (
                     <header className="th-header">
                         <h2>You have {unsortedFilesCount} unsorted files</h2>
                     </header>
                 ) : (
-                    <div className="th-empty-state">
+                    <div
+                        className="th-empty-state"
+                        style={{
+                            border: isDragActive ? '2px dashed var(--primary)' : undefined,
+                            background: isDragActive ? 'rgba(59, 130, 246, 0.06)' : undefined,
+                            transition: 'border 0.2s ease, background 0.2s ease'
+                        }}
+                    >
                         <svg className="th-empty-icon" fill="none" stroke="currentColor" viewBox="0 0 64 64" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
                             {/* Document body */}
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 8a4 4 0 0 1 4-4h20l12 12v36a4 4 0 0 1-4 4H18a4 4 0 0 1-4-4V8z" />
@@ -537,6 +686,45 @@ const VendorUploadPage = () => {
                             >
                                 {aiAnalyzing ? '⏳ Analyzing with AI...' : '🧠 Analyze with AI'}
                             </button>
+                        )}
+
+                        {activeFile && (String(activeFile.name).toLowerCase().endsWith('.pdf') || String(activeFile.type).toLowerCase() === 'application/pdf') && (
+                            <button
+                                type="button"
+                                onClick={handleExtractWithPDF}
+                                disabled={aiAnalyzing}
+                                className="th-btn th-btn-dark voucher-extract-btn"
+                                style={{ marginTop: 'var(--spacing-md)' }}
+                            >
+                                {aiAnalyzing ? '⏳ Extracting PDF...' : '📄 Extract from PDF'}
+                            </button>
+                        )}
+
+                        {extractStep >= 0 && (
+                            <div className="voucher-extract-steps">
+                                <div className="voucher-extract-bar">
+                                    <div
+                                        className={`voucher-extract-bar-fill${extractStep === EXTRACT_STEPS.length - 1 ? ' is-complete' : ''}`}
+                                        style={{ width: `${((extractStep + 1) / EXTRACT_STEPS.length) * 100}%` }}
+                                    />
+                                </div>
+                                <ul className="voucher-extract-list">
+                                    {EXTRACT_STEPS.map((label, i) => {
+                                        const complete = extractStep === EXTRACT_STEPS.length - 1;
+                                        const done = complete ? true : i < extractStep;
+                                        const active = !complete && i === extractStep;
+                                        const isFinal = i === EXTRACT_STEPS.length - 1;
+                                        return (
+                                            <li key={i} className={`voucher-extract-step${done ? ' is-done' : ''}${active ? ' is-active' : ''}${isFinal && complete ? ' is-final' : ''}`}>
+                                                <span className="voucher-extract-dot">
+                                                    {(done || (isFinal && complete)) ? '✓' : active ? <span className="voucher-extract-spin" /> : ''}
+                                                </span>
+                                                <span className="voucher-extract-label">{label}</span>
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
+                            </div>
                         )}
 
                         {extractedData && (
@@ -774,7 +962,7 @@ const VendorUploadPage = () => {
                             )}
 
                             <div style={{
-                                border: '2px solid #E0E0E0',
+                                border: '2px solid var(--border)',
                                 borderRadius: 'var(--radius-md)',
                                 overflow: 'hidden',
                                 background: 'rgba(255, 255, 255, 0.05)',
@@ -798,7 +986,7 @@ const VendorUploadPage = () => {
                                             width: '100%',
                                             maxHeight: '600px',
                                             objectFit: 'contain',
-                                            background: '#fff',
+                                            background: 'var(--surface)',
                                             transform: `scale(${previewZoom / 100})`,
                                             transformOrigin: 'center top'
                                         }}
@@ -861,7 +1049,7 @@ const VendorUploadPage = () => {
                                 </div>
                             </div>
 
-                            <div style={{ flex: 1, overflow: 'auto', background: '#f0f0f0', borderRadius: '4px' }}>
+                            <div style={{ flex: 1, overflow: 'auto', background: 'var(--surface-3)', borderRadius: '4px' }}>
                                 {activeFile?.type === 'application/pdf' ? (
                                     <embed
                                         src={`${preview}#zoom=${previewZoom}`}

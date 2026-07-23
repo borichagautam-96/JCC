@@ -164,6 +164,27 @@ const normalizeOptionalEmail = (email) => {
 
 const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
 
+const buildNameBasedEmail = (profile) => {
+    // Build name.surname@larsentoubro.com from LDAP firstName + surname
+    const firstName = String(profile?.firstName || '').trim().toLowerCase().replace(/\s+/g, '');
+    const surname = String(profile?.surname || '').trim().toLowerCase().replace(/\s+/g, '');
+
+    if (firstName && surname) {
+        return `${firstName}.${surname}@larsentoubro.com`;
+    }
+
+    // Fallback: try splitting fullName into first/last
+    const fullName = String(profile?.fullName || '').trim();
+    if (fullName) {
+        const parts = fullName.toLowerCase().split(/\s+/);
+        if (parts.length >= 2) {
+            return `${parts[0]}.${parts[parts.length - 1]}@larsentoubro.com`;
+        }
+    }
+
+    return '';
+};
+
 const buildFallbackLdapEmail = (psNumber) => {
     const normalizedPsNumber = normalizeIdentifier(psNumber);
     if (!normalizedPsNumber) {
@@ -175,8 +196,13 @@ const buildFallbackLdapEmail = (psNumber) => {
 
 const resolveLdapEmail = ({ profile, psNumber }) => {
     const candidateEmails = [
+        // 1. Real email from LDAP (most reliable)
         normalizeOptionalEmail(profile?.email),
+        // 2. UPN from LDAP (e.g. user@domain.com)
         normalizeOptionalEmail(profile?.principalName),
+        // 3. Derive from firstName.surname@larsentoubro.com
+        buildNameBasedEmail(profile),
+        // 4. Last resort: psnumber@ltdic.com
         buildFallbackLdapEmail(psNumber),
     ];
 
@@ -634,10 +660,21 @@ router.get('/session-config', (req, res) => {
     res.json({ sessionTimeoutHours: config.hours });
 });
 
+// Roles a user may obtain via public self-registration. Privileged roles
+// (admin/manager/coordinator/final_approver/initiator/user) can ONLY be assigned
+// by an admin through the authenticated POST /api/users/add endpoint.
+const SELF_REGISTER_ROLES = ['vendor'];
+
 // Register
 router.post('/register', authLimiter, validateRequest(registerSchema), (req, res) => {
     try {
-        const { name, email, password, role } = req.body;
+        const { name, email, password } = req.body;
+
+        // SECURITY: never trust a client-supplied role on the public register route.
+        // Anything not in the self-registration allowlist is coerced to 'vendor',
+        // so an attacker cannot self-provision an admin/manager account.
+        const requestedRole = String(req.body.role || '').trim().toLowerCase();
+        const role = SELF_REGISTER_ROLES.includes(requestedRole) ? requestedRole : 'vendor';
 
         // Check if user exists
         const existingUser = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
@@ -655,12 +692,12 @@ router.post('/register', authLimiter, validateRequest(registerSchema), (req, res
             name,
             email,
             hashedPassword,
-            role || 'vendor'
+            role
         );
 
         db.prepare("UPDATE users SET profile_verified_at = datetime('now') WHERE id = ?").run(result.lastInsertRowid);
 
-        const user = { id: result.lastInsertRowid, name, email, role: role || 'vendor' };
+        const user = { id: result.lastInsertRowid, name, email, role };
         const token = jwt.sign(user, JWT_SECRET, { expiresIn: sessionConfig.jwtExpiresIn });
 
         logUserActivity({
@@ -767,6 +804,9 @@ router.post('/login', validateRequest(loginSchema), async (req, res) => {
             must_change_password: user.must_change_password || 0,
             profile_completed: isProfileFullyVerified(user) ? 1 : 0,
             profile_verified_at: user.profile_verified_at || null,
+            is_printer_operator: user.is_printer_operator || 0,
+            is_printer_coordinator: user.is_printer_coordinator || 0,
+            location_id: user.location_id || null,
             session_token: sessionToken  // Embed session token in JWT for validation
         };
         const token = jwt.sign(userData, JWT_SECRET, { expiresIn: sessionConfig.jwtExpiresIn });

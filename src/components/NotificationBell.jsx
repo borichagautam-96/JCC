@@ -5,8 +5,23 @@ const NotificationBell = () => {
     const [notifications, setNotifications] = useState([]);
     const [showDropdown, setShowDropdown] = useState(false);
     const [unreadCount, setUnreadCount] = useState(0);
+    const [ringing, setRinging] = useState(false);
     const { getToken } = useAuth();
     const dropdownRef = useRef(null);
+    const prevUnreadRef = useRef(0);
+    const ringTimerRef = useRef(null);
+
+    // Ring the bell whenever the unread count rises (a new notification landed,
+    // or unread already exists on first load). Never rings on a steady/dropping count.
+    useEffect(() => {
+        if (unreadCount > prevUnreadRef.current) {
+            setRinging(true);
+            if (ringTimerRef.current) clearTimeout(ringTimerRef.current);
+            ringTimerRef.current = setTimeout(() => setRinging(false), 1050);
+        }
+        prevUnreadRef.current = unreadCount;
+        return () => { if (ringTimerRef.current) clearTimeout(ringTimerRef.current); };
+    }, [unreadCount]);
 
     useEffect(() => {
         fetchNotifications();
@@ -90,22 +105,30 @@ const NotificationBell = () => {
         <div style={{ position: 'relative' }} ref={dropdownRef}>
             <button
                 onClick={() => setShowDropdown(!showDropdown)}
+                className={`bell-btn${ringing ? ' is-ringing' : ''}`}
                 style={{
                     position: 'relative',
                     background: 'transparent',
                     border: 'none',
                     cursor: 'pointer',
                     padding: '8px',
-                    color: '#64748b',
-                    transition: 'color 0.2s'
                 }}
-                onMouseEnter={e => e.target.style.color = '#3b82f6'}
-                onMouseLeave={e => e.target.style.color = '#64748b'}
+                aria-label="Notifications"
             >
-                {/* Bell Icon */}
-                <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-                </svg>
+                <span className="bell-icon-wrap">
+                    <span className="bell-glow" aria-hidden="true"></span>
+                    {/* Ringing sound lines (fade in/out only while swinging) */}
+                    <svg className="bell-ring-line bell-ring-left" width="7" height="14" viewBox="0 0 7 14" fill="none" stroke="currentColor" aria-hidden="true">
+                        <path d="M5 2 C 1.5 5, 1.5 9, 5 12" strokeWidth="1.6" strokeLinecap="round" />
+                    </svg>
+                    <svg className="bell-ring-line bell-ring-right" width="7" height="14" viewBox="0 0 7 14" fill="none" stroke="currentColor" aria-hidden="true">
+                        <path d="M2 2 C 5.5 5, 5.5 9, 2 12" strokeWidth="1.6" strokeLinecap="round" />
+                    </svg>
+                    {/* Bell Icon */}
+                    <svg className="bell-icon" width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                    </svg>
+                </span>
 
                 {/* Unread Badge */}
                 {unreadCount > 0 && (
@@ -131,7 +154,7 @@ const NotificationBell = () => {
 
             {/* Dropdown */}
             {showDropdown && (
-                <div style={{
+                <div className="bell-dropdown" style={{
                     position: 'absolute',
                     top: 'calc(100% + 10px)',
                     right: 0,
@@ -146,7 +169,7 @@ const NotificationBell = () => {
                     border: '1px solid rgba(226, 232, 240, 0.8)'
                 }}>
                     {/* Header */}
-                    <div style={{
+                    <div className="bell-dropdown-header" style={{
                         padding: '16px 20px',
                         borderBottom: '1px solid rgba(0,0,0,0.05)',
                         display: 'flex',
@@ -154,7 +177,7 @@ const NotificationBell = () => {
                         alignItems: 'center',
                         background: 'rgba(248, 250, 252, 0.5)'
                     }}>
-                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '700', color: '#1e293b' }}>Notifications</h3>
+                        <h3 className="bell-dropdown-title" style={{ margin: 0, fontSize: '16px', fontWeight: '700', color: 'var(--text-strong)' }}>Notifications</h3>
                         {unreadCount > 0 && (
                             <button
                                 onClick={markAllAsRead}
@@ -183,7 +206,7 @@ const NotificationBell = () => {
                             <div style={{
                                 padding: '60px 20px',
                                 textAlign: 'center',
-                                color: '#94a3b8'
+                                color: 'var(--text-faint)'
                             }}>
                                 <svg style={{ width: '48px', height: '48px', margin: '0 auto 16px', opacity: 0.5 }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
@@ -194,6 +217,7 @@ const NotificationBell = () => {
                             notifications.map((notification) => (
                                 <div
                                     key={notification.id}
+                                    className="bell-note"
                                     onClick={() => !notification.read && markAsRead(notification.id)}
                                     style={{
                                         padding: '16px 20px',
@@ -221,27 +245,27 @@ const NotificationBell = () => {
                                             boxShadow: `0 0 0 4px ${getNotificationColor(notification.type)}20`
                                         }}></div>
                                         <div style={{ flex: 1 }}>
-                                            <p style={{
+                                            <p className="bell-note-title" style={{
                                                 margin: '0 0 4px 0',
                                                 fontWeight: 600,
                                                 fontSize: '14px',
-                                                color: '#1e293b',
+                                                color: 'var(--text-strong)',
                                                 fontFamily: 'inherit'
                                             }}>
                                                 {notification.title}
                                             </p>
-                                            <p style={{
+                                            <p className="bell-note-body" style={{
                                                 margin: '0 0 8px 0',
                                                 fontSize: '13px',
-                                                color: '#64748b',
+                                                color: 'var(--text-muted)',
                                                 lineHeight: '1.5'
                                             }}>
                                                 {notification.message}
                                             </p>
-                                            <p style={{
+                                            <p className="bell-note-time" style={{
                                                 margin: 0,
                                                 fontSize: '11px',
-                                                color: '#94a3b8',
+                                                color: 'var(--text-faint)',
                                                 fontWeight: 500
                                             }}>
                                                 {new Date(notification.created_at).toLocaleString(undefined, {

@@ -7,49 +7,56 @@ const router = express.Router();
 // Get dashboard summary
 router.get('/summary', authenticateToken, (req, res) => {
   try {
-    // Get total dues (jcc_entries + approved vouchers)
-    const jccDuesResult = db.prepare(`
-      SELECT COALESCE(SUM(approved_amount), 0) as total
-      FROM jcc_entries
-    `).get();
+    // ── Per-user scoping (root-cause fix) ──────────────────────────────────
+    // A normal user must only see their OWN JCCs/dues. Only privileged oversight
+    // roles get the org-wide view (same access model as GET /api/jcc/vouchers).
+    const isPrivileged = ['admin', 'coordinator', 'manager', 'final_approver'].includes(req.user.role);
+    const uid = req.user.id;
+    // voucher_requests scoping fragment + args
+    const vAnd = isPrivileged ? '' : ' AND user_id = ?';
+    const vArg = isPrivileged ? [] : [uid];
+    // invoices scoping fragment + args (invoices.user_id)
+    const iAnd = isPrivileged ? '' : ' AND user_id = ?';
+    const iArg = isPrivileged ? [] : [uid];
+
+    // Total dues (jcc_entries via their invoice owner + approved vouchers)
+    const jccDuesResult = isPrivileged
+      ? db.prepare(`SELECT COALESCE(SUM(approved_amount), 0) as total FROM jcc_entries`).get()
+      : db.prepare(`SELECT COALESCE(SUM(j.approved_amount), 0) as total FROM jcc_entries j JOIN invoices i ON j.invoice_id = i.id WHERE i.user_id = ?`).get(uid);
 
     const voucherDuesResult = db.prepare(`
       SELECT COALESCE(SUM(CAST(basic_amount AS REAL)), 0) as total
       FROM voucher_requests
-      WHERE status = 'approved'
-    `).get();
+      WHERE status = 'approved'${vAnd}
+    `).get(...vArg);
 
     const totalDues = jccDuesResult.total + voucherDuesResult.total;
 
-    // Get pending invoices count (invoices + vouchers)
+    // Pending counts (invoices + vouchers), scoped
     const pendingInvoicesCount = db.prepare(`
-      SELECT COUNT(*) as count
-      FROM invoices
-      WHERE status = 'pending'
-    `).get();
+      SELECT COUNT(*) as count FROM invoices
+      WHERE status = 'pending'${iAnd}
+    `).get(...iArg);
 
     const pendingVouchersCount = db.prepare(`
-      SELECT COUNT(*) as count
-      FROM voucher_requests
-      WHERE status IN ('pending', 'pending_approval_1', 'pending_approval_2')
-    `).get();
+      SELECT COUNT(*) as count FROM voucher_requests
+      WHERE status IN ('pending', 'pending_approval_1', 'pending_approval_2')${vAnd}
+    `).get(...vArg);
 
-    // Get approved count
+    // Approved counts, scoped
     const approvedInvoicesCount = db.prepare(`
-      SELECT COUNT(*) as count
-      FROM invoices
-      WHERE status = 'approved'
-    `).get();
+      SELECT COUNT(*) as count FROM invoices
+      WHERE status = 'approved'${iAnd}
+    `).get(...iArg);
 
     const approvedVouchersCount = db.prepare(`
-      SELECT COUNT(*) as count
-      FROM voucher_requests
-      WHERE status = 'approved'
-    `).get();
+      SELECT COUNT(*) as count FROM voucher_requests
+      WHERE status = 'approved'${vAnd}
+    `).get(...vArg);
 
-    // Get vendor dues breakdown (combine invoices and vouchers)
+    // Vendor dues breakdown (combine invoices and vouchers), scoped
     const invoiceDues = db.prepare(`
-      SELECT 
+      SELECT
         i.vendor_name,
         SUM(j.approved_amount) as total_dues,
         i.status,
@@ -62,11 +69,12 @@ router.get('/summary', authenticateToken, (req, res) => {
         NULL as approver2_date
       FROM jcc_entries j
       JOIN invoices i ON j.invoice_id = i.id
+      ${isPrivileged ? '' : 'WHERE i.user_id = ?'}
       GROUP BY i.vendor_name, i.status
-    `).all();
+    `).all(...(isPrivileged ? [] : [uid]));
 
     const voucherDues = db.prepare(`
-      SELECT 
+      SELECT
         supplier as vendor_name,
         SUM(CAST(basic_amount AS REAL)) as total_dues,
         CASE
@@ -81,9 +89,9 @@ router.get('/summary', authenticateToken, (req, res) => {
         approver2_status,
         approver2_date
       FROM voucher_requests
-      WHERE status IN ('approved', 'pending', 'pending_approval_1', 'pending_approval_2')
+      WHERE status IN ('approved', 'pending', 'pending_approval_1', 'pending_approval_2')${vAnd}
       GROUP BY supplier, status, approver1_name, approver1_status, approver1_date, approver2_name, approver2_status, approver2_date
-    `).all();
+    `).all(...vArg);
 
     // Combine both
     const vendorDues = [...invoiceDues, ...voucherDues];
@@ -142,6 +150,63 @@ router.get('/po-budget', authenticateToken, (req, res) => {
   } catch (error) {
     console.error('PO Budget error:', error);
     res.status(500).json({ error: 'Failed to fetch PO budget data' });
+  }
+});
+
+// Get budget status for a single PO number (used by claim form for real-time warning)
+// Optional query param: ?claimAmount=<number> — if provided, also checks whether
+// existing_used + new_claim would exceed the budget (wouldExceed flag).
+router.get('/po-budget/:poNumber', authenticateToken, (req, res) => {
+  try {
+    const { poNumber } = req.params;
+    const claimAmount = parseFloat(req.query.claimAmount) || 0;
+
+    const po = db.prepare(`
+      SELECT po_number, vendor_name, CAST(total_budget AS REAL) as totalAmount
+      FROM purchase_orders
+      WHERE po_number = ? AND status != 'closed'
+      LIMIT 1
+    `).get(poNumber);
+
+    if (!po) {
+      return res.json({ found: false });
+    }
+
+    const used = db.prepare(`
+      SELECT COALESCE(SUM(CAST(basic_amount AS REAL)), 0) as usedAmount,
+             COUNT(*) as claimCount
+      FROM voucher_requests
+      WHERE po_number = ? AND status != 'rejected'
+    `).get(poNumber);
+
+    const usedAmount = used?.usedAmount || 0;
+    const totalAmount = po.totalAmount || 0;
+    const remainingAmount = totalAmount - usedAmount;
+    const utilizationPercent = totalAmount > 0
+      ? parseFloat(((usedAmount / totalAmount) * 100).toFixed(1))
+      : 0;
+
+    // Would this new claim push the PO over budget?
+    const wouldExceed = claimAmount > 0 && totalAmount > 0 && (usedAmount + claimAmount) > totalAmount;
+    const amountAfterClaim = usedAmount + claimAmount;
+
+    res.json({
+      found: true,
+      poNumber: po.po_number,
+      vendorName: po.vendor_name,
+      totalAmount,
+      usedAmount,
+      remainingAmount,
+      utilizationPercent,
+      claimCount: used?.claimCount || 0,
+      isExceeded: remainingAmount < 0,
+      isNearLimit: utilizationPercent >= 90 && remainingAmount >= 0,
+      wouldExceed,
+      amountAfterClaim,
+    });
+  } catch (error) {
+    console.error('PO Budget check error:', error);
+    res.status(500).json({ error: 'Failed to check PO budget' });
   }
 });
 

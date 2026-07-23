@@ -142,8 +142,8 @@ const IncomingLettersPage = () => {
 
             {/* Upload Section */}
             <div style={{
-                background: 'white',
-                border: '2px dashed #D1D5DB',
+                background: 'var(--surface)',
+                border: '2px dashed var(--border)',
                 borderRadius: '8px',
                 padding: '2rem',
                 marginBottom: '2rem',
@@ -171,15 +171,15 @@ const IncomingLettersPage = () => {
                 }}>
                     {uploading ? 'Uploading & Processing...' : 'Upload Scanned Letter'}
                 </label>
-                <p style={{ marginTop: '1rem', color: '#6B7280', fontSize: '0.875rem' }}>
+                <p style={{ marginTop: '1rem', color: 'var(--text-muted)', fontSize: '0.875rem' }}>
                     Supports JPG, PNG, and PDF files (Max 20MB)
                 </p>
             </div>
 
             {/* Filters */}
             <div style={{
-                background: 'white',
-                border: '1px solid #E5E7EB',
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
                 borderRadius: '8px',
                 padding: '1.5rem',
                 marginBottom: '1.5rem'
@@ -188,13 +188,14 @@ const IncomingLettersPage = () => {
                     <div style={{ flex: 1, minWidth: '300px' }}>
                         <input
                             type="text"
+                            className="premium-search-field"
                             placeholder="Search by reference, subject, or sender..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                             style={{
                                 width: '100%',
                                 padding: '0.75rem 1rem',
-                                border: '1px solid #D1D5DB',
+                                border: '1px solid var(--border)',
                                 borderRadius: '6px',
                                 fontSize: '1rem'
                             }}
@@ -205,10 +206,10 @@ const IncomingLettersPage = () => {
                         onChange={(e) => setStatusFilter(e.target.value)}
                         style={{
                             padding: '0.75rem 1rem',
-                            border: '1px solid #D1D5DB',
+                            border: '1px solid var(--border)',
                             borderRadius: '6px',
                             fontSize: '1rem',
-                            background: 'white'
+                            background: 'var(--surface)'
                         }}
                     >
                         <option value="">All Statuses</option>
@@ -237,7 +238,7 @@ const IncomingLettersPage = () => {
 
             {/* Letters Table */}
             <div style={{
-                background: 'white',
+                background: 'var(--surface)',
                 borderRadius: '8px',
                 overflow: 'hidden',
                 boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
@@ -247,12 +248,12 @@ const IncomingLettersPage = () => {
                         <p>Loading letters...</p>
                     </div>
                 ) : filteredLetters.length === 0 ? (
-                    <div style={{ padding: '3rem', textAlign: 'center', color: '#9CA3AF' }}>
+                    <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-faint)' }}>
                         <p>No incoming letters found. Upload a scanned letter to get started.</p>
                     </div>
                 ) : (
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                        <thead style={{ background: '#F9FAFB' }}>
+                        <thead style={{ background: 'var(--surface-2)' }}>
                             <tr>
                                 <th style={{ padding: '1rem', textAlign: 'left', fontWeight: 600 }}>Reference</th>
                                 <th style={{ padding: '1rem', textAlign: 'left', fontWeight: 600 }}>Subject</th>
@@ -265,13 +266,13 @@ const IncomingLettersPage = () => {
                         </thead>
                         <tbody>
                             {filteredLetters.map((letter) => (
-                                <tr key={letter.id} style={{ borderTop: '1px solid #E5E7EB' }}>
+                                <tr key={letter.id} style={{ borderTop: '1px solid var(--border)' }}>
                                     <td style={{ padding: '1rem', fontFamily: 'monospace', fontWeight: 600, color: '#0066CC' }}>
                                         {letter.reference_number}
                                     </td>
                                     <td style={{ padding: '1rem' }}>{letter.subject || '-'}</td>
                                     <td style={{ padding: '1rem' }}>{letter.sender_name || '-'}</td>
-                                    <td style={{ padding: '1rem', color: '#6B7280' }}>
+                                    <td style={{ padding: '1rem', color: 'var(--text-muted)' }}>
                                         {letter.received_date ? new Date(letter.received_date).toLocaleDateString() : '-'}
                                     </td>
                                     <td style={{ padding: '1rem' }}>{getStatusBadge(letter.status)}</td>
@@ -310,13 +311,13 @@ const IncomingLettersPage = () => {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginTop: '2rem' }}>
                 {['pending', 'processing', 'read', 'responded', 'released'].map(status => (
                     <div key={status} style={{
-                        background: 'white',
+                        background: 'var(--surface)',
                         padding: '1.5rem',
                         borderRadius: '8px',
-                        border: '1px solid #E5E7EB',
+                        border: '1px solid var(--border)',
                         textAlign: 'center'
                     }}>
-                        <div style={{ fontSize: '0.875rem', color: '#6B7280', marginBottom: '0.5rem', textTransform: 'capitalize' }}>
+                        <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'capitalize' }}>
                             {status}
                         </div>
                         <div style={{ fontSize: '2rem', fontWeight: 700, color: '#0066CC' }}>

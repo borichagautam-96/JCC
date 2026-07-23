@@ -1,5 +1,8 @@
 import Tesseract from 'tesseract.js';
 import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import { execSync } from 'child_process';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
@@ -42,7 +45,10 @@ export const extractTextFromPDF = async (pdfPath) => {
     try {
         const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
         const dataBuffer = fs.readFileSync(pdfPath);
-        const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(dataBuffer) });
+
+        // useSystemFonts=true suppresses standard font fetch warnings in Node.js
+        // (pdfjs legacy can't load font files via file:// in Node context)
+        const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(dataBuffer), useSystemFonts: true });
         const doc = await loadingTask.promise;
 
         let fullText = '';
@@ -139,23 +145,27 @@ const extractInvoiceNumberCore = (text) => {
     const normalized = normalizeText(text);
 
     const explicitPatterns = [
-        /(?:invoice|inv|bill)\s*(?:no\.?|number|#|num)\s*[:\-]?\s*([A-Z0-9]+(?:[\s\/-][A-Z0-9]+){0,4})/i,
-        /(?:document|doc|voucher)\s*(?:no\.?|number|#|num)\s*[:\-]?\s*([A-Z0-9]+(?:[\s\/-][A-Z0-9]+){0,4})/i
+        // Standard formats like HBS/26-27/012, INV-001, or numeric 100/25-26
+        /(?:invoice|inv|bill)\s*(?:no\.?|number|#|num|:)\s*[:\-|\s]+([A-Z0-9][A-Z0-9\s\/-]{2,25})/i,
+        /(?:document|doc|voucher)\s*(?:no\.?|number|#|num)\s*[:\-]?\s*([A-Z0-9]+(?:[\s\/-][A-Z0-9]+){0,4})/i,
+        // HBS/ prefix used by Hornbill and similar invoice numbering
+        /(HBS\/[A-Z0-9\-\/]+)/i,
     ];
 
     for (const pattern of explicitPatterns) {
         const match = normalized.match(pattern);
         if (!match?.[1]) continue;
         const cleaned = match[1]
-            .replace(/\b(?:REFERENCE|REF|DATED|DATE|IRN|ACK)\b.*$/i, '')
+            .replace(/\b(?:REFERENCE|REF|DATED|DATE|IRN|ACK|DELIVERY|NOTE|MODE|TERMS)\b.*$/i, '')
             .replace(/\s+/g, ' ')
             .trim()
             .toUpperCase();
         if (cleaned.length >= 4 && /\d/.test(cleaned)) return cleaned;
     }
 
-    const invStyle = normalized.match(/\b(INV[-/]?[A-Z0-9/-]{2,25}|INVOICE[-/]?[A-Z0-9/-]{2,25})\b/i);
-    if (invStyle?.[1]) return invStyle[1].toUpperCase();
+    // Fallback: match patterns like INV-2025-001, INVOICE/2025/12 but NOT bare 'INVOICE'
+    const invStyle = normalized.match(/\b(INV[-/]\s*[A-Z0-9][-A-Z0-9/]{2,24}|INVOICE[-/]\s*[A-Z0-9][-A-Z0-9/]{2,24})\b/i);
+    if (invStyle?.[1] && /\d/.test(invStyle[1])) return invStyle[1].toUpperCase();
 
     return '';
 };
@@ -223,20 +233,29 @@ const toIsoDate = (value) => {
 
 const extractInvoiceDateCore = (text) => {
     const lines = (text || '').split('\n').map((line) => line.trim()).filter(Boolean);
-    const dateTokenPattern = /(\d{1,2}\s*[-\/.]?\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s*[-\/.]?\s*\d{2,4}|\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4}|\d{4}[-\/.]\d{1,2}[-\/.]\d{1,2})/i;
+    // Allow optional non-digit prefix (e.g. '[' from OCR artifacts) before day number
+    const dateTokenPattern = /[^\d]?(\d{1,2}\s*[-\/.]?\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s*[-\/.]?\s*\d{2,4}|\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4}|\d{4}[-\/.]\d{1,2}[-\/.]\d{1,2})/i;
 
     for (const line of lines) {
         if (!/(?:invoice\s*date|bill\s*date|dated|date\s*of\s*invoice)/i.test(line)) continue;
         const token = line.match(dateTokenPattern);
         if (!token?.[1]) continue;
-        const iso = toIsoDate(token[1]);
+        const iso = toIsoDate(token[1].trim());
         if (iso) return iso;
     }
 
+    // Fallback: search the whole normalized text for a date near a 'Dated' label
     const normalized = normalizeText(text);
+    // First try to find date right after 'Dated' keyword
+    const datedNear = normalized.match(/(?:dated|invoice\s*date|date)\s*[\|\-\:]?\s*[^\w]?(\d{1,2}[-\/\s]?(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-\/\s]?\d{2,4})/i);
+    if (datedNear?.[1]) {
+        const iso = toIsoDate(datedNear[1].trim());
+        if (iso) return iso;
+    }
+    // Last resort: any date pattern in text
     const token = normalized.match(dateTokenPattern);
     if (!token?.[1]) return '';
-    return toIsoDate(token[1]);
+    return toIsoDate(token[1].trim());
 };
 
 const extractPONumberCore = (text) => {
@@ -244,7 +263,9 @@ const extractPONumberCore = (text) => {
 
     const explicitPatterns = [
         /(?:buy(?:er'?s)?\s*order\s*no\.?|purchase\s*order\s*no\.?|po\s*no\.?|p\.o\.\s*no\.?)\s*[:\-]?\s*([A-Z0-9][A-Z0-9\s\/-]{3,40})/i,
-        /(?:buy(?:er'?s)?\s*order\s*no\.?|purchase\s*order\s*no\.?|po\s*no\.?|p\.o\.\s*no\.?)\s*[:\-]?\s*([^\n]{4,80})/i
+        /(?:buy(?:er'?s)?\s*order\s*no\.?|purchase\s*order\s*no\.?|po\s*no\.?|p\.o\.\s*no\.?)\s*[:\-]?\s*([^\n]{4,80})/i,
+        // 'PO NO :' format common in scanned invoices
+        /\bPO\s+NO\s*[:\-]?\s*([A-Z0-9][A-Z0-9\-\/]{3,30})/i,
     ];
 
     for (const pattern of explicitPatterns) {
@@ -263,8 +284,52 @@ const extractPONumberCore = (text) => {
     return '';
 };
 
+/**
+ * Extracts vendor/supplier name from OCR text.
+ * The vendor name is typically the first substantial company/org name in the document,
+ * appearing before "Invoice No.", "GSTIN", or "Date" labels.
+ */
+const extractVendorNameCore = (text) => {
+    const lines = (text || '').split(/[\n\r]+/).map(l => l.trim()).filter(Boolean);
+    
+    // Skip generic headers (Tax Invoice, etc.) and find the first company name line
+    const skipPatterns = /^(tax\s+invoice|proforma\s+invoice|invoice|original|recipient|gstin|state\s+name|cin:|contact|e-mail|buyer|description|sl\s+no|#)/i;
+    const companyNamePattern = /\b(?:pvt\.?\s*ltd\.?|private\s+limited|limited|llp|inc\.?|corp\.?|studios|enterprises|works|services|systems|technologies|consulting|engineers|prints|trading|industries)\b/i;
+    
+    const cleanVendorName = (name) => {
+        // Remove trailing invoice labels that OCR puts on the same line
+        return name
+            .replace(/\s*invoice\s+no\.?.*/i, '')
+            .replace(/\s*dated.*/i, '')
+            .replace(/\s*gstin.*/i, '')
+            .replace(/^[^A-Za-z]+/, '')
+            .trim();
+    };
+    
+    for (const line of lines) {
+        if (skipPatterns.test(line)) continue;
+        // Looks like a company name - stop at pipe character (OCR table separator)
+        const cleanLine = line.split('|')[0].trim();
+        if (companyNamePattern.test(cleanLine) && cleanLine.length > 5 && cleanLine.length < 150) {
+            return cleanVendorName(cleanLine);
+        }
+    }
+    
+    // Fallback: first non-skipped line that is long enough to be a company name
+    for (const line of lines) {
+        if (skipPatterns.test(line)) continue;
+        const cleanLine = line.split('|')[0].trim();
+        if (cleanLine.length > 8 && cleanLine.length < 150 && /[A-Z]/.test(cleanLine)) {
+            return cleanVendorName(cleanLine);
+        }
+    }
+    
+    return '';
+};
+
 export const extractCoreInvoiceFields = (text) => {
     return {
+        vendorName: extractVendorNameCore(text),
         invoiceNumber: extractInvoiceNumberCore(text),
         amount: extractAmountCore(text),
         date: extractInvoiceDateCore(text),
@@ -285,33 +350,190 @@ export const extractCoreInvoiceFields = (text) => {
  * @param {string} filePath 
  * @param {string} fileType 
  */
+/**
+ * Checks whether `pdftoppm` (poppler-utils) is available on the system PATH.
+ */
+const isPdftoppmAvailable = (() => {
+    let cached = null;
+    return () => {
+        if (cached !== null) return cached;
+        try {
+            execSync('pdftoppm -v', { stdio: 'pipe' });
+            cached = true;
+        } catch (_) {
+            cached = false;
+        }
+        return cached;
+    };
+})();
+
+/**
+ * Converts every page of a PDF to a high-resolution PNG using pdftoppm.
+ * Works for BOTH digital PDFs and scanned/image-based PDFs.
+ * Returns { files: string[], tmpDir: string } — caller must delete tmpDir.
+ */
+const pdfPagesToImages = (filePath) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdftoppm-'));
+    const outPrefix = path.join(tmpDir, 'page');
+
+    // 300 DPI gives excellent OCR accuracy on both digital and scanned PDFs.
+    // Quotes around paths handle spaces in temp dir names.
+    execSync(`pdftoppm -r 300 -png "${filePath}" "${outPrefix}"`, { stdio: 'pipe' });
+
+    const files = fs.readdirSync(tmpDir)
+        .filter(f => f.endsWith('.png'))
+        .sort()                              // page-1.png, page-2.png, ...
+        .map(f => path.join(tmpDir, f));
+
+    return { files, tmpDir };
+};
+
+/**
+ * Pure-JS PDF → page-image rasterizer using pdfjs-dist + @napi-rs/canvas.
+ * This is the cross-platform fallback for scanned/image PDFs when the native
+ * `pdftoppm` (poppler) binary is NOT installed — it needs no system binary,
+ * so scanned-PDF OCR works on any machine (local dev, Docker, etc.).
+ * Returns { files: string[], tmpDir: string } — caller must delete tmpDir.
+ */
+let _napiCanvas = null;
+const getNapiCanvas = () => {
+    if (_napiCanvas) return _napiCanvas;
+    const napi = require('@napi-rs/canvas');
+    // pdfjs (legacy build) expects these DOM globals; back them with @napi-rs/canvas
+    if (!globalThis.DOMMatrix) globalThis.DOMMatrix = napi.DOMMatrix;
+    if (!globalThis.Path2D) globalThis.Path2D = napi.Path2D;
+    if (!globalThis.ImageData) globalThis.ImageData = napi.ImageData;
+    _napiCanvas = napi;
+    return napi;
+};
+
+const pdfPagesToImagesJS = async (filePath) => {
+    const { createCanvas } = getNapiCanvas();
+    const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+    const data = new Uint8Array(fs.readFileSync(filePath));
+
+    class NodeCanvasFactory {
+        create(w, h) {
+            const canvas = createCanvas(Math.max(1, Math.ceil(w)), Math.max(1, Math.ceil(h)));
+            return { canvas, context: canvas.getContext('2d') };
+        }
+        reset(cc, w, h) { cc.canvas.width = Math.max(1, Math.ceil(w)); cc.canvas.height = Math.max(1, Math.ceil(h)); }
+        destroy(cc) { if (cc.canvas) { cc.canvas.width = 0; cc.canvas.height = 0; } cc.canvas = null; cc.context = null; }
+    }
+
+    const factory = new NodeCanvasFactory();
+    const doc = await pdfjsLib.getDocument({ data, useSystemFonts: true, canvasFactory: factory }).promise;
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdfjs-raster-'));
+    const files = [];
+    for (let p = 1; p <= doc.numPages; p++) {
+        const page = await doc.getPage(p);
+        // 300 DPI (scale 300/72) gives strong OCR accuracy
+        const viewport = page.getViewport({ scale: 300 / 72 });
+        const cc = factory.create(viewport.width, viewport.height);
+        await page.render({ canvasContext: cc.context, viewport, canvasFactory: factory }).promise;
+        const outPath = path.join(tmpDir, `page-${String(p).padStart(3, '0')}.png`);
+        fs.writeFileSync(outPath, cc.canvas.toBuffer('image/png'));
+        files.push(outPath);
+        factory.destroy(cc);
+        try { page.cleanup(); } catch (_) {}
+    }
+    try { await doc.destroy(); } catch (_) {}
+    return { files, tmpDir };
+};
+
+/**
+ * Run Tesseract OCR on an image file and return the extracted text.
+ */
+const ocrImageFile = async (imagePath) => {
+    const Tesseract = (await import('tesseract.js')).default;
+    const worker = await Tesseract.createWorker('eng', 1, { logger: () => {} });
+    try {
+        const result = await worker.recognize(imagePath);
+        return result.data.text || '';
+    } finally {
+        await worker.terminate();
+        try { fs.unlinkSync(imagePath); } catch (_) {}
+    }
+};
+
 export const extractInvoiceData = async (filePath, fileType) => {
     try {
         let result;
         if (fileType === 'application/pdf') {
-            // First try PDF geometric extraction
+            // ── Step 1: Try pdfjs geometric text extraction ─────────────────
+            // Fast, zero-dependency. Works for digital (text-layer) PDFs.
             try {
                 result = await tableExtractor.extractTableFromPdf(filePath);
             } catch (e) {
                 console.warn('PDF geometric extraction failed, falling back to basic:', e);
-                // Fallback handled below if result is empty
             }
         }
 
         if (!result || !result.text || result.text.length < 50) {
-            // If PDF extraction failed or file is image, use OCR/Image extraction
-            console.log('Using Image/ORC extraction for:', filePath);
-            // If PDF, we might need to convert to image? 
-            // TableExtractor.extractTableFromImage takes image path.
-            // If fileType is pdf, Tesseract won't work directly on filePath.
-            // But if it's an image file (jpg/png) it works.
+            console.log('Using Image/OCR extraction for:', filePath);
 
             if (fileType === 'application/pdf') {
-                // We rely on standard pdf-parse for text if geometric failed
+                // ── Step 2a: Check for a text layer via basic pdfjs read ─────
                 const basic = await extractTextFromPDF(filePath);
-                result = { text: basic.text, lineItems: [] };
+
+                if (basic.text && basic.text.trim().length > 50) {
+                    // Digital PDF with text layer — use pdfjs text directly
+                    result = { text: basic.text, lineItems: [] };
+                } else {
+                    // ── Step 2b: Scanned / image-based PDF ───────────────────
+                    // Primary: render every page to a 300-DPI PNG via pdftoppm,
+                    // then run Tesseract on each page image.
+                    // Fallback: extract embedded image XObjects via pdfjs (less reliable).
+                    console.log('PDF appears to be image-based (scanned). Running OCR pipeline...');
+                    let ocrText = '';
+                    let tmpDirToClean = null;
+
+                    try {
+                        if (isPdftoppmAvailable()) {
+                            console.log('pdftoppm available — rendering pages at 300 DPI...');
+                            const { files, tmpDir } = await pdfPagesToImages(filePath);
+                            tmpDirToClean = tmpDir;
+
+                            if (files.length > 0) {
+                                console.log(`Rendered ${files.length} page(s). Running Tesseract OCR...`);
+                                // OCR pages sequentially to avoid Tesseract memory spikes
+                                const pageTexts = [];
+                                for (const imgPath of files) {
+                                    pageTexts.push(await ocrImageFile(imgPath));
+                                }
+                                ocrText = pageTexts.join('\n\n');
+                                console.log(`OCR complete. Total text length: ${ocrText.length}`);
+                            }
+                        } else {
+                            // Fallback: pure-JS pdfjs rasterizer (@napi-rs/canvas) — no poppler needed.
+                            // Renders every page to a 300-DPI PNG, then Tesseract-OCRs each.
+                            console.warn('pdftoppm not available — using pure-JS pdfjs rasterizer (no system binary needed)');
+                            const { files, tmpDir } = await pdfPagesToImagesJS(filePath);
+                            tmpDirToClean = tmpDir;
+                            if (files.length > 0) {
+                                console.log(`Rendered ${files.length} page(s) via pdfjs. Running Tesseract OCR...`);
+                                const pageTexts = [];
+                                for (const imgPath of files) {
+                                    pageTexts.push(await ocrImageFile(imgPath));
+                                }
+                                ocrText = pageTexts.join('\n\n');
+                                console.log(`OCR complete. Total text length: ${ocrText.length}`);
+                            }
+                        }
+                    } catch (imgErr) {
+                        console.warn('Scanned PDF OCR pipeline failed:', imgErr.message);
+                    } finally {
+                        // Clean up the pdftoppm temp directory
+                        if (tmpDirToClean) {
+                            try { fs.rmSync(tmpDirToClean, { recursive: true, force: true }); } catch (_) {}
+                        }
+                    }
+
+                    result = { text: ocrText, lineItems: [] };
+                }
             } else {
-                // It's an image: prioritize direct OCR text for core fields.
+                // ── Direct image file (JPEG / PNG uploaded directly) ─────────
                 const imageText = await extractTextFromImage(filePath);
                 let lineItems = [];
                 try {
@@ -320,11 +542,7 @@ export const extractInvoiceData = async (filePath, fileType) => {
                 } catch (tableError) {
                     console.warn('Image table extraction failed, continuing with OCR text only:', tableError.message);
                 }
-
-                result = {
-                    text: imageText.text || '',
-                    lineItems
-                };
+                result = { text: imageText.text || '', lineItems };
             }
         }
 
@@ -337,7 +555,7 @@ export const extractInvoiceData = async (filePath, fileType) => {
             lineItems: result.lineItems || [],
             entities,
             ...coreFields,
-            confidence: 90, // Estimation
+            confidence: 90,
             processedAt: new Date().toISOString()
         };
     } catch (error) {
@@ -345,6 +563,7 @@ export const extractInvoiceData = async (filePath, fileType) => {
         throw error;
     }
 };
+
 
 export const processLetter = async (filePath, fileType) => {
     // Legacy wrapper or reused

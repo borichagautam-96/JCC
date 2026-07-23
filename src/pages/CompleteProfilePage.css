@@ -183,18 +183,30 @@
     color: #4e6c95;
 }
 
-.complete-profile-input-wrap input {
+.complete-profile-input-wrap input,
+.complete-profile-input-wrap select {
     width: 100%;
     border: 1px solid #b9cde6;
     border-radius: 12px;
     background: #ffffff;
     color: #122847;
     font-size: 0.95rem;
+    font-family: inherit;
     padding: 11px 12px 11px 40px;
     transition: border-color 0.2s ease, background-color 0.2s ease;
 }
 
-.complete-profile-input-wrap input:focus {
+/* Native select needs a bit more right padding for its dropdown arrow, and an
+   explicit height so it lines up with the text inputs. */
+.complete-profile-input-wrap select {
+    height: 44px;
+    padding-right: 36px;
+    cursor: pointer;
+    appearance: auto;
+}
+
+.complete-profile-input-wrap input:focus,
+.complete-profile-input-wrap select:focus {
     outline: none;
     border-color: #1773e6;
     background: #f8fcff;
@@ -279,5 +291,125 @@
     to {
         opacity: 1;
         transform: translateY(0);
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Premium first-login animations — polished, cohesive with the login page.
+   opacity + transform only (60fps). No redesign / logic / API change.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Subtle drifting gradient background (calm, ~22s) */
+.complete-profile-shell {
+    background-size: 160% 160%;
+    animation: cpGradientDrift 22s ease-in-out infinite;
+}
+@keyframes cpGradientDrift {
+    0%   { background-position: 0% 0%; }
+    50%  { background-position: 100% 100%; }
+    100% { background-position: 0% 0%; }
+}
+
+/* Panels no longer fade as whole blocks — their content cascades individually */
+.complete-profile-brand-panel,
+.complete-profile-form-panel { animation: none; }
+
+/* Staggered content entrance: pill → title → subtitle → info cards, then
+   heading → subtitle → fields → button. Drops down into place, no horizontal. */
+.complete-profile-pill,
+.complete-profile-brand-panel h1,
+.complete-profile-brand-panel > p:not(.complete-profile-pill),
+.complete-profile-info-item,
+.complete-profile-form-panel h2,
+.complete-profile-form-subtitle,
+.complete-profile-form > * {
+    animation: cpItemIn 0.5s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+@keyframes cpItemIn {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.complete-profile-pill { animation-delay: 0.10s; }
+.complete-profile-brand-panel h1 { animation-delay: 0.18s; }
+.complete-profile-brand-panel > p:not(.complete-profile-pill) { animation-delay: 0.26s; }
+.complete-profile-info-item:nth-child(1) { animation-delay: 0.34s; }
+.complete-profile-info-item:nth-child(2) { animation-delay: 0.42s; }
+.complete-profile-form-panel h2 { animation-delay: 0.28s; }
+.complete-profile-form-subtitle { animation-delay: 0.36s; }
+.complete-profile-form > *:nth-child(1) { animation-delay: 0.46s; }
+.complete-profile-form > *:nth-child(2) { animation-delay: 0.52s; }
+.complete-profile-form > *:nth-child(3) { animation-delay: 0.58s; }
+.complete-profile-form > *:nth-child(4) { animation-delay: 0.64s; }
+.complete-profile-form > *:nth-child(5) { animation-delay: 0.70s; }
+.complete-profile-form > *:nth-child(6) { animation-delay: 0.76s; }
+.complete-profile-form > *:nth-child(7) { animation-delay: 0.82s; }
+
+/* Info cards: soft hover lift + glow */
+.complete-profile-info-item {
+    transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+}
+.complete-profile-info-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(37, 99, 235, 0.10);
+    border-color: #8cc8ff;
+}
+
+/* Inputs + dropdown: focus glow + slight lift */
+.complete-profile-input-wrap input,
+.complete-profile-input-wrap select {
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease, background-color 0.2s ease;
+}
+.complete-profile-input-wrap input:focus,
+.complete-profile-input-wrap select:focus {
+    box-shadow: 0 0 0 3px rgba(23, 115, 230, 0.15);
+    transform: translateY(-1px);
+}
+
+/* Save button: hover lift/scale, press compress, green "✓ Saved" state */
+.complete-profile-submit {
+    transition: transform 0.16s cubic-bezier(0.34, 1.56, 0.64, 1),
+        box-shadow 0.2s ease, filter 0.2s ease, background 0.25s ease;
+}
+.complete-profile-submit:not(:disabled):hover {
+    transform: scale(1.02);
+    box-shadow: 0 10px 26px rgba(37, 99, 235, 0.30);
+}
+.complete-profile-submit:not(:disabled):active { transform: scale(0.98); }
+.complete-profile-submit.is-saved {
+    background: linear-gradient(135deg, #16a34a, #15803d) !important;
+    box-shadow: 0 8px 22px rgba(22, 163, 74, 0.32);
+    opacity: 1 !important;
+    animation: cpSavedPop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes cpSavedPop { 0% { transform: scale(0.97); } 60% { transform: scale(1.03); } 100% { transform: scale(1); } }
+.cp-btn-inline { display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; }
+.cp-spinner {
+    width: 16px; height: 16px; border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.5); border-top-color: #fff;
+    animation: cpSpin 0.7s linear infinite;
+}
+@keyframes cpSpin { to { transform: rotate(360deg); } }
+
+/* Success → app: the whole card fades out before navigating */
+.complete-profile-layout.is-leaving {
+    animation: cpLeave 0.5s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+@keyframes cpLeave {
+    to { opacity: 0; transform: translateY(-14px) scale(0.98); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .complete-profile-shell,
+    .complete-profile-pill,
+    .complete-profile-brand-panel h1,
+    .complete-profile-brand-panel > p,
+    .complete-profile-info-item,
+    .complete-profile-form-panel h2,
+    .complete-profile-form-subtitle,
+    .complete-profile-form > *,
+    .complete-profile-submit.is-saved,
+    .cp-spinner,
+    .complete-profile-layout.is-leaving {
+        animation: none;
     }
 }

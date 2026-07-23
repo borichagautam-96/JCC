@@ -247,7 +247,7 @@ const AssignedInvoicesPage = () => {
                         <tbody>
                             {assignedInvoices.length === 0 ? (
                                 <tr>
-                                    <td colSpan={isAdmin ? 7 : 6} className="text-center" style={{ color: '#64748B', padding: '1.5rem' }}>
+                                    <td colSpan={isAdmin ? 7 : 6} className="text-center" style={{ color: 'var(--text-muted)', padding: '1.5rem' }}>
                                         No assigned invoices found.
                                     </td>
                                 </tr>
@@ -365,16 +365,16 @@ const AssignedInvoicesPage = () => {
                                 width: 'min(920px, 96vw)',
                                 maxHeight: '88vh',
                                 overflow: 'auto',
-                                background: '#ffffff',
+                                background: 'var(--surface)',
                                 borderRadius: '14px',
-                                border: '1px solid #E2E8F0',
+                                border: '1px solid var(--border)',
                                 boxShadow: '0 20px 50px rgba(15, 23, 42, 0.25)',
                                 padding: '1rem',
                                 margin: '0 auto',
                             }}
                         >
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                                <h3 style={{ margin: 0, color: '#0f172a' }}>Invoice Details</h3>
+                                <h3 style={{ margin: 0, color: 'var(--text-strong)' }}>Invoice Details</h3>
                                 <button className="btn btn-sm btn-outline" onClick={closeDetails}>Close</button>
                             </div>
 
@@ -405,8 +405,8 @@ const AssignedInvoicesPage = () => {
                             </div>
 
                             {invoiceHistories[selectedInvoice.id] && (
-                                <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '0.85rem' }}>
-                                    <div style={{ marginBottom: '0.65rem', fontWeight: 600, color: '#1E293B' }}>
+                                <div style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: '10px', padding: '0.85rem' }}>
+                                    <div style={{ marginBottom: '0.65rem', fontWeight: 600, color: 'var(--text-strong)' }}>
                                         Assignment Lifecycle
                                     </div>
                                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
@@ -422,12 +422,12 @@ const AssignedInvoicesPage = () => {
                                     {invoiceHistories[selectedInvoice.id].history.length === 0 ? (
                                         <div className="text-muted">No history events available.</div>
                                     ) : (
-                                        <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: '0.75rem' }}>
+                                        <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem' }}>
                                             {invoiceHistories[selectedInvoice.id].history.map((event) => (
                                                 <div key={event.id} style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.5rem' }}>
-                                                    <span style={{ minWidth: '185px', color: '#64748B' }}>{formatDateTime(event.action_at)}</span>
-                                                    <span style={{ fontWeight: 600, color: '#1E293B', textTransform: 'capitalize' }}>{event.action_type.replace('_', ' ')}</span>
-                                                    <span style={{ color: '#334155' }}>
+                                                    <span style={{ minWidth: '185px', color: 'var(--text-muted)' }}>{formatDateTime(event.action_at)}</span>
+                                                    <span style={{ fontWeight: 600, color: 'var(--text-strong)', textTransform: 'capitalize' }}>{event.action_type.replace('_', ' ')}</span>
+                                                    <span style={{ color: 'var(--text-body)' }}>
                                                         by {event.action_by_name || '-'}
                                                         {event.assigned_to_name ? ` | assigned to ${event.assigned_to_name}` : ''}
                                                         {event.notes ? ` | ${event.notes}` : ''}

@@ -134,6 +134,38 @@ const emailWrapper = (body) => `
     </div>
 `;
 
+// ─── Printing-module helpers ──────────────────────────────────────────────────
+const printRow = (label, value, alt) => `
+    <tr>
+        <td style="padding: 7px 12px; border: 1px solid #555; background-color: ${alt ? '#f5f5f5' : '#ffffff'}; font-weight: 600; color: #222;">${label}</td>
+        <td style="padding: 7px 12px; border: 1px solid #555; background-color: ${alt ? '#f5f5f5' : '#ffffff'}; color: #222;">${value ?? '-'}</td>
+    </tr>`;
+
+const printDetailsTable = (pj) => `
+    <table style="border-collapse: collapse; font-size: 14px; margin: 12px 0; width: 100%; border: 2px solid #444;">
+        <thead>
+            <tr>
+                <th style="padding: 8px 12px; background-color: #1a1a2e; color: #ffffff; text-align: left; font-weight: bold; border: 1px solid #444; width: 40%;">Field</th>
+                <th style="padding: 8px 12px; background-color: #1a1a2e; color: #ffffff; text-align: left; font-weight: bold; border: 1px solid #444;">Information</th>
+            </tr>
+        </thead>
+        <tbody>
+            ${printRow('Job No.', pj.jobNumber, true)}
+            ${printRow('Request ID', pj.requestId, false)}
+            ${printRow('Requestor', pj.requestorName, true)}
+            ${printRow('Project', pj.projectName, false)}
+            ${printRow('Debit Code', pj.debitCode, true)}
+            ${printRow('Documents', pj.documentCount, false)}
+            ${pj.operatorName ? printRow('Operator', pj.operatorName, true) : ''}
+        </tbody>
+    </table>`;
+
+const printPortalLink = () => {
+    const base = (process.env.APP_BASE_URL || '').trim().replace(/\/$/, '');
+    if (!base) return '';
+    return `<p style="margin-top:16px;"><a href="${base}/hub" style="display:inline-block;background:#1E3A5F;color:#ffffff;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:600;">Open Printing Portal</a></p>`;
+};
+
 // ─── Email Templates ──────────────────────────────────────────────────────────
 
 const emailTemplates = {
@@ -159,6 +191,7 @@ const emailTemplates = {
             <p>${voucher.voucherRequestId} has been submitted by <strong>${voucher.claimedBy || creator.name}</strong> for your review and approval. Please find the details below for your reference:</p>
             <p><strong>JCC Submission Details</strong></p>
             ${detailsTable(voucher)}
+            ${voucher.approveLink ? `<p style="margin-top: 18px;"><a href="${voucher.approveLink}" style="display:inline-block;background:#059669;color:#ffffff;padding:11px 20px;border-radius:6px;text-decoration:none;font-weight:600;">✓ Approve this JCC</a><span style="color:#888;font-size:12px;">&nbsp; (opens a confirmation page)</span></p>` : ''}
             <p style="margin-top: 20px;">
                 To view invoice and to approve:&nbsp;
                 <a href="#" style="color: #0066CC; text-decoration: none; font-weight: 600;">Open Task</a>
@@ -199,6 +232,7 @@ const emailTemplates = {
             </p>
             <p>Its details are as follows:</p>
             ${detailsTable(voucher)}
+            ${voucher.approveLink ? `<p style="margin-top: 18px;"><a href="${voucher.approveLink}" style="display:inline-block;background:#059669;color:#ffffff;padding:11px 20px;border-radius:6px;text-decoration:none;font-weight:600;">✓ Approve this JCC</a><span style="color:#888;font-size:12px;">&nbsp; (opens a confirmation page)</span></p>` : ''}
             <p>
                 <a href="#" style="color: #0066CC; text-decoration: none; font-weight: 600;">Open Task</a>
                 &nbsp;|&nbsp;
@@ -294,6 +328,74 @@ const emailTemplates = {
             </p>
         `)
     }),
+
+    // ─── Printing Module ──────────────────────────────────────────────────────
+    printJobSubmitted: (pj) => ({
+        subject: `New Printing Job ${pj.jobNumber} awaiting verification`,
+        html: emailWrapper(`
+            <p>A new printing job has been submitted and is awaiting your verification.</p>
+            ${printDetailsTable(pj)}
+            <p style="color:#555;">Please review it in the Printing Coordinator screen.</p>
+            ${printPortalLink()}
+        `)
+    }),
+    printJobAccepted: (pj) => ({
+        subject: `Printing Job ${pj.jobNumber} accepted`,
+        html: emailWrapper(`
+            <p>Dear <strong>${pj.requestorName || 'Requestor'}</strong>,</p>
+            <p><strong>${pj.jobNumber}</strong> has been <strong>accepted</strong> and added to the print queue.</p>
+            ${printDetailsTable(pj)}
+            ${printPortalLink()}
+        `)
+    }),
+    printJobReturned: (pj) => ({
+        subject: `Printing Job ${pj.jobNumber} returned for correction`,
+        html: emailWrapper(`
+            <p>Dear <strong>${pj.requestorName || 'Requestor'}</strong>,</p>
+            <p><strong>${pj.jobNumber}</strong> has been <strong>returned</strong> for correction.</p>
+            <p style="background:#FFF7ED;border:1px solid #FDBA74;border-radius:6px;padding:10px 14px;color:#9A3412;"><strong>Reason:</strong> ${pj.reason || '-'}</p>
+            ${printDetailsTable(pj)}
+            <p>Please edit and resubmit it — it keeps the same job number.</p>
+            ${printPortalLink()}
+        `)
+    }),
+    printJobRejected: (pj) => ({
+        subject: `Printing Job ${pj.jobNumber} rejected`,
+        html: emailWrapper(`
+            <p>Dear <strong>${pj.requestorName || 'Requestor'}</strong>,</p>
+            <p><strong>${pj.jobNumber}</strong> has been <strong>rejected</strong>.</p>
+            <p style="background:#FEF2F2;border:1px solid #FCA5A5;border-radius:6px;padding:10px 14px;color:#7F1D1D;"><strong>Reason:</strong> ${pj.reason || '-'}</p>
+            ${printDetailsTable(pj)}
+            ${printPortalLink()}
+        `)
+    }),
+    printJobAssignedOperator: (pj) => ({
+        subject: `Print Job ${pj.jobNumber} assigned to you`,
+        html: emailWrapper(`
+            <p>Dear <strong>${pj.operatorName || 'Operator'}</strong>,</p>
+            <p><strong>${pj.jobNumber}</strong> has been assigned to you for printing.</p>
+            ${printDetailsTable(pj)}
+            <p style="color:#555;">Open the Operator screen to start printing.</p>
+            ${printPortalLink()}
+        `)
+    }),
+    printJobReady: (pj) => ({
+        subject: `Printing Job ${pj.jobNumber} is ready for collection`,
+        html: emailWrapper(`
+            <p>Dear <strong>${pj.requestorName || 'Requestor'}</strong>,</p>
+            <p><strong>${pj.jobNumber}</strong> is <strong>ready for collection</strong>.</p>
+            ${printDetailsTable(pj)}
+            ${printPortalLink()}
+        `)
+    }),
+    printJobCompleted: (pj) => ({
+        subject: `Printing Job ${pj.jobNumber} completed`,
+        html: emailWrapper(`
+            <p>Dear <strong>${pj.requestorName || 'Requestor'}</strong>,</p>
+            <p><strong>${pj.jobNumber}</strong> has been collected and closed. Thank you.</p>
+            ${printDetailsTable(pj)}
+        `)
+    }),
 };
 
 // ─── Send Email ───────────────────────────────────────────────────────────────
@@ -336,7 +438,8 @@ export const sendEmail = async (to, templateFn, templateArgs, meta = {}) => {
             from: `"InFloAI System" <${SENDER_ADDRESS}>`,
             to,
             subject: emailContent.subject,
-            html: emailContent.html
+            html: emailContent.html,
+            attachments: Array.isArray(meta.attachments) ? meta.attachments : undefined
         };
 
         const info = await transporter.sendMail(mailOptions);
@@ -448,6 +551,30 @@ export const notifyJccApprovalReminder = async (voucher, recipients, levelLabel)
     return results;
 };
 
+// ─── Printing Module notifications ────────────────────────────────────────────
+// Each returns a promise; callers may fire-and-forget. `to` may be a single email
+// or an array; invalid/empty recipients are skipped by sendEmail.
+const sendToMany = async (recipients, templateFn, pj, templateName) => {
+    const list = (Array.isArray(recipients) ? recipients : [recipients]).filter(Boolean);
+    const seen = new Set();
+    const results = [];
+    for (const email of list) {
+        const key = String(email).toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        results.push(await sendEmail(email, templateFn, [pj], { entityType: 'print_job', entityId: pj.jobNumber, templateName }));
+    }
+    return results;
+};
+
+export const notifyPrintJobSubmitted = (pj, coordinatorEmails) => sendToMany(coordinatorEmails, emailTemplates.printJobSubmitted, pj, 'printJobSubmitted');
+export const notifyPrintJobAccepted = (pj, requestorEmail) => sendToMany(requestorEmail, emailTemplates.printJobAccepted, pj, 'printJobAccepted');
+export const notifyPrintJobReturned = (pj, requestorEmail) => sendToMany(requestorEmail, emailTemplates.printJobReturned, pj, 'printJobReturned');
+export const notifyPrintJobRejected = (pj, requestorEmail) => sendToMany(requestorEmail, emailTemplates.printJobRejected, pj, 'printJobRejected');
+export const notifyPrintJobAssigned = (pj, operatorEmail) => sendToMany(operatorEmail, emailTemplates.printJobAssignedOperator, pj, 'printJobAssignedOperator');
+export const notifyPrintJobReady = (pj, recipients) => sendToMany(recipients, emailTemplates.printJobReady, pj, 'printJobReady');
+export const notifyPrintJobCompleted = (pj, requestorEmail) => sendToMany(requestorEmail, emailTemplates.printJobCompleted, pj, 'printJobCompleted');
+
 export default {
     sendEmail,
     isValidEmail,
@@ -456,5 +583,12 @@ export default {
     notifyNextApprover,
     notifyVoucherRejected,
     notifyJccApprovalReminder,
+    notifyPrintJobSubmitted,
+    notifyPrintJobAccepted,
+    notifyPrintJobReturned,
+    notifyPrintJobRejected,
+    notifyPrintJobAssigned,
+    notifyPrintJobReady,
+    notifyPrintJobCompleted,
     emailTemplates
 };

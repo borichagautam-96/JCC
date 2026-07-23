@@ -430,7 +430,7 @@ const AssetTrackerPage = () => {
                 {bulkImporting ? 'Importing...' : `Import Valid Rows (${importPreview.validRows})`}
               </button>
             )}
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.84rem', color: '#475569' }}>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.84rem', color: 'var(--text-body)' }}>
               <input
                 type="checkbox"
                 checked={autoProcessUpload}
@@ -440,35 +440,35 @@ const AssetTrackerPage = () => {
             </label>
           </div>
           {extractingDoc && (
-            <div className="mb-md" style={{ fontSize: '0.86rem', color: '#475569', fontWeight: 600 }}>
+            <div className="mb-md" style={{ fontSize: '0.86rem', color: 'var(--text-body)', fontWeight: 600 }}>
               Reading Excel file and auto-filling fields...
             </div>
           )}
 
           {extractedDoc && (
-            <div className="mb-md" style={{ background: '#f8fafc', border: '1px solid #dbe3ee', borderRadius: '10px', padding: '0.75rem' }}>
-              <div style={{ fontSize: '0.82rem', color: '#475569', marginBottom: '0.35rem', fontWeight: 600 }}>Extracted Summary</div>
-              <div style={{ fontSize: '0.82rem', color: '#334155' }}>
+            <div className="mb-md" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: '10px', padding: '0.75rem' }}>
+              <div style={{ fontSize: '0.82rem', color: 'var(--text-body)', marginBottom: '0.35rem', fontWeight: 600 }}>Extracted Summary</div>
+              <div style={{ fontSize: '0.82rem', color: 'var(--text-body)' }}>
                 Vendor: {extractedDoc.assetData?.vendorName || extractedDoc.vendorName || '-'} | Asset: {extractedDoc.assetData?.assetName || extractedDoc.assetName || '-'} | Category: {extractedDoc.assetData?.category || extractedDoc.category || '-'}
               </div>
-              <div style={{ fontSize: '0.82rem', color: '#334155', marginTop: '0.25rem' }}>
+              <div style={{ fontSize: '0.82rem', color: 'var(--text-body)', marginTop: '0.25rem' }}>
                 Assigned To: {extractedDoc.issueData?.assignedToName || extractedDoc.assignedToName || '-'} | Issue Date: {extractedDoc.issueData?.startDate || extractedDoc.startDate || '-'} | Expected Return: {extractedDoc.issueData?.expectedReturnDate || extractedDoc.expectedReturnDate || '-'}
               </div>
             </div>
           )}
 
           {importPreview && (
-            <div className="mb-md" style={{ background: '#f8fafc', border: '1px solid #dbe3ee', borderRadius: '10px', padding: '0.75rem' }}>
-              <div style={{ fontSize: '0.82rem', color: '#475569', marginBottom: '0.35rem', fontWeight: 700 }}>
+            <div className="mb-md" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: '10px', padding: '0.75rem' }}>
+              <div style={{ fontSize: '0.82rem', color: 'var(--text-body)', marginBottom: '0.35rem', fontWeight: 700 }}>
                 Validation Report
               </div>
-              <div style={{ fontSize: '0.8rem', color: '#334155', marginBottom: '0.45rem' }}>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-body)', marginBottom: '0.45rem' }}>
                 Total rows: {importPreview.totalRows} | Valid: {importPreview.validRows} | Invalid: {importPreview.invalidRows}
               </div>
-              <div style={{ maxHeight: '180px', overflow: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px', background: '#fff' }}>
+              <div style={{ maxHeight: '180px', overflow: 'auto', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--surface)' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
                   <thead>
-                    <tr style={{ background: '#f1f5f9' }}>
+                    <tr style={{ background: 'var(--surface-3)' }}>
                       <th style={{ textAlign: 'left', padding: '0.45rem' }}>Row</th>
                       <th style={{ textAlign: 'left', padding: '0.45rem' }}>Status</th>
                       <th style={{ textAlign: 'left', padding: '0.45rem' }}>Errors</th>
@@ -476,12 +476,12 @@ const AssetTrackerPage = () => {
                   </thead>
                   <tbody>
                     {(importPreview.rows || []).slice(0, 15).map((row) => (
-                      <tr key={row.rowNumber} style={{ borderTop: '1px solid #f1f5f9' }}>
+                      <tr key={row.rowNumber} style={{ borderTop: '1px solid var(--surface-3)' }}>
                         <td style={{ padding: '0.45rem' }}>{row.rowNumber}</td>
                         <td style={{ padding: '0.45rem', color: row.isValid ? '#166534' : '#991b1b', fontWeight: 600 }}>
                           {row.isValid ? 'Valid' : 'Invalid'}
                         </td>
-                        <td style={{ padding: '0.45rem', color: '#475569' }}>
+                        <td style={{ padding: '0.45rem', color: 'var(--text-body)' }}>
                           {row.errors?.length ? row.errors.join(', ') : '-'}
                         </td>
                       </tr>
@@ -490,7 +490,7 @@ const AssetTrackerPage = () => {
                 </table>
               </div>
               {(importPreview.rows || []).length > 15 && (
-                <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: '0.35rem' }}>
+                <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
                   Showing first 15 rows. Import will process all rows.
                 </div>
               )}

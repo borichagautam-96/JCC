@@ -1,13 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Download } from 'lucide-react';
+import { Search, Download, Copy } from 'lucide-react';
+import DownloadButton from '../components/DownloadButton';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
 import '../voucher-styles.css';
 
 const VoucherHistoryPage = () => {
+    const navigate = useNavigate();
+    const location = useLocation();
     const [vouchers, setVouchers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
+
+    // Honor ?q=... passed from global search to pre-filter the list
+    useEffect(() => {
+        const params = new URLSearchParams(location.search);
+        const q = params.get('q');
+        if (q) setSearchTerm(q);
+    }, [location.search]);
     const [paymentLogModal, setPaymentLogModal] = useState(null);
     const [paymentLogData, setPaymentLogData] = useState(null);
     const [paymentLogLoading, setPaymentLogLoading] = useState(false);
@@ -65,41 +76,51 @@ const VoucherHistoryPage = () => {
 
     // Resubmit Modal State
     const [resubmitVoucher, setResubmitVoucher] = useState(null);
+    const [resubmitMode, setResubmitMode] = useState('resubmit'); // 'resubmit' | 'respond'
     const [resubmitData, setResubmitData] = useState({
         description: '',
         gross_amount: '',
         basic_amount: '',
         po_number: '',
-        invoice_number: ''
+        invoice_number: '',
+        responseNote: ''
     });
 
-    const openResubmitModal = (voucher) => {
+    const openResubmitModal = (voucher, mode = 'resubmit') => {
+        setResubmitMode(mode);
         setResubmitVoucher(voucher);
         setResubmitData({
             description: voucher.description || '',
             gross_amount: voucher.gross_amount || '',
             basic_amount: voucher.basic_amount || '',
             po_number: voucher.po_number || '',
-            invoice_number: voucher.invoice_number || ''
+            invoice_number: voucher.invoice_number || '',
+            responseNote: ''
         });
     };
 
     const closeResubmitModal = () => {
         setResubmitVoucher(null);
+        setResubmitMode('resubmit');
         setResubmitData({
             description: '',
             gross_amount: '',
             basic_amount: '',
             po_number: '',
-            invoice_number: ''
+            invoice_number: '',
+            responseNote: ''
         });
     };
 
     const handleSubmitResubmission = async () => {
         if (!resubmitVoucher) return;
+        const isRespond = resubmitMode === 'respond';
+        const url = isRespond
+            ? `/api/jcc/vouchers/${resubmitVoucher.id}/respond-info`
+            : `/api/jcc/vouchers/${resubmitVoucher.id}/resubmit`;
 
         try {
-            const response = await fetch(`/api/jcc/vouchers/${resubmitVoucher.id}/resubmit`, {
+            const response = await fetch(url, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -110,16 +131,16 @@ const VoucherHistoryPage = () => {
             });
 
             if (response.ok) {
-                await dialog.alert('Voucher resubmitted successfully!');
+                await dialog.alert(isRespond ? 'Response sent — your claim is back with the approver.' : 'Voucher resubmitted successfully!');
                 closeResubmitModal();
                 fetchVouchers(); // Refresh list
             } else {
                 const data = await response.json();
-                await dialog.alert(`Failed to resubmit: ${data.error}`);
+                await dialog.alert(`Failed: ${data.error}`);
             }
         } catch (error) {
-            console.error('Error resubmitting voucher:', error);
-            await dialog.alert('An error occurred while resubmitting.');
+            console.error('Error submitting:', error);
+            await dialog.alert('An error occurred. Please try again.');
         }
     };
 
@@ -150,7 +171,7 @@ const VoucherHistoryPage = () => {
 
         const search = searchTerm.toLowerCase();
         const srNo = vouchers.indexOf(voucher) + 1;
-        const jccId = `JCC${String(voucher.id).padStart(4, '0')}`.toLowerCase();
+        const jccId = (voucher.jcc_number || `JCC${String(voucher.id).padStart(4, '0')}`).toLowerCase();
         const invoiceNo = (voucher.invoice_number || '').toLowerCase();
 
         return (
@@ -160,10 +181,11 @@ const VoucherHistoryPage = () => {
         );
     });
 
-    const handleDownloadPDF = async (voucherId) => {
+    const handleDownloadPDF = async (voucher) => {
+        const voucherId = voucher?.id;
         try {
             const token = getToken();
-            console.log('Downloading PDF for voucher:', voucherId, 'with token:', token ? 'exists' : 'null');
+            console.log('Downloading PDF for voucher:', voucherId, 'jcc:', voucher?.jcc_number, 'status:', voucher?.status);
             const response = await fetch(`/api/jcc/download-jcc-pdf/${voucherId}`, {
                 headers: {
                     'Authorization': `Bearer ${token}`,
@@ -182,7 +204,7 @@ const VoucherHistoryPage = () => {
                     console.error('Download failed (text):', errText);
                     await dialog.alert(`Failed to download PDF: ${errText}`);
                 }
-                return;
+                return false;
             }
 
             // Get the blob from response
@@ -194,16 +216,18 @@ const VoucherHistoryPage = () => {
             // Create a temporary link and trigger download
             const link = document.createElement('a');
             link.href = url;
-            link.setAttribute('download', `JCC${String(voucherId).padStart(4, '0')}.pdf`);
+            link.setAttribute('download', `${voucher?.jcc_number || `JCC${String(voucherId).padStart(4, '0')}`}.pdf`);
             document.body.appendChild(link);
             link.click();
 
             // Clean up
             document.body.removeChild(link);
             window.URL.revokeObjectURL(url);
+            return true;
         } catch (error) {
             console.error('Error downloading PDF:', error);
-            await dialog.alert('Failed to download PDF');
+            await dialog.alert(`Failed to download PDF: ${error?.message || 'Network error'}`);
+            return false;
         }
     };
 
@@ -321,7 +345,7 @@ const VoucherHistoryPage = () => {
             });
 
             await parseApiResponse(response, 'Failed to approve payment');
-            await dialog.alert(`Payment approved for JCC${String(voucher.id).padStart(4, '0')}.`);
+            await dialog.alert(`Payment approved for ${voucher.jcc_number || `JCC${String(voucher.id).padStart(4, '0')}`}.`);
             fetchVouchers();
         } catch (error) {
             console.error('Error approving payment:', error);
@@ -345,7 +369,7 @@ const VoucherHistoryPage = () => {
             });
 
             const data = await parseApiResponse(response, 'Failed to send JCC to supplier');
-            await dialog.alert(`JCC${String(voucher.id).padStart(4, '0')} sent to supplier email ${data?.recipientEmail || ''}`.trim());
+            await dialog.alert(`${voucher.jcc_number || `JCC${String(voucher.id).padStart(4, '0')}`} sent to supplier email ${data?.recipientEmail || ''}`.trim());
             if (paymentLogModal?.id === voucher.id) {
                 await openPaymentLog(paymentLogModal);
             }
@@ -390,7 +414,7 @@ const VoucherHistoryPage = () => {
             const data = await parseApiResponse(response, 'Failed to update payment status');
 
             if (data?.supplierDispatch?.recipientEmail) {
-                await dialog.alert(`JCC${String(paymentLogModal.id).padStart(4, '0')} sent to supplier email ${data.supplierDispatch.recipientEmail}`);
+                await dialog.alert(`${paymentLogModal.jcc_number || `JCC${String(paymentLogModal.id).padStart(4, '0')}`} sent to supplier email ${data.supplierDispatch.recipientEmail}`);
             }
 
             await openPaymentLog(paymentLogModal);
@@ -410,6 +434,8 @@ const VoucherHistoryPage = () => {
             pending_approval_2: { cls: 'bg-amber-50 text-amber-700', label: 'Pending Final Approval' },
             approved: { cls: 'bg-emerald-50 text-emerald-700', label: 'Approved' },
             rejected: { cls: 'bg-red-50 text-red-700', label: 'Rejected' },
+            info_requested: { cls: 'bg-amber-100 text-amber-800', label: 'ℹ Info Requested' },
+            recalled: { cls: 'bg-orange-100 text-orange-800', label: '↩ Recalled' },
         };
 
         const style = statusColors[status] || statusColors.pending;
@@ -419,6 +445,59 @@ const VoucherHistoryPage = () => {
                 {style.label}
             </span>
         );
+    };
+
+    // Reminder is only allowed after the approver has held the claim for 3 days.
+    // Measured from submission (L1) or Level-1 approval (L2); SQLite times are UTC.
+    const REMIND_MIN_DAYS = 3;
+    const remindEligible = (voucher) => {
+        const since = voucher.status === 'pending_approval_2'
+            ? (voucher.approver1_date || voucher.created_at)
+            : voucher.created_at;
+        if (!since) return false;
+        let s = String(since).trim();
+        if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) s = s.replace(' ', 'T') + 'Z';
+        else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(s)) s = s + 'Z';
+        const d = new Date(s);
+        if (Number.isNaN(d.getTime())) return false;
+        return Math.floor((Date.now() - d) / 86400000) >= REMIND_MIN_DAYS;
+    };
+
+    // Recall your own claim to fix a mistake — keeps the same JCC number and goes
+    // back through approval after you resubmit.
+    const handleRecall = async (voucher) => {
+        const jccId = voucher.jcc_number || `JCC${String(voucher.id).padStart(4, '0')}`;
+        const ok = await dialog.confirm(`Recall ${jccId}? It will be pulled back so you can edit it and resubmit under the same number (it then returns for approval).`, { title: 'Recall Claim', confirmLabel: 'Recall' });
+        if (!ok) return;
+        const reason = window.prompt('Reason for recalling (optional):', '') || '';
+        try {
+            const res = await fetch(`/api/jcc/vouchers/${voucher.id}/recall`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${getToken()}`, 'X-Device-ID': getDeviceId() },
+                body: JSON.stringify({ reason }),
+            });
+            const data = await res.json();
+            await dialog.alert(res.ok ? (data.message || 'Claim recalled — edit and resubmit it below.') : (data.error || 'Could not recall.'));
+            if (res.ok) fetchVouchers();
+        } catch (err) {
+            console.error('Error recalling:', err);
+            await dialog.alert('Could not recall the claim. Please try again.');
+        }
+    };
+
+    // Send a manual reminder to the current approver (rate-limited server-side)
+    const handleRemind = async (voucher) => {
+        try {
+            const res = await fetch(`/api/jcc/vouchers/${voucher.id}/remind`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${getToken()}`, 'X-Device-ID': getDeviceId() },
+            });
+            const data = await res.json();
+            await dialog.alert(res.ok ? (data.message || 'Reminder sent.') : (data.error || 'Could not send reminder.'));
+        } catch (error) {
+            console.error('Error sending reminder:', error);
+            await dialog.alert('Could not send reminder. Please try again.');
+        }
     };
 
     const pendingCount = vouchers.filter((v) => v.status === 'pending').length;
@@ -490,7 +569,7 @@ const VoucherHistoryPage = () => {
                         placeholder="Search by SR No., Voucher ID, or Invoice No..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
-                        className="w-full rounded-lg border border-slate-300 bg-white py-3 pl-10 pr-4 text-sm text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                        className="premium-search-field w-full rounded-lg border border-slate-300 bg-white py-3 pl-10 pr-4 text-sm text-slate-700 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                     />
                 </div>
                 <div className="mt-3 flex items-center justify-between gap-3">
@@ -530,7 +609,7 @@ const VoucherHistoryPage = () => {
                         <tbody>
                             {filteredVouchers.length === 0 ? (
                                 <tr>
-                                    <td colSpan="9" className="px-4 py-12 text-center text-sm text-slate-500">
+                                    <td colSpan="11" className="px-4 py-12 text-center text-sm text-slate-500">
                                         {searchTerm ? `No vouchers found matching "${searchTerm}"` : 'No vouchers found'}
                                     </td>
                                 </tr>
@@ -541,7 +620,7 @@ const VoucherHistoryPage = () => {
                                             {index + 1}
                                         </td>
                                         <td className="px-4 py-3 font-semibold text-slate-900">
-                                            JCC{String(voucher.id).padStart(4, '0')}
+                                            {voucher.jcc_number || `JCC${String(voucher.id).padStart(4, '0')}`}
                                         </td>
                                         <td className="px-4 py-3 text-sm text-slate-700">{voucher.supplier}</td>
                                         <td className="px-4 py-3 text-sm text-slate-700">{voucher.invoice_number}</td>
@@ -572,32 +651,93 @@ const VoucherHistoryPage = () => {
                                         <td className="px-4 py-3">
                                             <div className="flex items-center gap-2">
 
+                                                {/* Clone into a new claim — only for roles that can create claims */}
+                                                {['initiator', 'user', 'admin'].includes(user?.role) && (
+                                                <button
+                                                    onClick={() => navigate('/voucher', { state: { prefill: {
+                                                        supplier: voucher.supplier || '',
+                                                        buyerName: voucher.buyer_name || '',
+                                                        buyerEmail: voucher.buyer_email || '',
+                                                        department: voucher.department || '',
+                                                        expenseBookingLocation: voucher.expense_booking_location || '',
+                                                        natureOfExpenses: voucher.nature_of_expenses || '',
+                                                        poNumber: voucher.po_number || '',
+                                                        projectCode: voucher.project_code || '',
+                                                        projectName: voucher.project_name || '',
+                                                        approver1: voucher.approver1_name || '',
+                                                        approver2: voucher.approver2_name || '',
+                                                    } } })}
+                                                    className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50"
+                                                    title="Clone into a new claim (vendor, PO, project, approvers)"
+                                                >
+                                                    <Copy className="h-4 w-4" />
+                                                    Clone
+                                                </button>
+                                                )}
 
                                                 {(voucher.status === 'approved' || voucher.status === 'processed') && (
-                                                    <button
-                                                        onClick={() => handleDownloadPDF(voucher.id)}
+                                                    <DownloadButton
+                                                        onDownload={() => handleDownloadPDF(voucher)}
                                                         className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50"
                                                         title="Download JCC PDF"
                                                     >
                                                         <Download className="h-4 w-4" />
                                                         PDF
-                                                    </button>
+                                                    </DownloadButton>
                                                 )}
 
-                                                {/* Resubmit Button for Rejected Vouchers */}
-                                                {(voucher.status === 'rejected' && (!user.id || user.id === voucher.user_id || user.role === 'admin')) && (
+                                                {/* Resubmit — for rejected OR recalled claims (same JCC number, back to approval) */}
+                                                {(['rejected', 'recalled'].includes(voucher.status) && (!user.id || user.id === voucher.user_id || user.role === 'admin')) && (
                                                     <button
                                                         onClick={() => openResubmitModal(voucher)}
                                                         className="inline-flex items-center gap-1 rounded-md bg-amber-500 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-amber-600"
-                                                        title="Correction Required - Resubmit"
+                                                        title={voucher.status === 'recalled' ? 'Edit your recalled claim and resubmit' : 'Correction Required - Resubmit'}
                                                     >
                                                         <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                                                         </svg>
-                                                        Resubmit
+                                                        {voucher.status === 'recalled' ? 'Edit & Resubmit' : 'Resubmit'}
+                                                    </button>
+                                                )}
+
+                                                {/* Recall — the claimant (or admin) can pull back their own claim to fix it */}
+                                                {(['pending_approval_1', 'pending_approval_2', 'approved'].includes(voucher.status) && (!user.id || user.id === voucher.user_id || user.role === 'admin')) && (
+                                                    <button
+                                                        onClick={() => handleRecall(voucher)}
+                                                        className="inline-flex items-center gap-1 rounded-md border border-orange-300 px-2.5 py-1.5 text-xs font-semibold text-orange-700 hover:bg-orange-50"
+                                                        title="Recall this claim to fix a mistake — same JCC number, goes back for approval"
+                                                    >
+                                                        ↩ Recall
+                                                    </button>
+                                                )}
+
+                                                {/* Remind approver — for the claimant on pending claims, after 3 days */}
+                                                {(['pending_approval_1', 'pending_approval_2'].includes(voucher.status) && remindEligible(voucher) && (!user.id || user.id === voucher.user_id || user.role === 'admin')) && (
+                                                    <button
+                                                        onClick={() => handleRemind(voucher)}
+                                                        className="inline-flex items-center gap-1 rounded-md border border-amber-300 px-2.5 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-50"
+                                                        title="Remind the current approver (once per day)"
+                                                    >
+                                                        🔔 Remind
+                                                    </button>
+                                                )}
+
+                                                {/* Respond button for claims where the approver asked for more info */}
+                                                {(voucher.status === 'info_requested' && (!user.id || user.id === voucher.user_id || user.role === 'admin')) && (
+                                                    <button
+                                                        onClick={() => openResubmitModal(voucher, 'respond')}
+                                                        className="inline-flex items-center gap-1 rounded-md bg-amber-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
+                                                        title={voucher.info_request_note ? `Approver asked: ${voucher.info_request_note}` : 'Respond and resend'}
+                                                    >
+                                                        ℹ Respond
                                                     </button>
                                                 )}
                                             </div>
+                                            {voucher.status === 'info_requested' && voucher.info_request_note && (
+                                                <div className="mt-1 max-w-xs text-xs text-amber-800" title={voucher.info_request_note}>
+                                                    <span className="font-semibold">{voucher.info_request_by || 'Approver'} asks:</span> {voucher.info_request_note.length > 60 ? voucher.info_request_note.slice(0, 60) + '…' : voucher.info_request_note}
+                                                </div>
+                                            )}
                                         </td>
                                     </tr>
                                 ))
@@ -611,7 +751,7 @@ const VoucherHistoryPage = () => {
                 <div className="voucher-modal-backdrop">
                     <div className="voucher-modal voucher-modal-lg">
                         <div className="voucher-modal-header">
-                            <h3 className="voucher-modal-title">Payment Log - JCC{String(paymentLogModal.id).padStart(4, '0')}</h3>
+                            <h3 className="voucher-modal-title">Payment Log - {paymentLogModal.jcc_number || `JCC${String(paymentLogModal.id).padStart(4, '0')}`}</h3>
                             <button onClick={closePaymentLogModal} className="btn btn-outline">Close</button>
                         </div>
 
@@ -744,7 +884,7 @@ const VoucherHistoryPage = () => {
                                                     </div>
                                                     <div className="voucher-modal-muted">{new Date(log.created_at).toLocaleString()}</div>
                                                 </div>
-                                                <div style={{ color: '#475569', fontSize: '0.875rem' }}>by {log.action_by_name || 'system'}</div>
+                                                <div style={{ color: 'var(--text-body)', fontSize: '0.875rem' }}>by {log.action_by_name || 'system'}</div>
                                             </div>
                                         ))
                                     )}
@@ -781,24 +921,66 @@ const VoucherHistoryPage = () => {
                     <div className="voucher-modal voucher-modal-md">
                         <div className="voucher-modal-header voucher-modal-header-lined">
                             <h2 className="voucher-modal-title">
-                                Resubmit Voucher
+                                {resubmitMode === 'respond' ? 'Respond to Approver' : 'Resubmit Voucher'}
                             </h2>
                             <span className="voucher-modal-chip">
-                                JCC{String(resubmitVoucher.id).padStart(4, '0')}
+                                {resubmitVoucher.jcc_number || `JCC${String(resubmitVoucher.id).padStart(4, '0')}`}
                             </span>
                         </div>
 
-                        <div className="voucher-modal-warning">
-                            <div className="voucher-modal-warning-head">
-                                <svg width="20" height="20" fill="none" stroke="#DC2626" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                                </svg>
-                                <strong>Rejection Reason</strong>
+                        {resubmitMode === 'respond' ? (
+                            <div className="voucher-modal-warning" style={{ background: '#FFFBEB', borderColor: '#FCD34D' }}>
+                                <div className="voucher-modal-warning-head">
+                                    <svg width="20" height="20" fill="none" stroke="#D97706" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    <strong>{resubmitVoucher.info_request_by || 'Approver'} needs more info</strong>
+                                </div>
+                                <p style={{ margin: 0, color: '#92400E', fontSize: '0.95rem', lineHeight: 1.5 }}>
+                                    {resubmitVoucher.info_request_note}
+                                </p>
                             </div>
-                            <p style={{ margin: 0, color: '#7F1D1D', fontSize: '0.95rem', lineHeight: 1.5 }}>
-                                {resubmitVoucher.approver1_status === 'rejected' ? resubmitVoucher.approver1_remark : resubmitVoucher.approver2_remark}
-                            </p>
-                        </div>
+                        ) : resubmitVoucher.status === 'recalled' ? (
+                            <div className="voucher-modal-warning" style={{ background: '#FFF7ED', borderColor: '#FDBA74' }}>
+                                <div className="voucher-modal-warning-head">
+                                    <svg width="20" height="20" fill="none" stroke="#EA580C" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a5 5 0 015 5v2M3 10l4-4m-4 4l4 4" />
+                                    </svg>
+                                    <strong>You recalled this claim</strong>
+                                </div>
+                                <p style={{ margin: 0, color: '#9A3412', fontSize: '0.95rem', lineHeight: 1.5 }}>
+                                    {resubmitVoucher.recall_reason
+                                        ? resubmitVoucher.recall_reason
+                                        : 'Edit any fields below and resubmit — it keeps the same JCC number and goes back for approval. The PO budget is not charged twice.'}
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="voucher-modal-warning">
+                                <div className="voucher-modal-warning-head">
+                                    <svg width="20" height="20" fill="none" stroke="#DC2626" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                    </svg>
+                                    <strong>Rejection Reason</strong>
+                                </div>
+                                <p style={{ margin: 0, color: '#7F1D1D', fontSize: '0.95rem', lineHeight: 1.5 }}>
+                                    {resubmitVoucher.approver1_status === 'rejected' ? resubmitVoucher.approver1_remark : resubmitVoucher.approver2_remark}
+                                </p>
+                            </div>
+                        )}
+
+                        {resubmitMode === 'respond' && (
+                            <div className="input-group" style={{ marginBottom: '1.25rem' }}>
+                                <label className="input-label">Your response to the approver</label>
+                                <textarea
+                                    rows="2"
+                                    value={resubmitData.responseNote}
+                                    onChange={(e) => setResubmitData({ ...resubmitData, responseNote: e.target.value })}
+                                    className="input-field"
+                                    placeholder="Reply to their question and update any fields below if needed"
+                                    style={{ resize: 'vertical', minHeight: '70px' }}
+                                />
+                            </div>
+                        )}
 
                         <div className="input-group" style={{ marginBottom: '1.25rem' }}>
                             <label className="input-label">
@@ -866,7 +1048,7 @@ const VoucherHistoryPage = () => {
                                 onClick={handleSubmitResubmission}
                                 className="btn btn-primary"
                             >
-                                Confirm Resubmission
+                                {resubmitMode === 'respond' ? 'Send Response & Resend' : 'Confirm Resubmission'}
                             </button>
                         </div>
                     </div>

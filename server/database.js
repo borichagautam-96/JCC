@@ -1,4 +1,4 @@
-import initSqlJs from 'sql.js';
+import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import path from 'path';
@@ -7,22 +7,58 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const dbPath = path.join(__dirname, '../database.db');
+const dbPath = process.env.DB_PATH || path.join(__dirname, '../database.db');
 
-let db = null;
+let rawDb = null; // native better-sqlite3 Database
+let db = null;    // sql.js-compatible shim (keeps existing code + call sites working)
 
-// Initialize SQL.js database
-const initDatabase = async () => {
-  const SQL = await initSqlJs();
+// better-sqlite3 rejects `undefined` and boolean bind params; sql.js tolerated
+// them. Coerce undefined→null and boolean→0/1 to preserve existing behaviour.
+const normParams = (params) => (Array.isArray(params) ? params : [params]).map((p) =>
+  p === undefined ? null : (typeof p === 'boolean' ? (p ? 1 : 0) : p)
+);
 
-  // Load existing database or create new one
-  let buffer;
-  if (fs.existsSync(dbPath)) {
-    buffer = fs.readFileSync(dbPath);
-    db = new SQL.Database(buffer);
-  } else {
-    db = new SQL.Database();
-  }
+// Minimal shim so the existing migration/seed code and every `db.exec(...)`
+// result-reader (which expected sql.js's [{columns, values}] shape) keep working
+// unchanged on top of the native driver.
+const makeShim = (raw) => ({
+  prepare: (sql) => {
+    const stmt = raw.prepare(sql);
+    return {
+      run: (...params) => stmt.run(...normParams(params)),
+      get: (...params) => stmt.get(...normParams(params)) ?? null,
+      all: (...params) => stmt.all(...normParams(params)),
+    };
+  },
+  // DDL / no-param → exec; parameterised → prepared run
+  run: (sql, params) => {
+    if (params === undefined) { raw.exec(sql); return; }
+    raw.prepare(sql).run(...normParams(params));
+  },
+  // Row-returning SQL (SELECT/PRAGMA) → sql.js-shaped [{columns, values}];
+  // everything else just executes (supports multi-statement DDL).
+  exec: (sql) => {
+    const head = String(sql).replace(/^[\s(]+/, '').slice(0, 6).toUpperCase();
+    if (head === 'SELECT' || head === 'PRAGMA') {
+      const rows = raw.prepare(sql).all();
+      if (!rows.length) return [];
+      const columns = Object.keys(rows[0]);
+      return [{ columns, values: rows.map((r) => columns.map((c) => r[c])) }];
+    }
+    raw.exec(sql);
+    return [];
+  },
+});
+
+// Initialize the database (synchronous with better-sqlite3)
+const initDatabase = () => {
+  rawDb = new Database(dbPath);
+  rawDb.pragma('journal_mode = WAL'); // durability + real concurrency
+  // Match the previous engine (sql.js) which did NOT enforce foreign keys, so this
+  // migration changes durability only — not insert/delete semantics. (Can be turned
+  // on later as a separate, tested change.)
+  rawDb.pragma('foreign_keys = OFF');
+  db = makeShim(rawDb);
 
   // Create tables
   db.run(`
@@ -95,6 +131,8 @@ const initDatabase = async () => {
       po_number TEXT UNIQUE NOT NULL,
       description TEXT,
       vendor_name TEXT,
+      buyer_name TEXT,
+      buyer_email TEXT,
       total_budget DECIMAL(15, 2) NOT NULL,
       start_date DATE,
       end_date DATE,
@@ -118,8 +156,35 @@ const initDatabase = async () => {
       saveDatabase();
       console.log('✓ po_date column added successfully');
     }
+
+    if (!columnNames.includes('buyer_name')) {
+      db.exec('ALTER TABLE purchase_orders ADD COLUMN buyer_name TEXT');
+      saveDatabase();
+      console.log('✓ buyer_name column added to purchase_orders');
+    }
+
+    if (!columnNames.includes('buyer_email')) {
+      db.exec('ALTER TABLE purchase_orders ADD COLUMN buyer_email TEXT');
+      saveDatabase();
+      console.log('✓ buyer_email column added to purchase_orders');
+    }
   } catch (error) {
     console.error('Error adding po_date column:', error);
+  }
+
+  // Seed buyer contact for an existing PO (idempotent update)
+  try {
+    const buyerName = 'JIGNESH R SHAH';
+    const buyerEmail = 'JIGNESH.SHAH@LARSENTOUBRO.COM';
+
+    db.prepare(`
+      UPDATE purchase_orders
+      SET buyer_name = ?, buyer_email = ?
+      WHERE upper(trim(po_number)) IN ('P0L010766', 'POL010766')
+    `).run(buyerName, buyerEmail);
+    saveDatabase();
+  } catch (error) {
+    console.error('Error seeding buyer contact for PO:', error);
   }
 
   // Migration: Update invoices table CHECK constraint to include 'voucher_created' status
@@ -131,7 +196,9 @@ const initDatabase = async () => {
     if (tableSql && !tableSql.includes("'voucher_created'")) {
       console.log('Updating invoices table to include voucher_created status...');
 
-      // Create a new table with the updated constraint
+      // Create the new table with the FULL schema (this previously listed only a
+      // subset of columns, which silently dropped the assignment/acceptance
+      // columns and their data on rebuild).
       db.exec(`
         CREATE TABLE invoices_new (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,6 +209,16 @@ const initDatabase = async () => {
           invoice_date DATE,
           file_path TEXT,
           assigned_to TEXT,
+          assigned_to_user_id INTEGER,
+          assigned_to_name TEXT,
+          assigned_by_user_id INTEGER,
+          assigned_by_name TEXT,
+          assigned_at DATETIME,
+          accepted_by_user_id INTEGER,
+          accepted_by_name TEXT,
+          accepted_at DATETIME,
+          voucher_submitted_at DATETIME,
+          completed_at DATETIME,
           po_number TEXT,
           status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected', 'assigned', 'voucher_created')),
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -149,21 +226,19 @@ const initDatabase = async () => {
         )
       `);
 
-      // Copy all data from old table to new table
-      db.exec(`
-        INSERT INTO invoices_new (id, user_id, vendor_name, invoice_number, amount, invoice_date, file_path, assigned_to, po_number, status, created_at)
-        SELECT id, user_id, vendor_name, invoice_number, amount, invoice_date, file_path, assigned_to, po_number, status, created_at
-        FROM invoices
-      `);
+      // Copy every column that actually exists in the old table (intersection),
+      // so no data is lost regardless of how old the source schema is.
+      const targetCols = ['id', 'user_id', 'vendor_name', 'invoice_number', 'amount', 'invoice_date', 'file_path', 'assigned_to', 'assigned_to_user_id', 'assigned_to_name', 'assigned_by_user_id', 'assigned_by_name', 'assigned_at', 'accepted_by_user_id', 'accepted_by_name', 'accepted_at', 'voucher_submitted_at', 'completed_at', 'po_number', 'status', 'created_at'];
+      const oldInvoiceCols = (db.exec("PRAGMA table_info(invoices)")[0]?.values || []).map(c => c[1]);
+      const copyCols = targetCols.filter(c => oldInvoiceCols.includes(c));
+      db.exec(`INSERT INTO invoices_new (${copyCols.join(', ')}) SELECT ${copyCols.join(', ')} FROM invoices`);
 
-      // Drop old table
+      // Drop old table + rename
       db.exec('DROP TABLE invoices');
-
-      // Rename new table to invoices
       db.exec('ALTER TABLE invoices_new RENAME TO invoices');
 
       saveDatabase();
-      console.log('✓ Invoices table updated with voucher_created status support');
+      console.log('✓ Invoices table updated with voucher_created status support (all columns preserved)');
     }
   } catch (error) {
     console.error('Error updating invoices table constraint:', error);
@@ -207,21 +282,6 @@ const initDatabase = async () => {
     console.log('Skipping migration check (table might be new)');
   }
 
-  // Migration: Mark existing invoices that have vouchers created as 'voucher_created'
-  try {
-    const result = db.exec(`
-      UPDATE invoices 
-      SET status = 'voucher_created' 
-      WHERE invoice_number IN (
-        SELECT DISTINCT invoice_number FROM voucher_requests WHERE invoice_number IS NOT NULL AND invoice_number != ''
-      )
-      AND status IN ('pending', 'assigned')
-    `);
-    console.log('✓ Migrated invoices with existing vouchers to voucher_created status');
-  } catch (error) {
-    console.log('Note: Could not run invoice migration:', error.message);
-  }
-
   db.run(`
     CREATE TABLE IF NOT EXISTS jcc_entries (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -244,10 +304,25 @@ const initDatabase = async () => {
       department TEXT,
       claimed_date DATE,
       supplier TEXT,
+      buyer_name TEXT,
+      buyer_email TEXT,
       expense_booking_location TEXT,
       description TEXT,
       invoice_number TEXT,
       invoice_date DATE,
+      outdoor_duty INTEGER DEFAULT 0,
+      outdoor_from DATE,
+      outdoor_to DATE,
+      outdoor_remark TEXT,
+      info_requested_level INTEGER,
+      info_request_note TEXT,
+      info_request_by TEXT,
+      info_request_at DATETIME,
+      info_response_note TEXT,
+      approval_nonce INTEGER DEFAULT 0,
+      recall_reason TEXT,
+      recalled_by TEXT,
+      recalled_at DATETIME,
       basic_amount DECIMAL(10, 2),
       gross_amount DECIMAL(10, 2),
       nature_of_expenses TEXT,
@@ -283,6 +358,23 @@ const initDatabase = async () => {
     )
   `);
 
+  // Migration: Mark existing invoices that have vouchers created as 'voucher_created'.
+  // Runs here (after voucher_requests exists) — previously it ran before the table
+  // was created, so on a fresh DB the backfill silently never ran.
+  try {
+    db.exec(`
+      UPDATE invoices
+      SET status = 'voucher_created'
+      WHERE invoice_number IN (
+        SELECT DISTINCT invoice_number FROM voucher_requests WHERE invoice_number IS NOT NULL AND invoice_number != ''
+      )
+      AND status IN ('pending', 'assigned')
+    `);
+    console.log('✓ Migrated invoices with existing vouchers to voucher_created status');
+  } catch (error) {
+    console.log('Note: Could not run invoice voucher_created backfill:', error.message);
+  }
+
   // Migration: Add approval columns if they don't exist
   try {
     const tableInfoResult = db.exec("PRAGMA table_info(voucher_requests)");
@@ -312,6 +404,80 @@ const initDatabase = async () => {
     console.log('✓ Approval columns checked/added');
   } catch (error) {
     console.error('Error checking/adding approval columns:', error);
+  }
+
+  // Add buyer contact columns to voucher_requests
+  try {
+    const voucherInfo = db.exec("PRAGMA table_info(voucher_requests)");
+    const voucherColumns = voucherInfo.length > 0 ? voucherInfo[0].values : [];
+    const voucherColumnNames = voucherColumns.map(col => col[1]);
+
+    const buyerColumns = [
+      { name: 'buyer_name', type: 'TEXT' },
+      { name: 'buyer_email', type: 'TEXT' }
+    ];
+
+    buyerColumns.forEach(col => {
+      if (!voucherColumnNames.includes(col.name)) {
+        db.exec(`ALTER TABLE voucher_requests ADD COLUMN ${col.name} ${col.type}`);
+        saveDatabase();
+      }
+    });
+  } catch (error) {
+    console.error('Error adding buyer columns to voucher_requests:', error);
+  }
+
+  // Add outdoor-duty exception columns to voucher_requests
+  try {
+    const voucherInfo = db.exec("PRAGMA table_info(voucher_requests)");
+    const voucherColumns = voucherInfo.length > 0 ? voucherInfo[0].values : [];
+    const voucherColumnNames = voucherColumns.map(col => col[1]);
+
+    const outdoorColumns = [
+      { name: 'outdoor_duty', type: 'INTEGER DEFAULT 0' },
+      { name: 'outdoor_from', type: 'DATE' },
+      { name: 'outdoor_to', type: 'DATE' },
+      { name: 'outdoor_remark', type: 'TEXT' }
+    ];
+
+    outdoorColumns.forEach(col => {
+      if (!voucherColumnNames.includes(col.name)) {
+        console.log(`Adding ${col.name} column to voucher_requests table...`);
+        db.exec(`ALTER TABLE voucher_requests ADD COLUMN ${col.name} ${col.type}`);
+        saveDatabase();
+      }
+    });
+  } catch (error) {
+    console.error('Error adding outdoor-duty columns to voucher_requests:', error);
+  }
+
+  // Add "Request more info" (soft-return) columns to voucher_requests
+  try {
+    const voucherInfo = db.exec("PRAGMA table_info(voucher_requests)");
+    const voucherColumns = voucherInfo.length > 0 ? voucherInfo[0].values : [];
+    const voucherColumnNames = voucherColumns.map(col => col[1]);
+
+    const infoColumns = [
+      { name: 'info_requested_level', type: 'INTEGER' },
+      { name: 'info_request_note', type: 'TEXT' },
+      { name: 'info_request_by', type: 'TEXT' },
+      { name: 'info_request_at', type: 'DATETIME' },
+      { name: 'info_response_note', type: 'TEXT' },
+      { name: 'approval_nonce', type: 'INTEGER DEFAULT 0' },
+      { name: 'recall_reason', type: 'TEXT' },
+      { name: 'recalled_by', type: 'TEXT' },
+      { name: 'recalled_at', type: 'DATETIME' }
+    ];
+
+    infoColumns.forEach(col => {
+      if (!voucherColumnNames.includes(col.name)) {
+        console.log(`Adding ${col.name} column to voucher_requests table...`);
+        db.exec(`ALTER TABLE voucher_requests ADD COLUMN ${col.name} ${col.type}`);
+        saveDatabase();
+      }
+    });
+  } catch (error) {
+    console.error('Error adding info-request columns to voucher_requests:', error);
   }
 
   // ===== NEW: Customer Management Tables =====
@@ -434,23 +600,15 @@ const initDatabase = async () => {
     ];
 
     const vendorNameExists = (name) => {
-      const stmt = db.prepare(`
+      return !!db.prepare(`
         SELECT id FROM vendors
         WHERE LOWER(TRIM(vendor_name)) = LOWER(TRIM(?))
         LIMIT 1
-      `);
-      stmt.bind([name]);
-      const exists = stmt.step();
-      stmt.free();
-      return exists;
+      `).get(name);
     };
 
     const vendorCodeExists = (code) => {
-      const stmt = db.prepare('SELECT id FROM vendors WHERE vendor_code = ? LIMIT 1');
-      stmt.bind([code]);
-      const exists = stmt.step();
-      stmt.free();
-      return exists;
+      return !!db.prepare('SELECT id FROM vendors WHERE vendor_code = ? LIMIT 1').get(code);
     };
 
     let seededCount = 0;
@@ -685,6 +843,22 @@ const initDatabase = async () => {
     )
   `);
 
+  // Migration: Add description_of_material column to voucher_materials if it doesn't exist
+  try {
+    const tableInfoResult = db.exec("PRAGMA table_info(voucher_materials)");
+    const columns = tableInfoResult.length > 0 ? tableInfoResult[0].values : [];
+    const columnNames = columns.map(col => col[1]);
+
+    if (!columnNames.includes('description_of_material')) {
+      console.log('Adding description_of_material column to voucher_materials table...');
+      db.exec("ALTER TABLE voucher_materials ADD COLUMN description_of_material TEXT");
+      saveDatabase();
+      console.log('✓ description_of_material column added successfully');
+    }
+  } catch (error) {
+    console.error('Error adding description_of_material column:', error);
+  }
+
   // Asset lifecycle tracking
   db.run(`
     CREATE TABLE IF NOT EXISTS assets (
@@ -860,6 +1034,218 @@ const initDatabase = async () => {
       read INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+  `);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRINTING MODULE (JCC Jobs) — sibling to the JCC/voucher module.
+  // Two tables: print_jobs (request header, Form 1 + lifecycle) and
+  // print_job_documents (one row per document; a job has many). See
+  // docs/PRINTING_MODULE_PLAN.md for the full workflow spec.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Debit Code drives the Phase-1 project dropdown (projects filtered by debit_code).
+  // Idempotent: the column may already exist on re-run.
+  try {
+    db.exec('ALTER TABLE projects ADD COLUMN debit_code TEXT');
+  } catch (_) { /* column already exists */ }
+
+  // Module-scoped printing roles — INDEPENDENT of the global JCC `role`. A user can
+  // be a plain JCC `user` yet a Printing Coordinator/Operator. Kept as flags rather
+  // than new global roles so JCC permissions are never affected.
+  try {
+    db.exec('ALTER TABLE users ADD COLUMN is_printer_operator INTEGER DEFAULT 0');
+  } catch (_) { /* column already exists */ }
+  try {
+    db.exec('ALTER TABLE users ADD COLUMN is_printer_coordinator INTEGER DEFAULT 0');
+  } catch (_) { /* column already exists */ }
+
+  // ── Multi-site locations ────────────────────────────────────────────────────
+  // A site/branch (e.g. Talegaon, Powai). Jobs are routed to coordinators/operators
+  // at the job's location. Users have a home location captured at profile setup.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS locations (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      name       TEXT NOT NULL,
+      code       TEXT,
+      active     INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  // Seed a couple of example sites on first run (admin can rename/add/remove).
+  try {
+    const locCount = db.prepare('SELECT COUNT(*) AS c FROM locations').get().c;
+    if (locCount === 0) {
+      const insertLoc = db.prepare('INSERT INTO locations (name, code) VALUES (?, ?)');
+      insertLoc.run('Powai', 'PWI');
+      insertLoc.run('Talegaon', 'TLG');
+    }
+  } catch (e) { console.error('location seed failed:', e); }
+
+  // Home location for the user (nullable — set at profile setup or by admin).
+  try {
+    db.exec('ALTER TABLE users ADD COLUMN location_id INTEGER');
+  } catch (_) { /* column already exists */ }
+  // Target site where a print job should be handled (defaults from the requester).
+  try {
+    db.exec('ALTER TABLE print_jobs ADD COLUMN location_id INTEGER');
+  } catch (_) { /* column already exists */ }
+
+  // Extended Request Information fields (Initiator / Recipient / Printing Requirement).
+  const printJobExtraColumns = [
+    'shipset_batch TEXT',
+    'classification TEXT',
+    'number_of_pages INTEGER',
+    'lead_name TEXT',
+    'edc TEXT',
+    'recipient_name TEXT',
+    'recipient_contact TEXT',
+    'recipient_address TEXT',
+    'vl_review TEXT',
+    'drp_remarks TEXT',
+    'pre_printing_checklist TEXT',
+    'purpose TEXT',
+    'printing_form_available TEXT',
+  ];
+  printJobExtraColumns.forEach((col) => {
+    try { db.exec(`ALTER TABLE print_jobs ADD COLUMN ${col}`); } catch (_) { /* exists */ }
+  });
+
+  // Rush/priority flag (1 = rush → jumps the queue).
+  try { db.exec('ALTER TABLE print_jobs ADD COLUMN priority INTEGER DEFAULT 0'); } catch (_) { /* exists */ }
+
+  // Dispatch / courier tracking (optional stage after Ready for Collection).
+  const printJobDispatchColumns = [
+    'courier_name TEXT',
+    'docket_no TEXT',
+    'dispatch_books INTEGER',
+    'dispatch_packets TEXT',
+    'dispatch_remarks TEXT',
+    'dispatched_by TEXT',
+    'dispatched_at DATETIME',
+    'received_by TEXT',
+    'delivered_at DATETIME',
+  ];
+  printJobDispatchColumns.forEach((col) => {
+    try { db.exec(`ALTER TABLE print_jobs ADD COLUMN ${col}`); } catch (_) { /* exists */ }
+  });
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS print_jobs (
+      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+      request_id            TEXT UNIQUE NOT NULL,        -- REQ0001 (created at Phase 1)
+      job_number            TEXT UNIQUE,                 -- JOB0001 (assigned at submit, NULL until then)
+      request_date          DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+      -- Form 1 (Request Information)
+      employee_name         TEXT,
+      employee_id           TEXT,
+      department_name       TEXT,
+      department_code       TEXT,
+      debit_code            TEXT,
+      project_name          TEXT,
+      dt_number             TEXT,
+      remarks               TEXT,
+
+      -- Lifecycle
+      status                TEXT NOT NULL DEFAULT 'draft',
+      created_by            INTEGER NOT NULL,
+      coordinator_id        INTEGER,
+      coordinator_remarks   TEXT,
+      return_reason         TEXT,
+      reject_reason         TEXT,
+      assigned_operator_id  INTEGER,
+
+      -- Per-phase timestamps (tracking + reports)
+      submitted_at          DATETIME,
+      accepted_at           DATETIME,
+      returned_at           DATETIME,
+      rejected_at           DATETIME,
+      assigned_at           DATETIME,
+      printing_started_at   DATETIME,
+      printing_completed_at DATETIME,
+      ready_at              DATETIME,
+      completed_at          DATETIME,
+
+      created_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (created_by)           REFERENCES users(id),
+      FOREIGN KEY (coordinator_id)       REFERENCES users(id),
+      FOREIGN KEY (assigned_operator_id) REFERENCES users(id)
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS print_job_documents (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id              INTEGER NOT NULL,
+      document_name       TEXT NOT NULL,
+      quantity            INTEGER NOT NULL DEFAULT 1,
+      pdf_path            TEXT,
+      num_pages           INTEGER,
+      print_side          TEXT,
+      paper_size          TEXT,
+      paper_gsm           TEXT,
+      color_mode          TEXT,
+      cover_page          TEXT,
+      soft_lamination     INTEGER DEFAULT 0,
+      separators          INTEGER DEFAULT 0,
+      separator_thickness TEXT,
+      hole_punch          INTEGER DEFAULT 0,
+      binding_type        TEXT,
+      file_colour         TEXT,
+      remarks             TEXT,
+      finishing_done      INTEGER DEFAULT 0,
+      created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (job_id) REFERENCES print_jobs(id) ON DELETE CASCADE
+    )
+  `);
+
+  // Saved JCC drafts — one row per unfinished claim form (raw form JSON).
+  // Kept separate from voucher_requests so half-filled claims never enter the
+  // approval pipeline, trigger PO guards, or consume JCC numbers.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS voucher_drafts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      title TEXT,
+      form_data TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+  `);
+
+  // Manual "remind approver" nudges from the claimant (rate-limited to 1/day/claim).
+  // Also serves as an audit trail of who nudged whom and when.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS jcc_reminder_nudges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      voucher_id INTEGER NOT NULL,
+      reminded_by_id INTEGER,
+      reminded_by_name TEXT,
+      approver_name TEXT,
+      level INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (voucher_id) REFERENCES voucher_requests(id)
+    )
+  `);
+
+  // Approver out-of-office delegations. During [from_date, to_date], the delegate
+  // sees and can act on the delegator's pending approvals (visibility + audit).
+  db.run(`
+    CREATE TABLE IF NOT EXISTS approval_delegations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      delegator_id INTEGER NOT NULL,
+      delegator_name TEXT,
+      delegate_id INTEGER NOT NULL,
+      delegate_name TEXT,
+      from_date DATE NOT NULL,
+      to_date DATE NOT NULL,
+      reason TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (delegator_id) REFERENCES users(id),
+      FOREIGN KEY (delegate_id) REFERENCES users(id)
     )
   `);
 
@@ -1399,93 +1785,20 @@ const initDatabase = async () => {
   }
 };
 
-// Save database to file
-const saveDatabase = () => {
-  const data = db.export();
-  const buffer = Buffer.from(data);
-  fs.writeFileSync(dbPath, buffer);
-};
+// better-sqlite3 persists automatically (WAL journal) — no manual full-file save
+// needed. Kept as a no-op so the many saveDatabase() calls in the migrations above
+// remain valid without change.
+const saveDatabase = () => {};
 
-// Track if we're currently in a transaction
-let inTransaction = false;
+// Native transaction: db.transaction(fn) returns a function that runs fn atomically
+// when invoked — same shape the callers already use: db.transaction(fn)().
+const transaction = (callback) => rawDb.transaction(callback);
 
-// Helper function to run queries
-const runQuery = (sql, params = []) => {
-  // Convert undefined to null for SQL.js compatibility
-  const safeParams = (Array.isArray(params) ? params : [params]).map(p => p === undefined ? null : p);
-  db.run(sql, safeParams);
-
-  // Get the last inserted row ID
-  const result = db.exec('SELECT last_insert_rowid() as id');
-  const lastId = result.length > 0 && result[0].values.length > 0
-    ? result[0].values[0][0]
-    : 0;
-
-  // Only save if we're not in a transaction
-  if (!inTransaction) {
-    saveDatabase();
-  }
-
-  return { lastInsertRowid: lastId };
-};
-
-// Helper function to get single row
-const getQuery = (sql, params = []) => {
-  // Convert undefined to null for SQL.js compatibility
-  const safeParams = (Array.isArray(params) ? params : [params]).map(p => p === undefined ? null : p);
-  const stmt = db.prepare(sql);
-  stmt.bind(safeParams);
-  if (stmt.step()) {
-    const row = stmt.getAsObject();
-    stmt.free();
-    return row;
-  }
-  stmt.free();
-  return null;
-};
-
-// Helper function to get all rows
-const allQuery = (sql, params = []) => {
-  // Convert undefined to null for SQL.js compatibility
-  const safeParams = (Array.isArray(params) ? params : [params]).map(p => p === undefined ? null : p);
-  const stmt = db.prepare(sql);
-  stmt.bind(safeParams);
-  const rows = [];
-  while (stmt.step()) {
-    rows.push(stmt.getAsObject());
-  }
-  stmt.free();
-  return rows;
-};
-
-// Helper function for transactions
-const transaction = (callback) => {
-  return () => {
-    try {
-      inTransaction = true;
-      db.run('BEGIN TRANSACTION');
-      const result = callback();
-      db.run('COMMIT');
-      inTransaction = false;
-      saveDatabase();
-      return result;
-    } catch (error) {
-      db.run('ROLLBACK');
-      inTransaction = false;
-      throw error;
-    }
-  };
-};
-
-// Initialize database on module load
-await initDatabase();
+// Initialize database on module load (synchronous)
+initDatabase();
 
 export default {
-  prepare: (sql) => ({
-    run: (...params) => runQuery(sql, params),
-    get: (...params) => getQuery(sql, params),
-    all: (...params) => allQuery(sql, params),
-  }),
-  exec: (sql) => db.exec(sql),
+  prepare: (sql) => db.prepare(sql), // shim stmt: run/get/all with normalized params
+  exec: (sql) => db.exec(sql),       // shim exec: sql.js-shaped results for SELECT/PRAGMA
   transaction,
 };

@@ -9,6 +9,7 @@ const PROFILE_COMPLETION_ALLOWLIST = new Set([
     '/api/users/me',
     '/api/users/complete-profile',
     '/api/users/change-password',
+    '/api/locations', // needed so the profile-setup popup can load the site dropdown
 ]);
 
 const canBypassProfileCompletion = (req) => {

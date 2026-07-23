@@ -14,7 +14,7 @@
 .voucher-hero h1 {
     margin: 0;
     font-size: 1.85rem;
-    color: #000000;
+    color: var(--text-strong);
 }
 
 .voucher-hero p {
@@ -73,7 +73,14 @@
 .voucher-readonly {
     background: #f5f8fe !important;
     cursor: not-allowed;
-    color: #334155;
+    color: var(--text-body);
+}
+
+.voucher-readonly-ellipsis {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.95rem;
 }
 
 .voucher-grid-3 {
@@ -86,6 +93,10 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--spacing-lg);
+}
+
+.voucher-claim-grid .input-group.full-span {
+    grid-column: 1 / -1;
 }
 
 .voucher-material-card {
@@ -147,7 +158,7 @@
     transform: translateY(-50%);
     width: 20px;
     height: 20px;
-    color: #9ca3af;
+    color: var(--text-faint);
 }
 
 .voucher-search-input {
@@ -260,7 +271,7 @@
 .voucher-modal-title {
     margin: 0;
     font-size: 1.2rem;
-    color: #0f172a;
+    color: var(--text-strong);
 }
 
 .voucher-modal-chip {
@@ -317,7 +328,7 @@
 }
 
 .voucher-modal-muted {
-    color: #64748b;
+    color: var(--text-muted);
 }
 
 .voucher-modal-log-row {
@@ -365,4 +376,74 @@
         min-width: 0;
         width: 100%;
     }
+}
+
+/* Compact Overrides for Entire Voucher Page */
+.voucher-page .input-group {
+    margin-bottom: 0.85rem;
+}
+
+.voucher-page .input-label {
+    font-size: 0.85rem;
+    margin-bottom: 0.25rem;
+}
+
+.voucher-page .input-field {
+    padding: 0.45rem 0.65rem;
+    font-size: 0.85rem;
+    height: 36px;
+}
+
+/* Specific to select fields so they match input height */
+.voucher-page select.input-field {
+    padding-top: 0;
+    padding-bottom: 0;
+}
+
+.voucher-page .voucher-section-card {
+    padding: 1.25rem;
+}
+
+.voucher-page .voucher-section-head {
+    padding: 0.5rem;
+    margin-bottom: 0.85rem;
+}
+
+.voucher-page .voucher-grid-2,
+.voucher-page .voucher-grid-3,
+.voucher-page .voucher-two-col {
+    gap: 1rem;
+}
+
+.voucher-page .voucher-two-col {
+    margin-bottom: 1.25rem;
+}
+
+/* Fix for File Input rendering inside compact fields */
+.voucher-page input[type="file"].input-field {
+    padding: 0.25rem 0.5rem;
+    height: auto;
+    font-size: 0.85rem;
+    cursor: pointer;
+    line-height: 1.5;
+}
+
+/* Ensure the file upload input and Extract button align nicely */
+.voucher-file-upload {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.voucher-file-upload .btn {
+    margin-left: 0 !important; /* Override inline margin */
+}
+
+/* Fix for Textareas rendering inside compact fields */
+.voucher-page textarea.input-field {
+    height: auto;
+    min-height: 80px;
+    resize: vertical;
+    line-height: 1.5;
 }

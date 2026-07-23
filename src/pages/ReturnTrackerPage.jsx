@@ -458,8 +458,8 @@ const ReturnTrackerPage = () => {
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-4" style={{ marginBottom: '1rem' }}>
         <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <div style={{ color: '#64748B', fontSize: '0.8rem', fontWeight: 600 }}>To Return</div>
-          <div style={{ fontSize: '1.7rem', fontWeight: 800, color: '#0F172A' }}>{metrics.toReturn}</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', fontWeight: 600 }}>To Return</div>
+          <div style={{ fontSize: '1.7rem', fontWeight: 800, color: 'var(--text-strong)' }}>{metrics.toReturn}</div>
         </div>
         <div className="rounded-xl border border-red-200 bg-red-50 p-4">
           <div style={{ color: '#991B1B', fontSize: '0.8rem', fontWeight: 600 }}>Overdue</div>
@@ -494,7 +494,7 @@ const ReturnTrackerPage = () => {
 
         <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr auto', gap: '0.5rem', marginTop: '0.75rem' }}>
           <input
-            className="input-field"
+            className="input-field premium-search-field"
             placeholder="Search UID, asset, vendor, assignee..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -524,12 +524,12 @@ const ReturnTrackerPage = () => {
         </div>
 
         <div style={{ marginTop: '0.9rem' }}>
-          <div style={{ fontWeight: 600, color: '#334155', marginBottom: '0.45rem' }}>
+          <div style={{ fontWeight: 600, color: 'var(--text-body)', marginBottom: '0.45rem' }}>
             What to return and return history
           </div>
 
           {loading ? (
-            <p style={{ color: '#6B7280', margin: 0 }}>Loading return tracker...</p>
+            <p style={{ color: 'var(--text-muted)', margin: 0 }}>Loading return tracker...</p>
           ) : (
             <div className="table-container">
               <table className="table">
@@ -551,7 +551,7 @@ const ReturnTrackerPage = () => {
                 <tbody>
                   {filteredRows.length === 0 ? (
                     <tr>
-                      <td colSpan={11} style={{ color: '#6B7280' }}>No issued/return records found for current filters.</td>
+                      <td colSpan={11} style={{ color: 'var(--text-muted)' }}>No issued/return records found for current filters.</td>
                     </tr>
                   ) : (
                     filteredRows.map((row) => (
@@ -606,7 +606,7 @@ const ReturnTrackerPage = () => {
                                 Request Return
                               </button>
                             ) : (
-                              <span style={{ color: '#6B7280' }}>Completed</span>
+                              <span style={{ color: 'var(--text-muted)' }}>Completed</span>
                             )}
                             <button
                               type="button"
@@ -646,7 +646,7 @@ const ReturnTrackerPage = () => {
         </div>
 
         {loadingAssets ? (
-          <p style={{ color: '#6B7280', margin: 0 }}>Loading assets...</p>
+          <p style={{ color: 'var(--text-muted)', margin: 0 }}>Loading assets...</p>
         ) : (
           <div className="table-container">
             <table className="table">
@@ -667,7 +667,7 @@ const ReturnTrackerPage = () => {
               <tbody>
                 {filteredAssets.length === 0 ? (
                   <tr>
-                    <td colSpan={10} style={{ color: '#6B7280' }}>No assets found for the selected category.</td>
+                    <td colSpan={10} style={{ color: 'var(--text-muted)' }}>No assets found for the selected category.</td>
                   </tr>
                 ) : (
                   filteredAssets.map((asset) => {
@@ -678,7 +678,7 @@ const ReturnTrackerPage = () => {
                         ? { background: '#FEF3C7', color: '#92400E' }
                         : validity.tone === 'success'
                           ? { background: '#DCFCE7', color: '#166534' }
-                          : { background: '#E2E8F0', color: '#334155' };
+                          : { background: 'var(--border)', color: 'var(--text-body)' };
 
                     return (
                       <tr key={asset.id}>
@@ -692,7 +692,7 @@ const ReturnTrackerPage = () => {
                         <td>
                           <div style={{ display: 'grid', gap: '0.25rem' }}>
                             <span className="status-pill" style={validityStyle}>{validity.label}</span>
-                            <span style={{ fontSize: '0.78rem', color: '#64748B' }}>Due: {validity.dueDate}</span>
+                            <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Due: {validity.dueDate}</span>
                           </div>
                         </td>
                         <td>
@@ -719,7 +719,7 @@ const ReturnTrackerPage = () => {
                                 Request Return
                               </button>
                             ) : (
-                              <span style={{ color: '#6B7280' }}>No action</span>
+                              <span style={{ color: 'var(--text-muted)' }}>No action</span>
                             )}
                           </div>
                         </td>
@@ -745,7 +745,7 @@ const ReturnTrackerPage = () => {
               <p>Loading history...</p>
             ) : (
               <>
-                <div style={{ marginBottom: '0.75rem', color: '#475569' }}>
+                <div style={{ marginBottom: '0.75rem', color: 'var(--text-body)' }}>
                   <strong>{historyData?.asset?.asset_name || historyModal.asset_name}</strong> | {historyData?.asset?.vendor_name || historyModal.vendor_name}
                 </div>
 
@@ -779,7 +779,7 @@ const ReturnTrackerPage = () => {
                       </table>
                     </div>
                   ) : (
-                    <p style={{ color: '#6B7280' }}>No assignment history.</p>
+                    <p style={{ color: 'var(--text-muted)' }}>No assignment history.</p>
                   )}
                 </div>
 
@@ -787,13 +787,13 @@ const ReturnTrackerPage = () => {
                   <h4 style={{ margin: '0 0 0.4rem 0' }}>Event Timeline</h4>
                   {historyData?.events?.length ? (
                     historyData.events.map((event) => (
-                      <div key={event.id} style={{ border: '1px solid #E2E8F0', borderRadius: '10px', padding: '0.6rem 0.75rem', marginBottom: '0.5rem' }}>
+                      <div key={event.id} style={{ border: '1px solid var(--border)', borderRadius: '10px', padding: '0.6rem 0.75rem', marginBottom: '0.5rem' }}>
                         <div style={{ fontWeight: 700 }}>{event.event_type}</div>
-                        <div style={{ color: '#64748B', fontSize: '0.85rem' }}>{formatDateLabel(event.event_at)} by {event.performed_by_name || 'system'}</div>
+                        <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{formatDateLabel(event.event_at)} by {event.performed_by_name || 'system'}</div>
                       </div>
                     ))
                   ) : (
-                    <p style={{ color: '#6B7280' }}>No events available.</p>
+                    <p style={{ color: 'var(--text-muted)' }}>No events available.</p>
                   )}
                 </div>
               </>

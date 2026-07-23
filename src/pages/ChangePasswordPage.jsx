@@ -144,25 +144,25 @@ const ChangePasswordPage = () => {
         <div className="fade-in" style={{ padding: '2rem', maxWidth: '600px', margin: '0 auto' }}>
             {/* Header */}
             <div style={{
-                background: '#fff',
+                background: 'var(--surface)',
                 color: 'white',
                 padding: '1.5rem 2rem',
                 borderRadius: '0.9rem',
                 marginBottom: '2rem',
-                border: '1px solid #e2e8f0',
+                border: '1px solid var(--border)',
                 // display: 'flex',
                 // justifyContent: 'space-between',
                 // alignItems: 'center',
                 // gap: '1rem',
                 // marginBottom: '1.5rem',
                 // padding: '1rem 1.25rem',
-                // background: '#fff',
-                // border: '1px solid #e2e8f0',
+                // background: 'var(--surface)',
+                // border: '1px solid var(--border)',
                 // borderRadius: '0.9rem',
                 // boxShadow: '0 1px 2px rgba(15, 23, 42, 0.05)'
             }}>
-                <h1 style={{ margin: 0, fontSize: '1.75rem', color: 'black' }}>Change Password</h1>
-                <p style={{ margin: '0.5rem 0 0 0', opacity: 0.9, color: 'black' }}>
+                <h1 style={{ margin: 0, fontSize: '1.75rem', color: 'var(--text-strong)' }}>Change Password</h1>
+                <p style={{ margin: '0.5rem 0 0 0', opacity: 0.9, color: 'var(--text-strong)' }}>
                     Update your account password
                 </p>
             </div>
@@ -196,8 +196,8 @@ const ChangePasswordPage = () => {
 
             {/* Form */}
             <div style={{
-                background: 'white',
-                border: '1px solid #E0E0E0',
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
                 borderRadius: '8px',
                 padding: '2rem'
             }}>
@@ -214,16 +214,16 @@ const ChangePasswordPage = () => {
                                 placeholder="Enter user's PS number"
                                 required={isAdmin}
                                 style={{
-                                    backgroundColor: '#FFFFFF',
-                                    color: '#1F2937',
-                                    border: '1px solid #D1D5DB',
+                                    backgroundColor: 'var(--surface)',
+                                    color: 'var(--text-strong)',
+                                    border: '1px solid var(--border)',
                                     padding: '0.75rem',
                                     borderRadius: '6px',
                                     fontSize: '1rem',
                                     width: '100%'
                                 }}
                             />
-                            <small style={{ color: '#666', fontSize: '0.875rem', marginTop: '0.25rem', display: 'block' }}>
+                            <small style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '0.25rem', display: 'block' }}>
                                 Enter the PS number of the user whose password you want to reset
                             </small>
                         </div>
@@ -242,9 +242,9 @@ const ChangePasswordPage = () => {
                                     placeholder="Enter current password"
                                     required={!isAdmin}
                                     style={{
-                                        backgroundColor: '#FFFFFF',
-                                        color: '#1F2937',
-                                        border: '1px solid #D1D5DB',
+                                        backgroundColor: 'var(--surface)',
+                                        color: 'var(--text-strong)',
+                                        border: '1px solid var(--border)',
                                         padding: '0.75rem 3rem 0.75rem 0.75rem',
                                         borderRadius: '6px',
                                         fontSize: '1rem',
@@ -269,9 +269,9 @@ const ChangePasswordPage = () => {
                                 placeholder="Enter new password (min 8 chars, 1 number, 1 special char)"
                                 required
                                 style={{
-                                    backgroundColor: '#FFFFFF',
-                                    color: '#1F2937',
-                                    border: '1px solid #D1D5DB',
+                                    backgroundColor: 'var(--surface)',
+                                    color: 'var(--text-strong)',
+                                    border: '1px solid var(--border)',
                                     padding: '0.75rem 3rem 0.75rem 0.75rem',
                                     borderRadius: '6px',
                                     fontSize: '1rem',
@@ -296,9 +296,9 @@ const ChangePasswordPage = () => {
                                 placeholder="Re-enter new password"
                                 required
                                 style={{
-                                    backgroundColor: '#FFFFFF',
-                                    color: '#1F2937',
-                                    border: '1px solid #D1D5DB',
+                                    backgroundColor: 'var(--surface)',
+                                    color: 'var(--text-strong)',
+                                    border: '1px solid var(--border)',
                                     padding: '0.75rem 3rem 0.75rem 0.75rem',
                                     borderRadius: '6px',
                                     fontSize: '1rem',
@@ -326,13 +326,13 @@ const ChangePasswordPage = () => {
                 <div style={{
                     marginTop: '1.5rem',
                     padding: '1rem',
-                    background: '#F3F4F6',
+                    background: 'var(--surface-3)',
                     borderRadius: '6px'
                 }}>
-                    <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '0.875rem', color: '#374151' }}>
+                    <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '0.875rem', color: 'var(--text-body)' }}>
                         Password Requirements:
                     </h3>
-                    <ul style={{ margin: 0, paddingLeft: '1.25rem', fontSize: '0.875rem', color: '#6B7280' }}>
+                    <ul style={{ margin: 0, paddingLeft: '1.25rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>
                         <li>At least 8 characters long</li>
                         <li>Must include at least one number</li>
                         <li>Must include at least one special character</li>

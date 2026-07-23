@@ -1,20 +1,30 @@
 services:
-  c2c:
-    image: c2c:latest
+  jcc-automation:
+    image: jcc-automation:latest
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: c2c
+    container_name: jcc-automation
     restart: unless-stopped
     ports:
       - "8033:8033"
-    env_file:
-      - .env
+    environment:
+      # Open the DB at the real persisted path (so better-sqlite3's WAL side-files
+      # land in the persisted folder too, not via a symlink in the container layer).
+      - DB_PATH=/app/data/database.db
+      # Set this to your real deployed URL (used by one-click email approval links).
+      - APP_BASE_URL=http://localhost:8033
     volumes:
-      - jcc_data:/app/data
-      - jcc_uploads:/app/uploads
-
-volumes:
-  jcc_data:
-  jcc_uploads:
-  
+      # ── Bind mounts (host folders on the VM) ──────────────────────────────
+      # Data lives in ./data and ./uploads next to this file ON THE VM.
+      # `docker compose down -v` and `docker volume rm` do NOT touch bind mounts,
+      # so your database & attachments survive down/up/rebuilds. Back them up by
+      # copying these folders.
+      - ./data:/app/data          # database.db (+ -wal/-shm) — all claim data
+      - ./uploads:/app/uploads    # uploaded invoices & voucher attachments
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8033/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

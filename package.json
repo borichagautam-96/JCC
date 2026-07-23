@@ -12,7 +12,10 @@
         "test": "node --test server/tests/*.test.js"
     },
     "dependencies": {
+        "@napi-rs/canvas": "^1.0.2",
+        "@opendataloader/pdf": "^2.4.7",
         "bcryptjs": "^2.4.3",
+        "better-sqlite3": "^12.11.1",
         "chart.js": "^4.4.0",
         "cors": "^2.8.5",
         "date-fns": "^3.0.6",

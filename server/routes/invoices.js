@@ -12,6 +12,7 @@ import { authenticateToken } from '../middleware/auth.js';
 import { validateRequest } from '../middleware/validateRequest.js';
 import { uploadLimiter } from '../middleware/rateLimit.js';
 import { extractInvoiceData } from '../utils/ocrProcessor.js';
+import { extractPdfWithOpenDataLoader } from '../services/pdfExtractor.js';
 import {
     assignedInvoicesSchema,
     invoiceIdSchema,
@@ -333,6 +334,82 @@ router.post('/extract', authenticateToken, uploadLimiter, upload.single('invoice
         return res.status(500).json({ error: 'Failed to extract invoice data' });
     } finally {
         // Remove temporary file after extraction API call.
+        if (uploadedPath && fs.existsSync(uploadedPath)) {
+            try {
+                fs.unlinkSync(uploadedPath);
+            } catch (cleanupError) {
+                console.warn('Failed to clean up extracted temp file:', cleanupError.message);
+            }
+        }
+    }
+});
+
+// Extract data from PDF using OpenDataLoader
+router.post('/extract-pdf', authenticateToken, uploadLimiter, upload.single('invoice'), async (req, res) => {
+    let uploadedPath = null;
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'Invoice file is required' });
+        }
+
+        uploadedPath = req.file.path;
+        const fileType = req.file.mimetype || '';
+        
+        if (fileType !== 'application/pdf') {
+            return res.status(400).json({ error: 'Only PDF files are supported for this extraction method' });
+        }
+
+        // ── Step 1: Try OpenDataLoader (Java/Apache Tika-based) ──────────────────────────
+        // Wrapped in try/catch: Java may be unavailable in some environments
+        // (e.g. Docker containers without Java). Falls through to pdfjs geometric parser.
+        let extraction = { invoiceNumber: '', amount: '', basicAmount: '', date: '', poNumber: '', vendorName: '', rawText: '', lineItems: [] };
+        let openDataLoaderFailed = false;
+        try {
+            extraction = await extractPdfWithOpenDataLoader(uploadedPath);
+            console.log('OpenDataLoader extraction result:', extraction);
+        } catch (odlError) {
+            openDataLoaderFailed = true;
+            console.warn('⚠️  OpenDataLoader/Java failed — falling back to pdfjs geometric parser. Reason:', odlError.message?.split('\n')[0] || odlError.message);
+        }
+
+        // ── Step 2: Fallback to pdfjs/Tesseract OCR parser ───────────────────────────────
+        if (openDataLoaderFailed || !extraction.invoiceNumber || !extraction.amount || !extraction.date || !extraction.poNumber || !extraction.lineItems || extraction.lineItems.length === 0) {
+            try {
+                if (!openDataLoaderFailed) {
+                    console.log('OpenDataLoader missed some fields or line items, falling back to OCR/Geometric parser...');
+                }
+                const fallbackResult = await extractInvoiceData(uploadedPath, fileType);
+                
+                extraction.invoiceNumber = extraction.invoiceNumber || fallbackResult.invoiceNumber || '';
+                extraction.amount = extraction.amount || fallbackResult.amount || '';
+                extraction.date = extraction.date || fallbackResult.date || '';
+                extraction.poNumber = extraction.poNumber || fallbackResult.poNumber || '';
+                extraction.vendorName = extraction.vendorName || fallbackResult.vendorName || '';
+
+                console.log('Fallback extraction result:', fallbackResult);
+                
+                if (!extraction.lineItems || extraction.lineItems.length === 0) {
+                    extraction.lineItems = fallbackResult.lineItems || [];
+                }
+            } catch (fbError) {
+                console.warn('Fallback extraction failed, proceeding with original data:', fbError.message);
+            }
+        }
+
+        return res.json({
+            vendorName: extraction.vendorName || '',
+            invoiceNumber: extraction.invoiceNumber || '',
+            amount: extraction.amount || '',
+            basicAmount: extraction.basicAmount || '',
+            date: extraction.date || '',
+            poNumber: extraction.poNumber || '',
+            rawText: extraction.rawText || '',
+            lineItems: extraction.lineItems || []
+        });
+    } catch (error) {
+        console.error('Invoice PDF extraction API error:', error);
+        return res.status(500).json({ error: 'Failed to extract PDF data: ' + error.message });
+    } finally {
         if (uploadedPath && fs.existsSync(uploadedPath)) {
             try {
                 fs.unlinkSync(uploadedPath);

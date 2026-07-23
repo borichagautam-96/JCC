@@ -65,7 +65,7 @@ body {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     background: var(--bg-primary);
-    color: #1e293b;
+    color: var(--text-strong);
     /* Dark text for light background */
     /* Kept from original */
     line-height: 1.6;
@@ -81,7 +81,10 @@ body {
 *,
 *::before,
 *::after {
-    box-shadow: none !important;
+    /* NOTE: this used to also force `box-shadow: none !important`, which killed
+       54 of the 62 shadow declarations in this file — every card, button and
+       glass surface lost its depth. Removed so elevation works; add
+       `box-shadow: none` to specific components if you want them flat. */
     text-shadow: none !important;
 }
 
@@ -92,7 +95,7 @@ h3,
 h4,
 h5,
 h6 {
-    color: #1e293b;
+    color: var(--text-strong);
     font-weight: 600;
     line-height: 1.2;
     margin-bottom: var(--spacing-md);
@@ -130,7 +133,7 @@ h6 {
     padding: var(--spacing-lg);
     box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 8px 24px rgba(15, 23, 42, 0.04);
     transition: all var(--transition-base);
-    color: #1e293b;
+    color: var(--text-strong);
 }
 
 .glass-card:hover {
@@ -312,14 +315,14 @@ select.input-field {
 
 .table th {
     font-weight: 600;
-    color: #334155;
+    color: var(--text-body);
     text-transform: uppercase;
     font-size: 0.76rem;
     letter-spacing: 0.05em;
 }
 
 .table td {
-    color: #1f2937;
+    color: var(--text-strong);
 }
 
 .table tbody tr {
@@ -379,12 +382,12 @@ select.input-field {
     margin: 0;
     font-size: 1.45rem;
     font-weight: 700;
-    color: #0f172a;
+    color: var(--text-strong);
 }
 
 .page-subtitle {
     margin: 0.25rem 0 0;
-    color: #64748b;
+    color: var(--text-muted);
     font-size: 0.95rem;
 }
 
@@ -397,7 +400,7 @@ select.input-field {
 }
 
 .metric-label {
-    color: #64748b;
+    color: var(--text-muted);
     font-weight: 600;
     font-size: 0.74rem;
     letter-spacing: 0.08em;
@@ -488,6 +491,249 @@ select.input-field {
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
     animation: jcc-login-card-enter 500ms ease-out;
+}
+
+/* ── 3D interactive login card ──────────────────────────────────────────── */
+.jcc-login-3d-stage {
+    /* Perspective: how strong the 3D depth reads. Lower = more dramatic. */
+    perspective: 1200px;
+    perspective-origin: center;
+}
+
+.jcc-login-card-3d {
+    position: relative;
+    transform-style: preserve-3d;
+    /* backdrop-filter flattens 3D children — drop it so depth layers pop.
+       The near-opaque gradient background keeps the frosted-glass look. */
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    transform: rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
+    transition: transform 600ms cubic-bezier(0.22, 1, 0.36, 1),
+                box-shadow 600ms cubic-bezier(0.22, 1, 0.36, 1);
+    /* Layered shadow gives the card real thickness + a soft floating drop */
+    box-shadow:
+        0 2px 4px rgba(52, 91, 145, 0.10),
+        0 12px 24px rgba(52, 91, 145, 0.14),
+        0 40px 80px rgba(52, 91, 145, 0.22);
+    will-change: transform;
+}
+
+/* Depth shadow — higher specificity so it wins over the per-theme card shadow */
+.jcc-login-3d-stage .jcc-login-card.jcc-login-card-3d {
+    box-shadow:
+        0 2px 4px rgba(52, 91, 145, 0.10),
+        0 12px 24px rgba(52, 91, 145, 0.14),
+        0 40px 80px rgba(52, 91, 145, 0.22);
+}
+
+/* While actively tracking the cursor, follow it quickly (settle slowly on leave) */
+.jcc-login-card-3d.is-tilting {
+    transition: transform 90ms linear, box-shadow 90ms linear;
+}
+.jcc-login-3d-stage .jcc-login-card.jcc-login-card-3d.is-tilting {
+    box-shadow:
+        0 2px 4px rgba(52, 91, 145, 0.12),
+        0 18px 34px rgba(52, 91, 145, 0.18),
+        0 55px 100px rgba(52, 91, 145, 0.28);
+}
+
+/* Depth layers: content pops toward the viewer for a genuine 3D feel */
+.jcc-login-layer {
+    transform-style: preserve-3d;
+}
+.jcc-login-card-3d .jcc-login-layer-front {
+    transform: translateZ(55px);
+}
+.jcc-login-card-3d .jcc-login-layer-mid {
+    transform: translateZ(28px);
+}
+.jcc-login-card-3d .jcc-login-mark {
+    transform: translateZ(30px);
+}
+
+/* Moving sheen/glare that follows the cursor across the glass */
+.jcc-login-glare {
+    position: absolute;
+    inset: 0;
+    border-radius: 24px;
+    pointer-events: none;
+    background: radial-gradient(circle at var(--gx, 50%) var(--gy, 0%),
+        rgba(255, 255, 255, 0.55) 0%,
+        rgba(255, 255, 255, 0.12) 25%,
+        rgba(255, 255, 255, 0) 55%);
+    opacity: 0;
+    transition: opacity 300ms ease;
+    z-index: 2;
+}
+.jcc-login-card-3d.is-tilting .jcc-login-glare {
+    opacity: 1;
+}
+
+/* Respect reduced-motion: keep it flat and calm */
+@media (prefers-reduced-motion: reduce) {
+    .jcc-login-card-3d,
+    .jcc-login-card-3d.is-tilting {
+        transform: none !important;
+        transition: none;
+    }
+    .jcc-login-card-3d .jcc-login-layer-front,
+    .jcc-login-card-3d .jcc-login-layer-mid,
+    .jcc-login-card-3d .jcc-login-mark {
+        transform: none;
+    }
+    .jcc-login-glare { display: none; }
+}
+
+/* Touch devices don't hover — disable tilt so it never looks stuck */
+@media (hover: none) {
+    .jcc-login-card-3d { transform: none !important; }
+}
+
+/* ══ Premium login animation package ═══════════════════════════════════════ */
+
+/* Card entrance — uses the standalone `translate` property so it never fights
+   the `transform`-based tilt. Overrides the old card-enter animation. */
+.jcc-login-card-3d {
+    animation: jcc-login-card-rise 620ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes jcc-login-card-rise {
+    from { opacity: 0; translate: 0 26px; }
+    to   { opacity: 1; translate: 0 0; }
+}
+
+/* Staggered content reveal — logo/title first, then each field, then the button.
+   `translate` keeps the depth-layer translateZ (on `transform`) intact. */
+@keyframes jcc-login-rise {
+    from { opacity: 0; translate: 0 18px; }
+    to   { opacity: 1; translate: 0 0; }
+}
+.jcc-login-card-3d .jcc-login-layer-front {
+    animation: jcc-login-rise 600ms cubic-bezier(0.22, 1, 0.36, 1) both 0.18s;
+}
+.jcc-login-card-3d form > .input-group,
+.jcc-login-card-3d form > .jcc-login-helper-row,
+.jcc-login-card-3d form > .jcc-login-submit {
+    animation: jcc-login-rise 600ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.jcc-login-card-3d form > *:nth-child(1) { animation-delay: 0.30s; }
+.jcc-login-card-3d form > *:nth-child(2) { animation-delay: 0.38s; }
+.jcc-login-card-3d form > *:nth-child(3) { animation-delay: 0.46s; }
+.jcc-login-card-3d form > *:nth-child(4) { animation-delay: 0.54s; }
+
+/* Input focus micro-interaction — soft glow ring + underline growing from center */
+.jcc-login-input-wrap { position: relative; }
+.jcc-login-input-wrap::after {
+    content: '';
+    position: absolute;
+    left: 14px; right: 14px; bottom: 3px;
+    height: 2px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, #2c7ce6, #1e5ec8);
+    transform: scaleX(0);
+    transform-origin: center;
+    transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
+    pointer-events: none;
+}
+.jcc-login-input-wrap:focus-within::after { transform: scaleX(1); }
+.jcc-login-input {
+    transition: box-shadow 220ms ease, border-color 220ms ease;
+}
+.jcc-login-input:focus {
+    box-shadow: 0 0 0 4px rgba(44, 124, 230, 0.14);
+}
+
+/* Caps Lock warning under the password field */
+.jcc-login-caps-warning {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: #92400e;
+    background: #fffbeb;
+    border: 1px solid #fcd34d;
+    border-radius: 8px;
+    animation: jcc-login-rise 240ms ease both;
+}
+
+/* Error shake — replays each failed attempt (error box is re-keyed in JSX) */
+.jcc-login-error {
+    animation: jcc-login-shake 480ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+@keyframes jcc-login-shake {
+    10%, 90% { transform: translateX(-1px); }
+    20%, 80% { transform: translateX(2px); }
+    30%, 50%, 70% { transform: translateX(-6px); }
+    40%, 60% { transform: translateX(6px); }
+}
+
+/* Button sheen — a light streak sweeps across on hover */
+.jcc-login-submit { position: relative; overflow: hidden; }
+.jcc-login-submit::after {
+    content: '';
+    position: absolute;
+    top: 0; left: -130%;
+    width: 55%; height: 100%;
+    background: linear-gradient(120deg, transparent, rgba(255, 255, 255, 0.5), transparent);
+    transform: skewX(-20deg);
+    transition: left 700ms ease;
+    pointer-events: none;
+}
+.jcc-login-submit:hover:not(:disabled)::after { left: 160%; }
+
+/* Aurora background — slow, soft colour drift behind everything.
+   position: fixed + inset: 0 pins it to the viewport so its blur/scale/parallax
+   can never add to the page's scrollable height. */
+.jcc-login-aurora {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+    background:
+        radial-gradient(40% 40% at 20% 30%, rgba(80, 150, 255, 0.42), transparent 62%),
+        radial-gradient(36% 36% at 82% 22%, rgba(140, 110, 255, 0.36), transparent 62%),
+        radial-gradient(46% 46% at 72% 82%, rgba(60, 200, 220, 0.34), transparent 62%);
+    filter: blur(36px);
+    animation: jcc-login-aurora 16s ease-in-out infinite alternate;
+    /* parallax: drift with the cursor (vars set on the shell) */
+    translate: calc(var(--mx, 0) * 26px) calc(var(--my, 0) * 26px);
+    transition: translate 500ms ease;
+}
+@keyframes jcc-login-aurora {
+    0%   { transform: translate(-2%, 1%) scale(1.02); }
+    50%  { transform: translate(5%, -3%) scale(1.12); }
+    100% { transform: translate(-4%, 3%) scale(1.06); }
+}
+
+/* Parallax on the existing ambient orbs — `translate` composes with their
+   `transform`-based float animation, so both run together. */
+.jcc-login-ambient-one {
+    translate: calc(var(--mx, 0) * 34px) calc(var(--my, 0) * 30px);
+    transition: translate 400ms ease;
+}
+.jcc-login-ambient-two {
+    translate: calc(var(--mx, 0) * -42px) calc(var(--my, 0) * -28px);
+    transition: translate 400ms ease;
+}
+
+/* Accessibility: honour reduced-motion for the whole package */
+@media (prefers-reduced-motion: reduce) {
+    .jcc-login-card-3d,
+    .jcc-login-card-3d .jcc-login-layer-front,
+    .jcc-login-card-3d form > .input-group,
+    .jcc-login-card-3d form > .jcc-login-helper-row,
+    .jcc-login-card-3d form > .jcc-login-submit,
+    .jcc-login-aurora,
+    .jcc-login-error {
+        animation: none !important;
+    }
+    .jcc-login-aurora,
+    .jcc-login-ambient-one,
+    .jcc-login-ambient-two { translate: none !important; }
+    .jcc-login-input-wrap::after { transition: none; }
 }
 
 .jcc-login-mark {
@@ -1032,7 +1278,7 @@ select.input-field {
     margin: 0 0 1.15rem;
     font-size: 1.35rem;
     font-weight: 700;
-    color: #0f172a;
+    color: var(--text-strong);
 }
 
 .app-modal-actions {
@@ -1068,12 +1314,12 @@ select.input-field {
 
 .asset-voucher-title {
     margin: 0;
-    color: #0f172a;
+    color: var(--text-strong);
 }
 
 .asset-voucher-subtitle {
     margin: 0.3rem 0 0;
-    color: #475569;
+    color: var(--text-body);
     font-size: 0.9rem;
 }
 
@@ -1094,7 +1340,7 @@ select.input-field {
 .asset-voucher-metric span {
     display: block;
     font-size: 0.72rem;
-    color: #64748b;
+    color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
 }
@@ -1131,7 +1377,7 @@ select.input-field {
     text-transform: uppercase;
     letter-spacing: 0.08em;
     font-weight: 700;
-    color: #64748b;
+    color: var(--text-muted);
     white-space: nowrap;
     padding-left: 0.2rem;
 }
@@ -1147,7 +1393,7 @@ select.input-field {
     border: 1px solid #c4d3ea;
     border-radius: 9px;
     font-weight: 700;
-    color: #0f172a;
+    color: var(--text-strong);
     box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
     appearance: none;
     -webkit-appearance: none;
@@ -1418,7 +1664,7 @@ select.input-field {
     border-radius: 24px;
     padding: 1.6rem;
     font-family: 'Space Grotesk', 'Inter', 'Segoe UI', sans-serif;
-    color: #1e293b;
+    color: var(--text-strong);
     overflow: hidden;
     box-shadow: 0 20px 60px rgba(15, 23, 42, 0.18), 0 4px 16px rgba(15, 23, 42, 0.08);
     animation: team-card-in 320ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
@@ -1459,7 +1705,7 @@ select.input-field {
     margin: 0;
     font-size: 1.25rem;
     letter-spacing: -0.01em;
-    color: #0f172a;
+    color: var(--text-strong);
 }
 
 .team-modal-subtitle {
@@ -1505,7 +1751,7 @@ select.input-field {
 .team-modal-close {
     border: 1px solid #cbd5e1;
     background: #f1f5f9;
-    color: #475569;
+    color: var(--text-body);
     width: 38px;
     height: 38px;
     border-radius: 10px;
@@ -1532,7 +1778,7 @@ select.input-field {
 .team-blueprint-panel {
     position: relative;
     background: rgba(241, 245, 249, 0.95);
-    color: #1e293b;
+    color: var(--text-strong);
     padding: 1.4rem;
     border-radius: 18px;
     border: 1px solid #cbd5e1;
@@ -1566,7 +1812,7 @@ select.input-field {
 .team-blueprint-title {
     margin: 0 0 0.45rem;
     font-size: 1.35rem;
-    color: #0f172a;
+    color: var(--text-strong);
 }
 
 /* Info cards inside the blueprint panel */
@@ -1606,7 +1852,7 @@ select.input-field {
     font-size: 0.65rem;
     text-transform: uppercase;
     letter-spacing: 0.13em;
-    color: #64748b;
+    color: var(--text-muted);
     font-family: 'Space Mono', 'Space Grotesk', 'Inter', sans-serif;
     line-height: 1;
     margin-bottom: 0.22rem;
@@ -1615,7 +1861,7 @@ select.input-field {
 .team-info-card-value {
     font-size: 0.88rem;
     font-weight: 600;
-    color: #0f172a;
+    color: var(--text-strong);
     line-height: 1;
 }
 
@@ -1670,20 +1916,20 @@ select.input-field {
 
 .team-name {
     font-weight: 600;
-    color: #1e293b;
+    color: var(--text-strong);
     font-size: 0.92rem;
 }
 
 .team-role {
     margin-top: 0.2rem;
     font-size: 0.75rem;
-    color: #64748b;
+    color: var(--text-muted);
 }
 
 .team-email {
     margin-top: 0.2rem;
     font-size: 0.72rem;
-    color: #94a3b8;
+    color: var(--text-faint);
 }
 
 .team-card-placeholder {
@@ -1716,7 +1962,7 @@ select.input-field {
     font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.18em;
-    color: #94a3b8;
+    color: var(--text-faint);
     border-top: 1px solid #e2e8f0;
     padding-top: 0.9rem;
 }
@@ -1786,3 +2032,2160 @@ select.input-field {
         letter-spacing: 0.12em;
     }
 }
+/* ── Animated hamburger menu button (morphs into an X when the sidebar is open) ──
+   Shared by the JCC and Printing sections via AppShell. */
+.hamburger-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 36px;
+    width: 36px;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #ffffff;
+    color: var(--text-body);
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+.hamburger-btn:hover {
+    background: #f1f5f9;
+    border-color: #cbd5e1;
+}
+.hamburger-box {
+    position: relative;
+    display: inline-block;
+    width: 20px;
+    height: 16px;
+}
+.hamburger-bar {
+    position: absolute;
+    left: 0;
+    width: 20px;
+    height: 2.5px;
+    border-radius: 2px;
+    background: currentColor;
+    transition: top 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+        transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+        opacity 0.2s ease;
+}
+.hamburger-bar:nth-child(1) { top: 0; }
+.hamburger-bar:nth-child(2) { top: 6.75px; }
+.hamburger-bar:nth-child(3) { top: 13.5px; }
+
+/* Active (sidebar open) → the three bars collapse into an X */
+.hamburger-btn.is-active { color: #2563eb; }
+.hamburger-btn.is-active .hamburger-bar:nth-child(1) {
+    top: 6.75px;
+    transform: rotate(45deg);
+}
+.hamburger-btn.is-active .hamburger-bar:nth-child(2) {
+    opacity: 0;
+    transform: scaleX(0.2);
+}
+.hamburger-btn.is-active .hamburger-bar:nth-child(3) {
+    top: 6.75px;
+    transform: rotate(-45deg);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Liquid morphing sidebar animation (clip-path reveal from the hamburger button)
+   — replaces the old translateX slide. Content, routing, icons, permissions and
+   active states are untouched; this file only drives the OPEN/CLOSE animation.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* The organic blob originates from the hamburger button (top-left) and expands
+   to fill the sidebar. clip-path + an elastic ease = liquid, GPU-friendly. */
+.app-sidebar {
+    /* Hidden: fully clipped from the bottom (only the top edge). A pure top→bottom
+       wipe — no rounded corners, so there is zero lateral motion. */
+    clip-path: inset(0 0 100% 0);
+    -webkit-clip-path: inset(0 0 100% 0);
+    pointer-events: none;
+    transition: clip-path 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: clip-path;
+}
+.app-sidebar.is-open {
+    /* Revealed: wipes straight down, top → bottom. */
+    clip-path: inset(0 0 0 0);
+    -webkit-clip-path: inset(0 0 0 0);
+    pointer-events: auto;
+}
+
+/* Content is hidden until the blob has (mostly) expanded, then revealed. */
+.app-sidebar .flex-column,               /* logo / brand header */
+.app-sidebar nav > *,                    /* every menu item + section header */
+.app-sidebar > div:last-child,           /* user card + logout footer */
+.app-sidebar .px-3.pb-2 {                /* Help & SOP */
+    opacity: 0;
+    transform: translateY(-20px);        /* ONLY vertical — start above, drop down */
+}
+
+/* Logo: fade + drop straight down (no horizontal motion) */
+.app-sidebar.is-open .flex-column {
+    animation: sbItemIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) 0.05s forwards;
+}
+
+/* Menu items + section headers: staggered vertical drop, one after another,
+   ONLY once the blob has expanded. Uses only translateY + opacity. */
+.app-sidebar.is-open nav > *,
+.app-sidebar.is-open > div:last-child,
+.app-sidebar.is-open .px-3.pb-2 {
+    animation: sbItemIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+@keyframes sbItemIn {
+    from { opacity: 0; transform: translateY(-20px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+/* Items cascade DOWN in step with the top→bottom wipe (28ms stagger, starting
+   almost immediately) so the panel + content read as ONE downward drop — not an
+   empty panel appearing and then items falling. Purely vertical (translateY). */
+.app-sidebar.is-open nav > *:nth-child(1)  { animation-delay: 0.08s; }
+.app-sidebar.is-open nav > *:nth-child(2)  { animation-delay: 0.108s; }
+.app-sidebar.is-open nav > *:nth-child(3)  { animation-delay: 0.136s; }
+.app-sidebar.is-open nav > *:nth-child(4)  { animation-delay: 0.164s; }
+.app-sidebar.is-open nav > *:nth-child(5)  { animation-delay: 0.192s; }
+.app-sidebar.is-open nav > *:nth-child(6)  { animation-delay: 0.220s; }
+.app-sidebar.is-open nav > *:nth-child(7)  { animation-delay: 0.248s; }
+.app-sidebar.is-open nav > *:nth-child(8)  { animation-delay: 0.276s; }
+.app-sidebar.is-open nav > *:nth-child(9)  { animation-delay: 0.304s; }
+.app-sidebar.is-open nav > *:nth-child(10) { animation-delay: 0.332s; }
+.app-sidebar.is-open nav > *:nth-child(11) { animation-delay: 0.360s; }
+.app-sidebar.is-open nav > *:nth-child(12) { animation-delay: 0.388s; }
+.app-sidebar.is-open nav > *:nth-child(13) { animation-delay: 0.416s; }
+.app-sidebar.is-open nav > *:nth-child(14) { animation-delay: 0.444s; }
+.app-sidebar.is-open nav > *:nth-child(15) { animation-delay: 0.472s; }
+.app-sidebar.is-open nav > *:nth-child(n+16) { animation-delay: 0.50s; }
+.app-sidebar.is-open .px-3.pb-2 { animation-delay: 0.50s; }   /* Help & SOP */
+.app-sidebar.is-open > div:last-child { animation-delay: 0.53s; } /* user + Logout */
+
+/* ── Enhanced hover interactions (design/colours kept; just smoother) ── */
+.app-sidebar nav a svg,
+.app-sidebar nav a span {
+    transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.app-sidebar nav a:hover svg { transform: scale(1.14); }
+.app-sidebar nav a:hover span { transform: translateX(4px); }
+
+/* Respect reduced-motion: no morph/stagger, everything just appears. */
+@media (prefers-reduced-motion: reduce) {
+    .app-sidebar,
+    .app-sidebar.is-open {
+        transition: none;
+    }
+    .app-sidebar .flex-column,
+    .app-sidebar nav > *,
+    .app-sidebar > div:last-child,
+    .app-sidebar .px-3.pb-2 {
+        opacity: 1;
+        transform: none;
+        animation: none;
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Login — premium micro-interactions (added on top of the existing entrance /
+   glass / tilt animations, without changing design, colours, or layout).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* 1. Subtle animated blue→white gradient background (slow, ~18s, no particles) */
+.jcc-login-animated-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: linear-gradient(120deg, #eef4ff 0%, #ffffff 35%, #e6f0ff 65%, #f4f9ff 100%);
+    background-size: 200% 200%;
+    animation: jccLoginGradient 18s ease-in-out infinite;
+    opacity: 0.9;
+    transition: opacity 0.6s ease;
+}
+@keyframes jccLoginGradient {
+    0%   { background-position: 0% 50%; }
+    50%  { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+
+/* 3. Logo: gentle vertical float (2–3px, ~5.5s, no rotation) */
+.jcc-login-logo-img {
+    animation: jccLoginFloat 5.5s ease-in-out infinite;
+    will-change: transform;
+}
+@keyframes jccLoginFloat {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-3px); }
+}
+
+/* 6. Sign In button: hover lift/scale, press compress — soft spring */
+.jcc-login-submit {
+    transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1),
+        box-shadow 0.2s ease, filter 0.2s ease, background 0.2s ease;
+    will-change: transform;
+}
+.jcc-login-submit:not(:disabled):hover {
+    transform: scale(1.02);
+    box-shadow: 0 10px 24px rgba(37, 99, 235, 0.28);
+}
+.jcc-login-submit:not(:disabled):active {
+    transform: scale(0.98);
+}
+
+/* 7. Verified state: soft green confirmation before navigating */
+.jcc-login-submit.is-verified {
+    background: linear-gradient(135deg, #16a34a, #15803d) !important;
+    box-shadow: 0 8px 22px rgba(22, 163, 74, 0.32);
+    animation: jccLoginVerifyPop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes jccLoginVerifyPop {
+    0%   { transform: scale(0.96); }
+    60%  { transform: scale(1.03); }
+    100% { transform: scale(1); }
+}
+
+/* 8. Success → dashboard: card + background fade out smoothly */
+.jcc-login-card.is-leaving {
+    animation: jccLoginCardLeave 0.5s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+@keyframes jccLoginCardLeave {
+    to { opacity: 0; transform: translateY(-14px) scale(0.97); }
+}
+.jcc-login-shell.is-leaving .jcc-login-animated-bg { opacity: 0.4; }
+
+@media (prefers-reduced-motion: reduce) {
+    .jcc-login-animated-bg,
+    .jcc-login-logo-img,
+    .jcc-login-submit.is-verified,
+    .jcc-login-card.is-leaving {
+        animation: none;
+    }
+}
+/* ═══════════════════════════════════════════════════════════════════════════
+   Premium attachment + PDF-extraction animations (additive — no redesign, no
+   layout/logic change). Only opacity / scale / translateY. 60fps.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Idle upload area: subtle blue hover glow */
+.voucher-file-upload { transition: box-shadow 0.25s ease; }
+
+/* State 2 — File selected: card slides up + fades in */
+.voucher-file-card {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    margin-top: 0.5rem;
+    padding: 0.4rem 0.65rem;
+    border: 1px solid #2563EB;
+    border-radius: 9px;
+    background: linear-gradient(135deg, #EFF6FF, #FFFFFF);
+    box-shadow: 0 2px 8px rgba(37, 99, 235, 0.08);
+    animation: voucherCardIn 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+    transform-origin: left center;
+}
+@keyframes voucherCardIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.voucher-file-card-icon {
+    font-size: 1.1rem;
+    line-height: 1;
+    animation: voucherIconPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) 0.08s both;
+}
+@keyframes voucherIconPop {
+    from { transform: scale(0.6); }
+    60%  { transform: scale(1.12); }
+    to   { transform: scale(1); }
+}
+.voucher-file-card-body { min-width: 0; }
+.voucher-file-card-name {
+    font-weight: 600; color: var(--text-strong); font-size: 0.82rem; line-height: 1.2;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
+.voucher-file-card-meta {
+    font-size: 0.72rem; color: var(--text-muted); margin-top: 1px;
+    display: flex; align-items: center; gap: 0.4rem;
+}
+.voucher-file-card-ok { display: inline-flex; align-items: center; gap: 0.25rem; color: #16A34A; font-weight: 600; }
+.voucher-file-card-tick {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 14px; height: 14px; border-radius: 50%; background: #16A34A; color: #fff; font-size: 0.6rem;
+    animation: voucherTickPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) 0.18s both;
+}
+@keyframes voucherTickPop { from { transform: scale(0); } to { transform: scale(1); } }
+
+/* State 5 — Ready: Extract button fades in, soft blue glow, hover/press */
+.voucher-extract-btn {
+    animation: voucherBtnIn 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+    transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease;
+}
+@keyframes voucherBtnIn { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+.voucher-extract-btn:not(:disabled):hover {
+    transform: scale(1.02);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15), 0 6px 16px rgba(37, 99, 235, 0.18);
+}
+.voucher-extract-btn:not(:disabled):active { transform: scale(0.98); }
+
+/* Extraction — animated AI step sequence + progress bar */
+.voucher-extract-steps {
+    margin-top: 0.85rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid #E2E8F0;
+    border-radius: 12px;
+    background: #F8FAFC;
+    animation: voucherCardIn 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.voucher-extract-bar { height: 6px; border-radius: 6px; background: #E2E8F0; overflow: hidden; margin-bottom: 0.75rem; }
+.voucher-extract-bar-fill {
+    height: 100%; border-radius: 6px;
+    background: linear-gradient(90deg, #3B82F6, #2563EB);
+    transition: width 0.3s cubic-bezier(0.22, 1, 0.36, 1), background 0.3s ease;
+}
+.voucher-extract-bar-fill.is-complete { background: linear-gradient(90deg, #22C55E, #16A34A); }
+.voucher-extract-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.voucher-extract-step {
+    display: flex; align-items: center; gap: 0.6rem;
+    font-size: 0.85rem; color: var(--text-faint); opacity: 0.6;
+    transition: opacity 0.25s ease, color 0.25s ease;
+}
+.voucher-extract-step.is-active { opacity: 1; color: var(--text-strong); font-weight: 600; }
+.voucher-extract-step.is-done   { opacity: 1; color: var(--text-body); }
+.voucher-extract-step.is-final  { opacity: 1; color: #16A34A; font-weight: 700; }
+.voucher-extract-dot {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0;
+    background: #E2E8F0; color: #fff; font-size: 0.7rem; font-weight: 700;
+    transition: background 0.25s ease;
+}
+.voucher-extract-step.is-done   .voucher-extract-dot { background: #22C55E; }
+.voucher-extract-step.is-final  .voucher-extract-dot { background: #16A34A; }
+.voucher-extract-step.is-active .voucher-extract-dot { background: #2563EB; }
+.voucher-extract-spin {
+    width: 10px; height: 10px; border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.5); border-top-color: #fff;
+    animation: voucherSpin 0.7s linear infinite;
+}
+@keyframes voucherSpin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+    .voucher-file-card, .voucher-file-card-icon, .voucher-file-card-tick,
+    .voucher-extract-btn, .voucher-extract-steps, .voucher-extract-spin {
+        animation: none;
+    }
+}
+
+/* ============================================================
+   Notification Bell — premium hover ring animation
+   Layers: soft glow (behind) · ringing lines · bell icon.
+   Scale lives on the wrapper; swing (rotate) lives on the icon,
+   so they compose without clobbering each other. Transform-only
+   + absolutely-positioned decorations = zero layout shift.
+   ============================================================ */
+.bell-btn {
+    color: var(--text-muted);
+    transition: color 0.25s ease;
+}
+.bell-btn:hover {
+    color: #3b82f6;
+}
+
+.bell-icon-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transform-origin: center center;
+    transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+    will-change: transform;
+}
+.bell-btn:hover .bell-icon-wrap {
+    transform: scale(1.08);
+}
+
+/* Soft blue glow behind the icon */
+.bell-glow {
+    position: absolute;
+    inset: -7px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(59, 130, 246, 0.30) 0%, rgba(59, 130, 246, 0.12) 45%, transparent 72%);
+    opacity: 0;
+    transform: scale(0.6);
+    transition: opacity 0.28s ease, transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+    pointer-events: none;
+    z-index: 0;
+}
+.bell-btn:hover .bell-glow {
+    opacity: 1;
+    transform: scale(1);
+}
+
+/* The bell swings once per hover, hinged at its top center */
+.bell-icon {
+    position: relative;
+    z-index: 1;
+    transform-origin: top center;
+    will-change: transform;
+}
+.bell-btn:hover .bell-icon {
+    animation: bellSwing 0.5s ease-in-out;
+}
+@keyframes bellSwing {
+    0%   { transform: rotate(0deg); }
+    15%  { transform: rotate(-15deg); }
+    35%  { transform: rotate(15deg); }
+    55%  { transform: rotate(-10deg); }
+    75%  { transform: rotate(10deg); }
+    100% { transform: rotate(0deg); }
+}
+
+/* Auto-ring: fires when a new notification arrives (.is-ringing).
+   A natural decaying swing hinged at the top, ~1s, plays once. */
+.bell-btn.is-ringing {
+    color: #3b82f6;
+}
+.bell-btn.is-ringing .bell-icon {
+    animation: bellShake 1s ease-in-out;
+}
+.bell-btn.is-ringing .bell-glow {
+    opacity: 1;
+    transform: scale(1);
+}
+.bell-btn.is-ringing .bell-ring-line {
+    animation: bellRingAttention 1s ease-in-out;
+}
+@keyframes bellShake {
+    0%, 100% { transform: rotate(0deg); }
+    8%   { transform: rotate(-16deg); }
+    18%  { transform: rotate(14deg); }
+    28%  { transform: rotate(-12deg); }
+    38%  { transform: rotate(10deg); }
+    48%  { transform: rotate(-8deg); }
+    60%  { transform: rotate(6deg); }
+    72%  { transform: rotate(-4deg); }
+    84%  { transform: rotate(2deg); }
+    92%  { transform: rotate(-1deg); }
+}
+@keyframes bellRingAttention {
+    0%, 100%       { opacity: 0; }
+    15%, 45%, 75%  { opacity: 0.75; }
+    30%, 60%, 90%  { opacity: 0.2; }
+}
+
+/* Two subtle sound lines that fade in/out during the swing */
+.bell-ring-line {
+    position: absolute;
+    top: 5px;
+    z-index: 1;
+    color: #3b82f6;
+    opacity: 0;
+    pointer-events: none;
+}
+.bell-ring-left  { left: -3px; }
+.bell-ring-right { right: -3px; }
+.bell-btn:hover .bell-ring-line {
+    animation: bellRing 0.5s ease-in-out;
+}
+@keyframes bellRing {
+    0%   { opacity: 0; }
+    30%  { opacity: 0.7; }
+    60%  { opacity: 0.7; }
+    100% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .bell-icon-wrap, .bell-icon, .bell-glow, .bell-ring-line {
+        animation: none !important;
+        transition: color 0.2s ease;
+    }
+    .bell-btn:hover .bell-icon-wrap { transform: none; }
+    .bell-btn:hover .bell-glow { opacity: 1; transform: scale(1); }
+}
+
+/* ============================================================
+   Premium expanding search (GitHub / Linear / Notion style)
+   Header global search: 180 → 320 (hover) → 360 (focus),
+   stays expanded while it holds text, collapses when empty.
+   Animates width / border / shadow only — no translate, no
+   layout jump (it grows leftward from a right-aligned header).
+   ============================================================ */
+.global-search {
+    position: relative;
+}
+.global-search-box {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 36px;
+    padding: 0 10px;
+    width: 180px;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #f8fafc;
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+    transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+                border-color 0.28s ease,
+                box-shadow 0.28s ease,
+                background 0.28s ease;
+    will-change: width;
+}
+/* Widths per state */
+.global-search-box.has-text { width: 320px; }
+.global-search-box.is-hover { width: 320px; }
+.global-search-box.is-focus { width: 360px; }
+
+/* Hover: primary-blue border + soft blue shadow */
+.global-search:hover .global-search-box {
+    border-color: #3b82f6;
+    background: #ffffff;
+    box-shadow: 0 2px 10px rgba(59, 130, 246, 0.16);
+}
+/* Focus: stronger ring, overrides hover */
+.global-search-box.is-focus {
+    border-color: #2563eb;
+    background: #ffffff;
+    box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.18);
+}
+
+.global-search-icon {
+    flex-shrink: 0;
+    transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), color 0.28s ease;
+}
+.global-search:hover .global-search-icon,
+.global-search-box.is-focus .global-search-icon {
+    transform: scale(1.05);
+}
+
+.global-search-input {
+    width: 100%;
+    border: none;
+    outline: none;
+    background: transparent;
+    font-size: 0.85rem;
+    color: var(--text-body);
+    caret-color: #2563eb;
+}
+.global-search-input::placeholder {
+    color: var(--text-faint);
+    transition: color 0.28s ease;
+}
+
+/* ------------------------------------------------------------
+   Filter-bar search polish — same enterprise feel for the
+   full-width search inputs that must NOT collapse. Add the
+   class token `premium-search-field` to any search <input>.
+   ------------------------------------------------------------ */
+.premium-search-field {
+    transition: border-color 0.28s ease, box-shadow 0.28s ease, background 0.28s ease;
+}
+.premium-search-field:hover:not(:focus) {
+    border-color: #3b82f6 !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+}
+.premium-search-field:focus {
+    border-color: #2563eb !important;
+    box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.18) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .global-search-box, .global-search-icon, .premium-search-field {
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    .global-search:hover .global-search-icon,
+    .global-search-box.is-focus .global-search-icon { transform: none; }
+}
+
+/* ============================================================
+   Animated download button (parachute drop)
+   The button keeps its own design; the flight + meter live in a
+   fixed overlay anchored to the button, so nothing reflows and
+   no `overflow:hidden` ancestor can clip the animation.
+   ============================================================ */
+.dl-btn {
+    transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+}
+.dl-btn:not(:disabled):hover {
+    transform: scale(1.02);
+    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.18);
+}
+.dl-btn.is-busy {
+    transform: scale(0.98);
+    opacity: 0.7;
+    cursor: default;
+}
+
+.dl-stage {
+    position: fixed;
+    width: 0;
+    height: 0;
+    z-index: 9999;
+    pointer-events: none;
+}
+
+/* ---- Flyer (arrow + parachute) ---- */
+.dl-flyer {
+    position: absolute;
+    left: 0;
+    top: -38px;
+    width: 40px;
+    margin-left: -20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    will-change: transform;
+}
+.dl-sway {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transform-origin: 50% 0;
+}
+.dl-chute {
+    display: block;
+    transform-origin: 50% 100%;
+    transform: scale(0.2, 0);
+    opacity: 0;
+}
+.dl-arrow {
+    display: block;
+    margin-top: -2px;
+}
+
+/* Launch: brief anticipation dip, then up ~80px */
+@keyframes dlLaunch {
+    0%   { transform: translateY(0); }
+    26%  { transform: translateY(6px); }
+    100% { transform: translateY(-80px); }
+}
+.dl-launch .dl-flyer {
+    animation: dlLaunch 340ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Parachute opens at apex, then folds on landing */
+@keyframes dlChuteOpen {
+    0%   { transform: scale(0.2, 0); opacity: 0; }
+    60%  { opacity: 1; }
+    100% { transform: scale(1, 1); opacity: 1; }
+}
+@keyframes dlChuteFold {
+    from { transform: scale(1, 1); opacity: 1; }
+    to   { transform: scale(0.5, 0); opacity: 0; }
+}
+.dl-descend .dl-chute {
+    animation: dlChuteOpen 320ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+.dl-land .dl-chute,
+.dl-success .dl-chute {
+    animation: dlChuteFold 260ms ease-in forwards;
+}
+
+/* Very subtle drift while under canopy */
+@keyframes dlSway {
+    0%, 100% { transform: rotate(-2.5deg); }
+    50%      { transform: rotate(2.5deg); }
+}
+.dl-descend .dl-sway {
+    animation: dlSway 1.6s ease-in-out infinite;
+}
+
+/* Landing bounce (animations outrank the inline transform from rAF) */
+@keyframes dlLand {
+    0%   { transform: translateY(0); }
+    35%  { transform: translateY(-9px); }
+    65%  { transform: translateY(0); }
+    82%  { transform: translateY(-3px); }
+    100% { transform: translateY(0); }
+}
+.dl-land .dl-flyer {
+    animation: dlLand 280ms ease-out;
+}
+.dl-success .dl-flyer {
+    opacity: 0;
+    transition: opacity 0.25s ease;
+}
+
+/* ---- Progress meter, sits just under the button ---- */
+.dl-meter {
+    position: absolute;
+    left: 50%;
+    top: calc(var(--dl-h, 32px) + 8px);
+    width: 168px;
+    margin-left: -84px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+    opacity: 0;
+    transition: opacity 0.25s ease;
+}
+.dl-descend .dl-meter,
+.dl-land .dl-meter,
+.dl-success .dl-meter { opacity: 1; }
+
+.dl-track {
+    flex: 1;
+    height: 5px;
+    border-radius: 999px;
+    background: #e8eef7;
+    overflow: hidden;
+}
+.dl-fill {
+    width: 0%;
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #3b82f6, #2563eb);
+    will-change: width;
+}
+.dl-pct {
+    min-width: 34px;
+    text-align: right;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--text-body);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---- Success row ---- */
+.dl-done {
+    position: absolute;
+    left: 50%;
+    top: calc(var(--dl-h, 32px) + 42px);
+    width: 168px;
+    margin-left: -84px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: #f0fdf4;
+    border: 1px solid #bbf7d0;
+    color: #15803d;
+    font-size: 0.74rem;
+    font-weight: 700;
+    white-space: nowrap;
+    animation: dlDoneIn 0.3s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+@keyframes dlDoneIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.dl-check {
+    stroke-dasharray: 26;
+    stroke-dashoffset: 26;
+    animation: dlDraw 420ms cubic-bezier(0.22, 1, 0.36, 1) 60ms forwards;
+}
+@keyframes dlDraw {
+    to { stroke-dashoffset: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .dl-flyer, .dl-chute, .dl-sway, .dl-check, .dl-done {
+        animation: none !important;
+    }
+    .dl-btn:not(:disabled):hover { transform: none; }
+    .dl-check { stroke-dashoffset: 0; }
+}
+
+/* ============================================================
+   DARK MODE — InFloAI
+   Colours / shadows / borders only. No layout, spacing or radius
+   is touched, so the light layout is preserved exactly.
+   Driven by [data-theme='dark'] on <html> (set pre-paint in index.html).
+   ============================================================ */
+
+/* Surface + text scale. Light values are byte-identical to the original
+   hardcoded colours, so light mode is unchanged; dark mode flips them as a
+   set — surfaces and their text always move together. */
+:root {
+    --surface: #ffffff;
+    --surface-2: #f8fafc;
+    --surface-3: #f1f5f9;
+    --hover: #f1f5f9;
+    --text-strong: #0f172a;
+    --text-body: #334155;
+    --text-faint: #94a3b8;
+    --border-strong: #cbd5e1;
+}
+
+[data-theme='dark'] {
+    --primary: #6366F1;
+    --primary-dark: #4F46E5;
+    --primary-light: #818CF8;
+    --secondary: #94A3B8;
+    --accent: #38BDF8;
+    --success: #22C55E;
+    --warning: #F59E0B;
+    --danger: #EF4444;
+    --info: #60A5FA;
+
+    --bg-primary: #0F172A;
+    --bg-secondary: #111827;
+    --bg-tertiary: #1E293B;
+    --surface: #1E293B;
+    --surface-2: #1F2937;
+    --surface-3: #111827;
+    --hover: #2D3748;
+
+    --text-primary: #F8FAFC;
+    --text-secondary: #94A3B8;
+    --text-muted: #94A3B8;
+    --border: #334155;
+
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.45);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.5);
+    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.55);
+    --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.6);
+    --shadow-glow: 0 8px 24px rgba(99, 102, 241, 0.3);
+
+    --text-strong: #F8FAFC;
+    --text-body: #CBD5E1;
+    --text-faint: #94A3B8;
+    --border-strong: #3F4D63;
+
+    color-scheme: dark;
+}
+
+/* 300ms cross-fade, applied only while switching so it never fights
+   the app's other transitions and animations. */
+html.theme-switching,
+html.theme-switching * {
+    transition: background-color 300ms ease,
+                background 300ms ease,
+                color 300ms ease,
+                border-color 300ms ease,
+                box-shadow 300ms ease,
+                fill 300ms ease,
+                stroke 300ms ease !important;
+    transition-delay: 0s !important;
+}
+
+/* ---------- Base ---------- */
+[data-theme='dark'] body {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+/* ---------- Theme toggle ---------- */
+.theme-toggle {
+    position: relative;
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.3s ease, border-color 0.3s ease, color 0.3s ease, transform 0.2s ease;
+}
+.theme-toggle:hover {
+    color: var(--primary);
+    border-color: var(--primary);
+    transform: scale(1.05);
+}
+.theme-toggle-icons {
+    position: relative;
+    display: block;
+    width: 18px;
+    height: 18px;
+}
+.theme-icon {
+    position: absolute;
+    inset: 0;
+    width: 18px;
+    height: 18px;
+    transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s ease;
+}
+.theme-icon-sun  { opacity: 1; transform: rotate(0deg) scale(1); }
+.theme-icon-moon { opacity: 0; transform: rotate(-90deg) scale(0.5); }
+.theme-toggle.is-dark .theme-icon-sun  { opacity: 0; transform: rotate(90deg) scale(0.5); }
+.theme-toggle.is-dark .theme-icon-moon { opacity: 1; transform: rotate(0deg) scale(1); }
+
+/* ---------- Cards ---------- */
+[data-theme='dark'] .glass-card {
+    background: var(--surface);
+    border-color: var(--border);
+    color: var(--text-primary);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+[data-theme='dark'] .glass-card:hover {
+    border-color: #3f4d63;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5), 0 18px 32px rgba(0, 0, 0, 0.38);
+}
+
+/* ---------- Sidebar & header ---------- */
+[data-theme='dark'] .app-sidebar,
+[data-theme='dark'] .glass-sidebar {
+    background: var(--bg-secondary) !important;
+    border-right-color: var(--border) !important;
+    color: var(--text-primary);
+}
+[data-theme='dark'] .nav-link { color: var(--text-primary); }
+[data-theme='dark'] .nav-link:hover { background: var(--hover); color: #ffffff; }
+[data-theme='dark'] .nav-link.active {
+    background: rgba(99, 102, 241, 0.16);
+    color: #ffffff;
+    border-left-color: var(--primary);
+    box-shadow: none;
+}
+[data-theme='dark'] .hamburger-bar { background: var(--text-primary); }
+
+/* ---------- Buttons ---------- */
+[data-theme='dark'] .btn { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45); }
+[data-theme='dark'] .btn-secondary { background: var(--surface-2); color: var(--text-primary); border-color: var(--border); }
+[data-theme='dark'] .btn-secondary:hover { background: var(--hover); }
+[data-theme='dark'] .btn-outline { border-color: var(--primary); color: var(--primary-light); }
+[data-theme='dark'] .btn-outline:hover { background: var(--primary); color: #ffffff; }
+
+/* ---------- Inputs ---------- */
+[data-theme='dark'] .input-field,
+[data-theme='dark'] input:not([type='checkbox']):not([type='radio']),
+[data-theme='dark'] select,
+[data-theme='dark'] textarea {
+    background: var(--surface-2);
+    border-color: var(--border);
+    color: var(--text-primary);
+}
+[data-theme='dark'] .input-field:focus,
+[data-theme='dark'] input:focus,
+[data-theme='dark'] select:focus,
+[data-theme='dark'] textarea:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
+}
+[data-theme='dark'] ::placeholder { color: #7b8698; }
+[data-theme='dark'] .input-label { color: var(--text-secondary); }
+
+/* ---------- Tables ---------- */
+[data-theme='dark'] .table-container { background: var(--surface); border-color: var(--border); }
+[data-theme='dark'] .table thead { background: var(--surface-2); border-bottom-color: var(--border); }
+[data-theme='dark'] .table th { color: #cbd5e1; }
+[data-theme='dark'] .table td { color: var(--text-primary); }
+[data-theme='dark'] .table tbody tr { border-bottom-color: var(--border); }
+[data-theme='dark'] .table tbody tr:hover { background: var(--hover); }
+
+/* ---------- Modals ---------- */
+[data-theme='dark'] .app-modal,
+[data-theme='dark'] .voucher-modal {
+    background: var(--surface);
+    border-color: var(--border);
+    color: var(--text-primary);
+}
+[data-theme='dark'] .app-modal-backdrop,
+[data-theme='dark'] .voucher-modal-backdrop { background: rgba(2, 6, 23, 0.72); }
+
+/* ---------- Page chrome (surface + text always flipped together) ---------- */
+[data-theme='dark'] .page-header {
+    background: var(--surface);
+    border-color: var(--border);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+[data-theme='dark'] .page-title { color: var(--text-strong); }
+[data-theme='dark'] .page-subtitle,
+[data-theme='dark'] .metric-label { color: var(--text-faint); }
+[data-theme='dark'] .metric-card {
+    background: var(--surface);
+    border-color: var(--border);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+[data-theme='dark'] .metric-value { color: var(--text-strong); }
+
+/* ---------- Voucher hero + section cards ---------- */
+[data-theme='dark'] .voucher-hero {
+    background: linear-gradient(120deg, var(--surface) 0%, var(--surface) 50%, var(--surface) 100%);
+    border: 1px solid var(--border);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+    color: var(--text-strong);
+}
+[data-theme='dark'] .voucher-hero h1 { color: var(--text-strong); }
+[data-theme='dark'] .voucher-hero p { color: var(--text-body); }
+[data-theme='dark'] .voucher-section-card { background: var(--surface); border-color: var(--border); }
+[data-theme='dark'] .voucher-section-head {
+    background: linear-gradient(180deg, rgba(99, 102, 241, 0.14) 0%, rgba(99, 102, 241, 0.08) 100%);
+    border-color: rgba(99, 102, 241, 0.35);
+}
+[data-theme='dark'] .voucher-section-head-title { color: var(--primary-light); }
+[data-theme='dark'] .voucher-modal-panel { background: var(--surface-2); border-color: var(--border); }
+[data-theme='dark'] .voucher-readonly { background: var(--surface-3) !important; color: var(--text-body); }
+[data-theme='dark'] .voucher-search-input { background: var(--surface-2); border-color: var(--border); color: var(--text-strong); }
+[data-theme='dark'] .voucher-month-picker,
+[data-theme='dark'] .voucher-month-select { background: var(--surface-2); border-color: var(--border); color: var(--text-strong); }
+[data-theme='dark'] .voucher-modal-title,
+[data-theme='dark'] .voucher-modal-header { color: var(--text-strong); }
+[data-theme='dark'] .voucher-modal-muted { color: var(--text-faint); }
+
+/* ---------- Asset / team / misc cards ---------- */
+[data-theme='dark'] .asset-voucher-section { background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 70%); border-color: var(--border); }
+[data-theme='dark'] .asset-voucher-metric,
+[data-theme='dark'] .asset-voucher-card { background: var(--surface); border-color: var(--border); color: var(--text-strong); }
+[data-theme='dark'] .team-modal-card { background: linear-gradient(180deg, var(--surface) 0%, var(--surface-3) 100%); color: var(--text-strong); }
+[data-theme='dark'] .team-modal-close { background: var(--surface-3); color: var(--text-strong); }
+[data-theme='dark'] .team-info-card { background: var(--surface); border-color: var(--border); color: var(--text-strong); }
+[data-theme='dark'] .hamburger-btn { background: var(--surface); border-color: var(--border); }
+[data-theme='dark'] .hamburger-btn:hover { background: var(--hover); }
+
+/* ---------- SOP ---------- */
+[data-theme='dark'] .sop-shell { background: var(--bg-primary); }
+[data-theme='dark'] .sop-search-input { background: var(--surface-2); border-color: var(--border); color: var(--text-strong); }
+[data-theme='dark'] .sop-search-wrap { background: var(--surface-2); border-color: var(--border); }
+[data-theme='dark'] .sop-tab-btn:hover { background: var(--hover); }
+
+/* ---------- Vendor upload (taxhacker) ---------- */
+[data-theme='dark'] .th-right-panel,
+[data-theme='dark'] .th-file-item,
+[data-theme='dark'] .th-add-files-btn,
+[data-theme='dark'] .th-empty-btn-outline { background: var(--surface); border-color: var(--border); color: var(--text-strong); }
+[data-theme='dark'] .th-file-item:hover,
+[data-theme='dark'] .th-empty-btn-outline:hover:not(:disabled) { background: var(--hover); }
+[data-theme='dark'] .th-dropzone { background: var(--surface-2); border-color: var(--border); }
+[data-theme='dark'] .th-dropzone:hover { background: var(--hover); }
+[data-theme='dark'] .th-file-toolbar { background: var(--surface-2); border-color: var(--border); }
+
+/* ---------- Complete profile ---------- */
+[data-theme='dark'] .complete-profile-input-wrap select { background: var(--surface-2); color: var(--text-strong); }
+
+/* ---------- Accent text ----------
+   Navy/blue text reads fine on white but disappears on a dark surface.
+   Lift it to a light indigo so headings, metric values and tabs stay legible. */
+[data-theme='dark'] .asset-voucher-metric strong,
+[data-theme='dark'] .sop-export-btn,
+[data-theme='dark'] .sop-tab-btn.active,
+[data-theme='dark'] .sop-tab-btn.active svg,
+[data-theme='dark'] .sop-pdf-section h2,
+[data-theme='dark'] .sop-info p,
+[data-theme='dark'] .team-modal-icon,
+[data-theme='dark'] .team-release-badge,
+[data-theme='dark'] .team-avatar-inner,
+[data-theme='dark'] .hamburger-btn.is-active {
+    color: #A5B4FC;
+}
+/* Chips carry their own light tint — flip the tint, not just the text */
+[data-theme='dark'] .voucher-modal-chip {
+    background: rgba(99, 102, 241, 0.18);
+    color: #C7D2FE;
+}
+[data-theme='dark'] .asset-voucher-metric {
+    background: var(--surface-2);
+    border-color: var(--border);
+}
+[data-theme='dark'] .sop-info { background: rgba(99, 102, 241, 0.12); border-color: rgba(99, 102, 241, 0.3); }
+[data-theme='dark'] .sop-card,
+[data-theme='dark'] .sop-pdf-section { background: var(--surface); border-color: var(--border); color: var(--text-strong); }
+
+/* ---------- Search ---------- */
+[data-theme='dark'] .global-search-box { background: var(--surface-2); border-color: var(--border); }
+[data-theme='dark'] .global-search:hover .global-search-box,
+[data-theme='dark'] .global-search-box.is-focus { background: var(--surface); border-color: var(--primary); }
+[data-theme='dark'] .global-search-input { color: var(--text-primary); }
+[data-theme='dark'] .global-search-box.is-focus { box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.25); }
+[data-theme='dark'] .premium-search-field:hover:not(:focus) { border-color: var(--primary) !important; }
+[data-theme='dark'] .premium-search-field:focus { box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.25) !important; }
+
+/* ---------- Notifications ---------- */
+[data-theme='dark'] .bell-dropdown {
+    background: var(--surface) !important;
+    border-color: var(--border) !important;
+    box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.7) !important;
+}
+[data-theme='dark'] .bell-dropdown-header { background: var(--surface-2) !important; border-bottom-color: var(--border) !important; }
+[data-theme='dark'] .bell-dropdown-title { color: var(--text-primary) !important; }
+[data-theme='dark'] .bell-note { border-bottom-color: rgba(255, 255, 255, 0.06) !important; }
+[data-theme='dark'] .bell-note-title { color: var(--text-primary) !important; }
+[data-theme='dark'] .bell-note-body { color: var(--text-secondary) !important; }
+[data-theme='dark'] .bell-note-time { color: #7b8698 !important; }
+[data-theme='dark'] .bell-btn { color: var(--text-secondary); }
+
+/* ---------- Download button overlay ---------- */
+[data-theme='dark'] .dl-meter { background: var(--surface); border-color: var(--border); }
+[data-theme='dark'] .dl-track { background: #0f172a; }
+[data-theme='dark'] .dl-pct { color: var(--text-primary); }
+[data-theme='dark'] .dl-done { background: rgba(34, 197, 94, 0.12); border-color: rgba(34, 197, 94, 0.35); color: #4ade80; }
+
+/* ---------- Upload / extraction ---------- */
+[data-theme='dark'] .voucher-file-card,
+[data-theme='dark'] .voucher-extract-steps {
+    background: var(--surface-2);
+    border-color: var(--border);
+    color: var(--text-primary);
+}
+[data-theme='dark'] .voucher-extract-bar { background: #0f172a; }
+
+/* ---------- Tailwind utility remap ----------
+   The app uses a small set of Tailwind colour utilities for chrome
+   (header, sidebar, table cells). Remapping them here is far safer
+   than adding a dark: variant to every element. */
+[data-theme='dark'] .bg-white { background-color: var(--surface) !important; }
+[data-theme='dark'] .bg-slate-50 { background-color: var(--surface-2) !important; }
+[data-theme='dark'] .bg-slate-100 { background-color: var(--surface-3) !important; }
+[data-theme='dark'] .text-slate-900,
+[data-theme='dark'] .text-slate-800,
+[data-theme='dark'] .text-slate-700 { color: var(--text-primary) !important; }
+[data-theme='dark'] .text-slate-600,
+[data-theme='dark'] .text-slate-500,
+[data-theme='dark'] .text-slate-400 { color: var(--text-secondary) !important; }
+[data-theme='dark'] .border-slate-200,
+[data-theme='dark'] .border-slate-300 { border-color: var(--border) !important; }
+[data-theme='dark'] .hover\:bg-slate-50:hover { background-color: var(--hover) !important; }
+[data-theme='dark'] .hover\:bg-blue-50:hover { background-color: rgba(99, 102, 241, 0.15) !important; }
+[data-theme='dark'] .text-blue-700,
+[data-theme='dark'] .text-blue-600 { color: var(--primary-light) !important; }
+[data-theme='dark'] .bg-blue-50 { background-color: rgba(99, 102, 241, 0.14) !important; }
+[data-theme='dark'] .bg-green-50 { background-color: rgba(34, 197, 94, 0.14) !important; }
+[data-theme='dark'] .bg-red-50 { background-color: rgba(239, 68, 68, 0.14) !important; }
+[data-theme='dark'] .bg-amber-50,
+[data-theme='dark'] .bg-yellow-50 { background-color: rgba(245, 158, 11, 0.14) !important; }
+
+/* ---------- Scrollbars ---------- */
+[data-theme='dark'] ::-webkit-scrollbar-track { background: var(--surface-3); }
+[data-theme='dark'] ::-webkit-scrollbar-thumb { background: #3d4a5f; }
+[data-theme='dark'] ::-webkit-scrollbar-thumb:hover { background: #4c5b73; }
+
+@media (prefers-reduced-motion: reduce) {
+    html.theme-switching, html.theme-switching * { transition: none !important; }
+    .theme-icon { transition: opacity 0.2s ease; }
+}
+
+/* ============================================================
+   LIQUID GLASS — Apple WWDC 2025 material system
+   Not glassmorphism. Each surface is composed of 7 layers:
+     1 backdrop  : blur + saturate + brightness (+ optional refraction)
+     2 tint      : multi-stop gradient, 35% top -> 12% bottom,
+                   corners lifted, centre gently darkened
+     3 edge      : gradient hairline via mask-composite (bright top,
+                   dark bottom) — never a flat white border
+     4 specular  : curved highlight near the top edge
+     5 inner     : inset thickness shading (top light, bottom dark)
+     6 reflection: cursor-tracked light, eased in JS (utils/liquidGlass)
+     7 content   : untouched, fully opaque, always readable
+   ============================================================ */
+:root {
+    --lg-blur: 20px;
+    --lg-sat: 180%;
+    --lg-bright: 1.06;
+    --lg-radius: 20px;
+
+    /* Layer 2 - tint */
+    --lg-t1: rgba(255, 255, 255, 0.35);
+    --lg-t2: rgba(255, 255, 255, 0.20);
+    --lg-t3: rgba(255, 255, 255, 0.12);
+    --lg-corner: rgba(255, 255, 255, 0.22);
+    --lg-core: rgba(15, 23, 42, 0.05);
+
+    /* Layer 3 - edge lighting */
+    --lg-edge-top: rgba(255, 255, 255, 0.95);
+    --lg-edge-mid: rgba(255, 255, 255, 0.30);
+    --lg-edge-bot: rgba(15, 23, 42, 0.20);
+
+    /* Layer 4/6 - specular + moving reflection */
+    --lg-spec: rgba(255, 255, 255, 0.55);
+    --lg-refl: rgba(255, 255, 255, 0.24);
+
+    /* Layer 5 - inner thickness */
+    --lg-inner-top: rgba(255, 255, 255, 0.60);
+    --lg-inner-bot: rgba(15, 23, 42, 0.10);
+
+    /* Depth - three stacked shadows */
+    --lg-sh1: 0 28px 60px -18px rgba(15, 23, 42, 0.30);
+    --lg-sh2: 0 8px 20px -8px rgba(15, 23, 42, 0.20);
+    --lg-sh3: 0 1px 2px rgba(15, 23, 42, 0.08);
+
+    /* reflection origin, driven from JS; parked off-surface */
+    --lg-mx: 50%;
+    --lg-my: -40%;
+}
+
+[data-theme='dark'] {
+    --lg-bright: 1.0;
+    --lg-t1: rgba(148, 163, 184, 0.18);
+    --lg-t2: rgba(30, 41, 59, 0.55);
+    --lg-t3: rgba(15, 23, 42, 0.62);
+    --lg-corner: rgba(226, 232, 240, 0.10);
+    --lg-core: rgba(0, 0, 0, 0.18);
+
+    --lg-edge-top: rgba(255, 255, 255, 0.34);
+    --lg-edge-mid: rgba(255, 255, 255, 0.10);
+    --lg-edge-bot: rgba(0, 0, 0, 0.55);
+
+    --lg-spec: rgba(255, 255, 255, 0.18);
+    --lg-refl: rgba(255, 255, 255, 0.10);
+
+    --lg-inner-top: rgba(255, 255, 255, 0.14);
+    --lg-inner-bot: rgba(0, 0, 0, 0.40);
+
+    --lg-sh1: 0 28px 60px -18px rgba(0, 0, 0, 0.65);
+    --lg-sh2: 0 8px 20px -8px rgba(0, 0, 0, 0.45);
+    --lg-sh3: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+/* ---------- The material ---------- */
+.lg-mat,
+.lg-glass-bar,
+.bell-dropdown,
+.lg-dialog-card,
+.app-modal,
+.voucher-modal,
+.team-modal-card,
+.lg-module-card,
+.global-search-box,
+.theme-toggle,
+.dl-meter,
+.dl-done,
+.metric-card,
+.th-dropzone {
+    position: relative;
+    isolation: isolate;
+    border: 0 !important;
+    border-radius: var(--lg-radius);
+    /* Layer 2 - corners lifted, centre darkened, vertical falloff */
+    background:
+        radial-gradient(120% 90% at 50% 55%, var(--lg-core) 0%, transparent 62%),
+        radial-gradient(60% 60% at 0% 0%, var(--lg-corner) 0%, transparent 55%),
+        radial-gradient(60% 60% at 100% 0%, var(--lg-corner) 0%, transparent 55%),
+        linear-gradient(180deg, var(--lg-t1) 0%, var(--lg-t2) 46%, var(--lg-t3) 100%) !important;
+    /* Layer 1 */
+    backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat)) brightness(var(--lg-bright));
+    -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat)) brightness(var(--lg-bright));
+    /* Depth + Layer 5 */
+    box-shadow:
+        var(--lg-sh1), var(--lg-sh2), var(--lg-sh3),
+        inset 0 1px 0 var(--lg-inner-top),
+        inset 0 -1px 0 var(--lg-inner-bot),
+        inset 0 0 30px rgba(255, 255, 255, 0.05) !important;
+    transition:
+        transform 250ms cubic-bezier(0.22, 1, 0.36, 1),
+        box-shadow 250ms cubic-bezier(0.22, 1, 0.36, 1),
+        backdrop-filter 250ms ease;
+    will-change: transform;
+}
+
+/* Layer 4 + Layer 6 - specular highlight and the tracked reflection.
+   Sits above the tint, below content (negative z-index inside the
+   element's own stacking context). */
+.lg-mat::before,
+.lg-glass-bar::before,
+.bell-dropdown::before,
+.lg-dialog-card::before,
+.app-modal::before,
+.voucher-modal::before,
+.team-modal-card::before,
+.lg-module-card::before,
+.global-search-box::before,
+.theme-toggle::before,
+.dl-meter::before,
+.metric-card::before,
+.th-dropzone::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background:
+        radial-gradient(circle 220px at var(--lg-mx) var(--lg-my), var(--lg-refl) 0%, transparent 68%),
+        radial-gradient(150% 62% at 50% -28%, var(--lg-spec) 0%, rgba(255, 255, 255, 0) 62%);
+    opacity: 0.9;
+    transition: opacity 250ms ease;
+}
+
+/* Layer 3 - gradient hairline. mask-composite carves out the centre so
+   only a 1px ring paints: bright at the top, dark at the bottom. */
+.lg-mat::after,
+.bell-dropdown::after,
+.lg-dialog-card::after,
+.app-modal::after,
+.voucher-modal::after,
+.team-modal-card::after,
+.lg-module-card::after,
+.global-search-box::after,
+.theme-toggle::after,
+.dl-meter::after,
+.metric-card::after,
+.th-dropzone::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    border-radius: inherit;
+    padding: 1px;
+    pointer-events: none;
+    background: linear-gradient(180deg,
+        var(--lg-edge-top) 0%,
+        var(--lg-edge-mid) 32%,
+        rgba(255, 255, 255, 0.04) 66%,
+        var(--lg-edge-bot) 100%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+            mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            mask-composite: exclude;
+    transition: opacity 250ms ease, background 250ms ease;
+}
+
+/* ---------- Hover: clearer glass, brighter edge, deeper shadow, 2px lift ---------- */
+.lg-mat:hover,
+.jcc-login-card:hover,
+.lg-module-card:hover,
+.theme-toggle:hover,
+.metric-card:hover,
+.th-dropzone:hover {
+    --lg-t1: rgba(255, 255, 255, 0.28);
+    --lg-t2: rgba(255, 255, 255, 0.15);
+    --lg-t3: rgba(255, 255, 255, 0.09);
+    --lg-edge-top: rgba(255, 255, 255, 1);
+    transform: translateY(-2px);
+    backdrop-filter: blur(calc(var(--lg-blur) + 4px)) saturate(200%) brightness(calc(var(--lg-bright) + 0.03));
+    -webkit-backdrop-filter: blur(calc(var(--lg-blur) + 4px)) saturate(200%) brightness(calc(var(--lg-bright) + 0.03));
+    box-shadow:
+        0 36px 80px -20px rgba(15, 23, 42, 0.36),
+        0 12px 28px -10px rgba(15, 23, 42, 0.26),
+        0 2px 4px rgba(15, 23, 42, 0.10),
+        inset 0 1px 0 var(--lg-inner-top),
+        inset 0 -1px 0 var(--lg-inner-bot),
+        inset 0 0 34px rgba(255, 255, 255, 0.07) !important;
+}
+[data-theme='dark'] .lg-mat:hover,
+[data-theme='dark'] .lg-module-card:hover,
+[data-theme='dark'] .metric-card:hover,
+[data-theme='dark'] .theme-toggle:hover,
+[data-theme='dark'] .th-dropzone:hover {
+    --lg-t1: rgba(148, 163, 184, 0.22);
+    --lg-t2: rgba(30, 41, 59, 0.48);
+    --lg-t3: rgba(15, 23, 42, 0.55);
+    box-shadow:
+        0 36px 80px -20px rgba(0, 0, 0, 0.72),
+        0 12px 28px -10px rgba(0, 0, 0, 0.5),
+        0 2px 4px rgba(0, 0, 0, 0.4),
+        inset 0 1px 0 var(--lg-inner-top),
+        inset 0 -1px 0 var(--lg-inner-bot),
+        inset 0 0 34px rgba(255, 255, 255, 0.05) !important;
+}
+.lg-mat:hover::before,
+.lg-module-card:hover::before,
+.theme-toggle:hover::before,
+.metric-card:hover::before { opacity: 1; }
+
+/* ---------- Press: compress, tighter shadow ---------- */
+.lg-mat:active,
+.lg-module-card:active,
+.theme-toggle:active {
+    transform: scale(0.98);
+    box-shadow:
+        0 8px 18px -8px rgba(15, 23, 42, 0.30),
+        0 2px 6px -2px rgba(15, 23, 42, 0.24),
+        inset 0 1px 0 var(--lg-inner-top),
+        inset 0 -1px 0 var(--lg-inner-bot) !important;
+    transition-duration: 120ms;
+}
+
+/* ---------- Shape variants ---------- */
+.global-search-box { border-radius: 999px; }
+.theme-toggle { border-radius: 50%; }
+.lg-glass-bar { border-radius: 0; }
+.dl-meter, .dl-done { border-radius: 14px; }
+.metric-card, .th-dropzone { border-radius: 16px; }
+
+/* The top bar is edge-lit on its bottom border only */
+.lg-glass-bar {
+    box-shadow:
+        0 10px 30px -12px rgba(15, 23, 42, 0.18),
+        inset 0 1px 0 rgba(255, 255, 255, 0.5),
+        inset 0 -1px 0 var(--lg-edge-bot) !important;
+}
+.lg-glass-bar:hover { transform: none; }
+
+/* Preserve the search field's own width animation */
+.global-search-box {
+    transition:
+        width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+        transform 250ms cubic-bezier(0.22, 1, 0.36, 1),
+        box-shadow 250ms ease,
+        backdrop-filter 250ms ease;
+}
+.global-search:hover .global-search-box,
+.global-search-box.is-focus { transform: none; }
+.global-search-box.is-focus {
+    box-shadow:
+        0 0 0 4px rgba(59, 130, 246, 0.28),
+        var(--lg-sh2),
+        inset 0 1px 0 var(--lg-inner-top) !important;
+}
+
+/* Panels must not lift or they detach from their anchor */
+.bell-dropdown:hover,
+.dl-meter:hover,
+.lg-dialog-card:hover,
+.app-modal:hover,
+.voucher-modal:hover { transform: none; }
+
+.bell-dropdown { animation: lgPanelIn 0.28s cubic-bezier(0.22, 1, 0.36, 1); transform-origin: top right; }
+.bell-dropdown-header { background: transparent !important; border-bottom: 1px solid var(--lg-edge-mid) !important; }
+@keyframes lgPanelIn {
+    from { opacity: 0; transform: translateY(-8px) scale(0.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Modal backdrops get their own diffusion */
+.app-modal-backdrop,
+.voucher-modal-backdrop,
+.lg-dialog-overlay {
+    backdrop-filter: blur(16px) saturate(130%) brightness(0.96) !important;
+    -webkit-backdrop-filter: blur(16px) saturate(130%) brightness(0.96) !important;
+}
+
+/* ---------- Layer 1b - optional refraction ----------
+   Separate rule on purpose: if backdrop-filter: url() is unsupported the
+   whole declaration is dropped and the block above still applies. */
+.bell-dropdown,
+.lg-dialog-card {
+    backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat)) brightness(var(--lg-bright)) url(#lg-refraction);
+}
+
+/* Content always sits on top and stays fully opaque (Layer 7) */
+.lg-mat > *,
+.lg-module-card > *,
+.metric-card > * { position: relative; z-index: 2; }
+
+/* ---------- Fallbacks and accessibility ---------- */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .lg-mat, .lg-glass-bar, .bell-dropdown, .lg-dialog-card,
+    .app-modal, .voucher-modal, .team-modal-card, .lg-module-card,
+    .global-search-box, .theme-toggle, .dl-meter, .dl-done, .metric-card, .th-dropzone {
+        background: var(--surface) !important;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .lg-mat, .lg-module-card, .metric-card, .theme-toggle, .bell-dropdown { transition: none !important; }
+    .lg-mat:hover, .lg-module-card:hover, .metric-card:hover, .theme-toggle:hover { transform: none; }
+    .bell-dropdown { animation: none; }
+}
+@media (prefers-contrast: more) {
+    .lg-mat, .bell-dropdown, .lg-dialog-card, .app-modal,
+    .voucher-modal, .lg-module-card, .metric-card {
+        background: var(--surface) !important;
+        backdrop-filter: none;
+    }
+}
+
+/* Variant modifiers for the LiquidGlass component */
+.lg-v-card { border-radius: 16px; }
+.lg-v-capsule { border-radius: 999px; }
+.lg-v-circle { border-radius: 50%; }
+.lg-v-bar { border-radius: 0; }
+.lg-v-bar:hover { transform: none; }
+.lg-refract {
+    backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat)) brightness(var(--lg-bright)) url(#lg-refraction);
+}
+
+/* ============================================================
+   Dark mode - complete Tailwind colour remap
+   Generated from the utilities actually used in the codebase
+   (64 distinct). Light tints become translucent dark
+   tints; dark tinted text lightens to the 300 step; solid 500/600
+   brand fills are left alone so buttons keep their colour.
+   ============================================================ */
+[data-theme='dark'] .bg-amber-100 { background-color: rgba(245,158,11, 0.16) !important; }
+[data-theme='dark'] .bg-amber-50 { background-color: rgba(245,158,11, 0.16) !important; }
+[data-theme='dark'] .bg-blue-100 { background-color: rgba(59,130,246, 0.16) !important; }
+[data-theme='dark'] .bg-blue-50 { background-color: rgba(59,130,246, 0.16) !important; }
+[data-theme='dark'] .bg-emerald-50 { background-color: rgba(16,185,129, 0.16) !important; }
+[data-theme='dark'] .bg-green-100 { background-color: rgba(34,197,94, 0.16) !important; }
+[data-theme='dark'] .bg-indigo-100 { background-color: rgba(99,102,241, 0.16) !important; }
+[data-theme='dark'] .bg-orange-100 { background-color: rgba(249,115,22, 0.16) !important; }
+[data-theme='dark'] .bg-purple-100 { background-color: rgba(168,85,247, 0.16) !important; }
+[data-theme='dark'] .bg-red-100 { background-color: rgba(239,68,68, 0.16) !important; }
+[data-theme='dark'] .bg-red-50 { background-color: rgba(239,68,68, 0.16) !important; }
+[data-theme='dark'] .bg-sky-100 { background-color: rgba(14,165,233, 0.16) !important; }
+[data-theme='dark'] .bg-slate-100 { background-color: var(--surface-3) !important; }
+[data-theme='dark'] .bg-slate-50 { background-color: var(--surface-2) !important; }
+[data-theme='dark'] .bg-teal-100 { background-color: rgba(20,184,166, 0.16) !important; }
+[data-theme='dark'] .border-amber-200 { border-color: rgba(245,158,11, 0.38) !important; }
+[data-theme='dark'] .border-amber-300 { border-color: rgba(245,158,11, 0.38) !important; }
+[data-theme='dark'] .border-blue-200 { border-color: rgba(59,130,246, 0.38) !important; }
+[data-theme='dark'] .border-blue-500 { border-color: rgba(59,130,246, 0.38) !important; }
+[data-theme='dark'] .border-emerald-200 { border-color: rgba(16,185,129, 0.38) !important; }
+[data-theme='dark'] .border-orange-300 { border-color: rgba(249,115,22, 0.38) !important; }
+[data-theme='dark'] .border-red-100 { border-color: rgba(239,68,68, 0.38) !important; }
+[data-theme='dark'] .border-red-200 { border-color: rgba(239,68,68, 0.38) !important; }
+[data-theme='dark'] .border-slate-100 { border-color: var(--border) !important; }
+[data-theme='dark'] .border-slate-200 { border-color: var(--border) !important; }
+[data-theme='dark'] .border-slate-300 { border-color: var(--border) !important; }
+[data-theme='dark'] .hover:bg-amber-50:hover { background-color: rgba(245,158,11, 0.22) !important; }
+[data-theme='dark'] .hover:bg-blue-50:hover { background-color: rgba(59,130,246, 0.22) !important; }
+[data-theme='dark'] .hover:bg-indigo-50:hover { background-color: rgba(99,102,241, 0.22) !important; }
+[data-theme='dark'] .hover:bg-orange-50:hover { background-color: rgba(249,115,22, 0.22) !important; }
+[data-theme='dark'] .hover:bg-slate-100:hover { background-color: var(--hover) !important; }
+[data-theme='dark'] .hover:bg-slate-50:hover { background-color: var(--surface-2) !important; }
+[data-theme='dark'] .hover:text-blue-700:hover { color: #93C5FD !important; }
+[data-theme='dark'] .hover:text-slate-900:hover { color: var(--text-primary) !important; }
+[data-theme='dark'] .text-amber-700 { color: #FCD34D !important; }
+[data-theme='dark'] .text-amber-800 { color: #FCD34D !important; }
+[data-theme='dark'] .text-blue-600 { color: #93C5FD !important; }
+[data-theme='dark'] .text-blue-700 { color: #93C5FD !important; }
+[data-theme='dark'] .text-blue-800 { color: #93C5FD !important; }
+[data-theme='dark'] .text-emerald-700 { color: #6EE7B7 !important; }
+[data-theme='dark'] .text-emerald-800 { color: #6EE7B7 !important; }
+[data-theme='dark'] .text-green-800 { color: #86EFAC !important; }
+[data-theme='dark'] .text-indigo-700 { color: #A5B4FC !important; }
+[data-theme='dark'] .text-indigo-800 { color: #A5B4FC !important; }
+[data-theme='dark'] .text-orange-700 { color: #FDBA74 !important; }
+[data-theme='dark'] .text-orange-800 { color: #FDBA74 !important; }
+[data-theme='dark'] .text-purple-800 { color: #D8B4FE !important; }
+[data-theme='dark'] .text-red-600 { color: #FCA5A5 !important; }
+[data-theme='dark'] .text-red-700 { color: #FCA5A5 !important; }
+[data-theme='dark'] .text-red-800 { color: #FCA5A5 !important; }
+[data-theme='dark'] .text-sky-800 { color: #7DD3FC !important; }
+[data-theme='dark'] .text-slate-400 { color: var(--text-faint) !important; }
+[data-theme='dark'] .text-slate-500 { color: var(--text-secondary) !important; }
+[data-theme='dark'] .text-slate-600 { color: var(--text-secondary) !important; }
+[data-theme='dark'] .text-slate-700 { color: var(--text-primary) !important; }
+[data-theme='dark'] .text-slate-900 { color: var(--text-primary) !important; }
+[data-theme='dark'] .text-teal-800 { color: #5EEAD4 !important; }
+
+/* ---------- Hub (module chooser) palette ----------
+   Light values match the original hardcoded colours exactly. */
+:root {
+    --hub-bg: linear-gradient(135deg, #F8FAFC 0%, #EEF2FF 100%);
+    --hub-purple-border: #E9D5FF;
+    --hub-purple-icon-bg: #F3E8FF;
+    --hub-purple-icon: #7E22CE;
+    --hub-purple-title: #6B21A8;
+    --hub-blue-border: #DBEAFE;
+    --hub-blue-icon-bg: #DBEAFE;
+    --hub-blue-icon: #1D4ED8;
+    --hub-blue-title: #1E3A5F;
+}
+[data-theme='dark'] {
+    --hub-bg: linear-gradient(135deg, #0B1220 0%, #131C31 55%, #0F172A 100%);
+    --hub-purple-border: rgba(168, 85, 247, 0.35);
+    --hub-purple-icon-bg: rgba(168, 85, 247, 0.18);
+    --hub-purple-icon: #D8B4FE;
+    --hub-purple-title: #E9D5FF;
+    --hub-blue-border: rgba(99, 102, 241, 0.35);
+    --hub-blue-icon-bg: rgba(99, 102, 241, 0.18);
+    --hub-blue-icon: #A5B4FC;
+    --hub-blue-title: #C7D2FE;
+}
+
+/* The module cards are glass; keep their body copy at full contrast */
+.lg-module-card p,
+.lg-module-card span:not([style*="var(--hub"]) {
+    color: var(--text-body);
+}
+
+/* Header Feedback link: give it the same treatment as the other chrome
+   controls so the pressed/hover state can never go white-on-white. */
+[data-theme='dark'] a[href="/feedback"],
+[data-theme='dark'] a[href$="/feedback"] {
+    color: var(--text-primary) !important;
+    border-color: var(--border) !important;
+}
+[data-theme='dark'] a[href="/feedback"]:hover,
+[data-theme='dark'] a[href$="/feedback"]:hover,
+[data-theme='dark'] a[href="/feedback"]:active,
+[data-theme='dark'] a[href$="/feedback"]:active {
+    background-color: var(--hover) !important;
+    color: var(--text-primary) !important;
+}
+
+/* ---------- Hub: give the glass something to refract ----------
+   Flat backdrop = muddy glass. Layered aurora glows behind the cards
+   give the material real colour and depth to pick up. */
+:root {
+    --hub-bg:
+        radial-gradient(900px 620px at 22% 26%, rgba(99, 102, 241, 0.10) 0%, transparent 62%),
+        radial-gradient(820px 540px at 78% 64%, rgba(168, 85, 247, 0.08) 0%, transparent 60%),
+        linear-gradient(135deg, #F8FAFC 0%, #EEF2FF 100%);
+    --hub-purple-glow: rgba(168, 85, 247, 0.18);
+    --hub-blue-glow: rgba(59, 130, 246, 0.18);
+}
+[data-theme='dark'] {
+    --hub-bg:
+        radial-gradient(900px 620px at 20% 24%, rgba(99, 102, 241, 0.22) 0%, transparent 60%),
+        radial-gradient(820px 560px at 80% 62%, rgba(168, 85, 247, 0.16) 0%, transparent 58%),
+        radial-gradient(760px 520px at 52% 108%, rgba(56, 189, 248, 0.12) 0%, transparent 60%),
+        linear-gradient(135deg, #0B1220 0%, #131C31 55%, #0F172A 100%);
+    --hub-purple-glow: rgba(192, 132, 252, 0.30);
+    --hub-blue-glow: rgba(129, 140, 248, 0.30);
+}
+
+/* Accent-tinted glass + coloured halo, instead of neutral grey */
+.lg-module-card {
+    background:
+        radial-gradient(135% 95% at 50% -12%, var(--card-glow, transparent) 0%, transparent 58%),
+        radial-gradient(60% 60% at 0% 0%, var(--lg-corner) 0%, transparent 55%),
+        radial-gradient(60% 60% at 100% 0%, var(--lg-corner) 0%, transparent 55%),
+        linear-gradient(180deg, var(--lg-t1) 0%, var(--lg-t2) 46%, var(--lg-t3) 100%) !important;
+    box-shadow:
+        var(--lg-sh1),
+        var(--lg-sh2),
+        0 0 54px -18px var(--card-glow, transparent),
+        inset 0 1px 0 var(--lg-inner-top),
+        inset 0 -1px 0 var(--lg-inner-bot) !important;
+}
+.lg-module-card:hover {
+    box-shadow:
+        0 36px 80px -20px rgba(0, 0, 0, 0.6),
+        0 12px 28px -10px rgba(0, 0, 0, 0.4),
+        0 0 78px -14px var(--card-glow, transparent),
+        inset 0 1px 0 var(--lg-inner-top),
+        inset 0 -1px 0 var(--lg-inner-bot) !important;
+}
+
+/* Icon tile reads as a lit chip sitting on the glass */
+.lg-module-card > div:first-of-type {
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.22),
+        0 6px 18px -6px var(--card-glow, rgba(0, 0, 0, 0.3));
+}
+
+/* Copy hierarchy on the glass */
+.lg-module-card p { color: var(--text-body); }
+[data-theme='dark'] .lg-module-card p { color: #C3CDDD; }
+
+/* ============================================================
+   Form modals: NO glass.
+   Edit User, Add Purchase Order etc. are long forms — translucency
+   pushes label contrast down and makes them hard to scan. These
+   revert to the original solid card (14px radius, hairline border,
+   drop shadow) in both themes.
+   ============================================================ */
+.app-modal,
+.voucher-modal {
+    background: var(--surface) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 14px !important;
+    box-shadow: 0 22px 55px rgba(15, 23, 42, 0.24) !important;
+    isolation: auto;
+}
+[data-theme='dark'] .app-modal,
+[data-theme='dark'] .voucher-modal {
+    box-shadow: 0 22px 55px rgba(0, 0, 0, 0.6) !important;
+}
+
+/* Strip the glass layers (specular / reflection / edge ring) */
+.app-modal::before,
+.app-modal::after,
+.voucher-modal::before,
+.voucher-modal::after {
+    content: none !important;
+    display: none !important;
+}
+
+/* Labels inside form modals stay at full readable contrast */
+.app-modal .input-label,
+.voucher-modal .input-label,
+.app-modal label,
+.voucher-modal label {
+    color: var(--text-body);
+    opacity: 1;
+}
+[data-theme='dark'] .app-modal .input-label,
+[data-theme='dark'] .voucher-modal .input-label,
+[data-theme='dark'] .app-modal label,
+[data-theme='dark'] .voucher-modal label {
+    color: #CBD5E1;
+}
+
+/* Fields inside form modals: solid, not frosted */
+.app-modal .input-field,
+.voucher-modal .input-field,
+.app-modal input,
+.app-modal select,
+.app-modal textarea,
+.voucher-modal input,
+.voucher-modal select,
+.voucher-modal textarea {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+
+/* Backdrop keeps a light dim + slight blur, as before */
+.app-modal-backdrop,
+.voucher-modal-backdrop {
+    backdrop-filter: blur(4px) !important;
+    -webkit-backdrop-filter: blur(4px) !important;
+}
+
+/* ============================================================
+   Confirm / alert dialogs: NO glass either.
+   Small prompts over arbitrary page content — translucency turned
+   them muddy. Back to the original solid card.
+   ============================================================ */
+.lg-dialog-card {
+    background: var(--surface) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 16px !important;
+    box-shadow: 0 25px 60px rgba(15, 23, 42, 0.28), 0 0 0 1px rgba(15, 23, 42, 0.05) !important;
+    isolation: auto;
+}
+[data-theme='dark'] .lg-dialog-card {
+    box-shadow: 0 25px 60px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;
+}
+.lg-dialog-card::before,
+.lg-dialog-card::after {
+    content: none !important;
+    display: none !important;
+}
+.lg-dialog-overlay {
+    backdrop-filter: blur(4px) !important;
+    -webkit-backdrop-filter: blur(4px) !important;
+}
+
+/* ---------- Coloured banner headers ----------
+   A global  beats the colour a
+   banner sets on its parent, so titles rendered dark on dark-blue.
+   Headings inside a coloured banner inherit the banner's colour. */
+.sop-header,
+.sop-header h1,
+.sop-header h2,
+.sop-header p,
+.sop-header .sop-header-badge {
+    color: #ffffff !important;
+}
+.sop-header p { opacity: 0.85; }
+.sop-header .sop-header-badge {
+    background: rgba(255, 255, 255, 0.16);
+    border: 1px solid rgba(255, 255, 255, 0.28);
+}
+[data-theme='dark'] .sop-header {
+    background: linear-gradient(135deg, #16233B 0%, #1E3A6B 100%);
+}
+/* Export PDF button on the banner reads as a light control */
+.sop-export-btn {
+    background: rgba(255, 255, 255, 0.95) !important;
+    color: #12447F !important;
+    border: 1px solid rgba(255, 255, 255, 0.5) !important;
+}
+.sop-export-btn:hover { background: #ffffff !important; }
+
+/* ============================================================
+   Logout choreography
+   idle -> working (progress) -> success (drawn check) -> page fade
+   The idle face and the state overlay occupy the same box, so the
+   button never resizes and nothing on the page shifts.
+   ============================================================ */
+.logout-btn {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    transition:
+        transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+        box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1),
+        filter 220ms ease;
+    will-change: transform;
+}
+
+/* Light reflection that sweeps across on hover */
+.logout-btn::before {
+    content: '';
+    position: absolute;
+    top: -60%;
+    left: -45%;
+    width: 42%;
+    height: 220%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+    transform: rotate(18deg);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 0;
+    transition: opacity 200ms ease, left 620ms cubic-bezier(0.22, 1, 0.36, 1), width 200ms ease;
+}
+.logout-btn:not(:disabled):hover::before { opacity: 1; left: 115%; }
+
+.logout-btn:not(:disabled):hover {
+    transform: translateY(-2px) scale(1.02);
+    box-shadow:
+        0 12px 26px -8px rgba(239, 68, 68, 0.45),
+        0 0 18px rgba(239, 68, 68, 0.28);
+}
+/* icon eases toward the exit */
+.logout-icon { transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1); }
+.logout-btn:not(:disabled):hover .logout-icon { transform: translateX(3px); }
+
+/* Press */
+.logout-btn:not(:disabled):active {
+    transform: scale(0.97);
+    transition-duration: 110ms;
+    box-shadow: 0 3px 10px -3px rgba(239, 68, 68, 0.5);
+}
+.logout-btn:not(:disabled):active::before { width: 26%; }
+
+/* Idle face fades out; the icon keeps travelling right as it leaves */
+.logout-face {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    position: relative;
+    z-index: 1;
+    transition: opacity 200ms ease;
+}
+.logout-face.is-hidden { opacity: 0; }
+.logout-btn.is-busy .logout-icon { transform: translateX(16px); }
+
+/* State overlay sits on top of the (now invisible) idle face */
+.logout-state {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    padding: 0 0.5rem;
+    white-space: nowrap;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: inherit;
+    animation: logoutStateIn 240ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+@keyframes logoutStateIn {
+    from { opacity: 0; transform: translateY(3px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Thin progress bar pinned to the bottom edge */
+.logout-progress {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
+    z-index: 3;
+    background: rgba(255, 255, 255, 0.25);
+    overflow: hidden;
+}
+.logout-progress-fill {
+    display: block;
+    height: 100%;
+    width: 100%;
+    transform: scaleX(0);
+    transform-origin: left center;
+    background: rgba(255, 255, 255, 0.95);
+    will-change: transform;
+}
+
+/* Success — green wash + soft glow, checkmark draws itself */
+.logout-btn.is-success {
+    background: linear-gradient(180deg, #34D399 0%, #10B981 55%, #059669 100%) !important;
+    box-shadow:
+        0 0 0 4px rgba(16, 185, 129, 0.18),
+        0 12px 28px -10px rgba(16, 185, 129, 0.5);
+}
+.logout-check {
+    stroke-dasharray: 26;
+    stroke-dashoffset: 26;
+    animation: logoutCheckDraw 460ms cubic-bezier(0.22, 1, 0.36, 1) 80ms forwards;
+}
+@keyframes logoutCheckDraw { to { stroke-dashoffset: 0; } }
+
+.logout-btn:disabled { cursor: default; opacity: 1; }
+
+/* ---------- Page transition out ---------- */
+html.is-logging-out #root {
+    opacity: 0;
+    filter: blur(6px);
+    transition: opacity 320ms ease, filter 320ms ease;
+    pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .logout-btn, .logout-btn::before, .logout-icon, .logout-state,
+    .jcc-login-card {
+        animation: none !important;
+        transition: none !important;
+    }
+    .logout-btn:hover { transform: none; }
+    .logout-check { stroke-dashoffset: 0; animation: none; }
+    html.is-logging-out #root { filter: none; }
+}
+
+/* Logout: let the button widen to fit its status text.
+   The Hub button is only ~100px wide, so the success message was clipped.
+   It sits at the end of a right-aligned flex row and the sidebar button is
+   already full-width, so nothing else on the page moves. */
+.logout-btn { transition-property: transform, box-shadow, filter, min-width; }
+.logout-btn.is-busy { min-width: 210px; }
+.logout-state { font-size: 0.78rem; }
+
+
+
+/* ============================================================
+   Login micro-animations
+   CAREFUL: the card's tilt uses `transform` and its entrance uses the
+   standalone `translate` property, deliberately kept apart. Nothing here
+   animates `transform` or `translate` on .jcc-login-card — card-level
+   motion (shake, float) is applied to the stage wrapper instead.
+   ============================================================ */
+
+/* ---------- Background parallax (uses --mx/--my already set on the shell) ---------- */
+.jcc-login-ambient-one {
+    translate: calc(var(--mx, 0) * 38px) calc(var(--my, 0) * 28px);
+    transition: translate 700ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.jcc-login-ambient-two {
+    translate: calc(var(--mx, 0) * -30px) calc(var(--my, 0) * -22px);
+    transition: translate 900ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.jcc-login-aurora {
+    translate: calc(var(--mx, 0) * 14px) calc(var(--my, 0) * 10px);
+    transition: translate 1100ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ---------- Gentle card float + error shake (on the stage, not the card) ---------- */
+.jcc-login-3d-stage {
+    animation: jccStageFloat 7s ease-in-out 900ms infinite;
+}
+@keyframes jccStageFloat {
+    0%, 100% { translate: 0 0; }
+    50%      { translate: 0 -5px; }
+}
+.jcc-login-3d-stage.is-shaking {
+    animation: jccStageShake 500ms cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+@keyframes jccStageShake {
+    0%, 100%      { translate: 0 0; }
+    12%, 60%      { translate: -8px 0; }
+    30%, 78%      { translate: 8px 0; }
+    45%           { translate: -5px 0; }
+    90%           { translate: 3px 0; }
+}
+
+/* ---------- Slow diagonal reflection sweep across the card ---------- */
+.jcc-login-glare {
+    display: block !important;             /* repurposed: no longer cursor-driven */
+    background: linear-gradient(115deg,
+        transparent 38%,
+        rgba(255, 255, 255, 0.16) 47%,
+        rgba(255, 255, 255, 0.30) 50%,
+        rgba(255, 255, 255, 0.16) 53%,
+        transparent 62%) !important;
+    background-size: 260% 260% !important;
+    background-position: 140% 0 !important;
+    opacity: 1 !important;
+    animation: jccGlareSweep 7s ease-in-out 1.4s infinite;
+}
+@keyframes jccGlareSweep {
+    0%      { background-position: 140% 0; }
+    45%     { background-position: -60% 0; }
+    100%    { background-position: -60% 0; }
+}
+[data-theme='dark'] .jcc-login-glare,
+.jcc-login-theme-dark .jcc-login-glare {
+    background: linear-gradient(115deg,
+        transparent 38%,
+        rgba(255, 255, 255, 0.06) 47%,
+        rgba(255, 255, 255, 0.13) 50%,
+        rgba(255, 255, 255, 0.06) 53%,
+        transparent 62%) !important;
+    background-size: 260% 260% !important;
+}
+
+/* ---------- Staggered reveal: logo -> title -> subtitle -> fields -> button ---------- */
+.jcc-login-mark,
+.jcc-login-title,
+.jcc-login-subtitle,
+.jcc-login-card form .input-group,
+.jcc-login-helper-row,
+.jcc-login-submit {
+    animation: jccRevealItem 460ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+.jcc-login-mark        { animation-delay: 180ms; }
+.jcc-login-title       { animation-delay: 260ms; }
+.jcc-login-subtitle    { animation-delay: 330ms; }
+.jcc-login-card form .input-group:nth-of-type(1) { animation-delay: 400ms; }
+.jcc-login-card form .input-group:nth-of-type(2) { animation-delay: 470ms; }
+.jcc-login-helper-row  { animation-delay: 540ms; }
+.jcc-login-submit      { animation-delay: 610ms; }
+@keyframes jccRevealItem {
+    from { opacity: 0; translate: 0 10px; }
+    to   { opacity: 1; translate: 0 0; }
+}
+
+/* ---------- Logo glow pulse (float already exists) ---------- */
+.jcc-login-mark {
+    position: relative;
+}
+.jcc-login-mark::after {
+    content: '';
+    position: absolute;
+    inset: -14%;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(56, 189, 248, 0.35) 0%, transparent 68%);
+    opacity: 0;
+    pointer-events: none;
+    z-index: -1;
+    animation: jccLogoGlow 4.5s ease-in-out 1.2s infinite;
+}
+@keyframes jccLogoGlow {
+    0%, 100% { opacity: 0; }
+    50%      { opacity: 1; }
+}
+
+/* ---------- Input focus: scale, border, glow, elevation ---------- */
+.jcc-login-input {
+    transition:
+        border-color 220ms ease,
+        box-shadow 220ms ease,
+        background 220ms ease,
+        scale 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.jcc-login-input:focus {
+    scale: 1.012;
+    border-color: #3b82f6 !important;
+    box-shadow:
+        0 0 0 4px rgba(59, 130, 246, 0.18),
+        0 8px 20px -8px rgba(37, 99, 235, 0.35) !important;
+}
+.jcc-login-theme-dark .jcc-login-input:focus,
+[data-theme='dark'] .jcc-login-input:focus {
+    border-color: #6366F1 !important;
+    box-shadow:
+        0 0 0 4px rgba(99, 102, 241, 0.25),
+        0 8px 20px -8px rgba(0, 0, 0, 0.6) !important;
+}
+
+/* Error: inputs animate to red, message fades in */
+.jcc-login-card.has-error .jcc-login-input {
+    border-color: #ef4444 !important;
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.16) !important;
+}
+.jcc-login-error {
+    animation: jccErrorIn 300ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+@keyframes jccErrorIn {
+    from { opacity: 0; translate: 0 -6px; }
+    to   { opacity: 1; translate: 0 0; }
+}
+
+/* ---------- Password eye toggle ---------- */
+.jcc-login-eye-btn svg {
+    transition: rotate 300ms cubic-bezier(0.34, 1.56, 0.64, 1),
+                scale 300ms cubic-bezier(0.34, 1.56, 0.64, 1),
+                opacity 200ms ease;
+}
+.jcc-login-eye-btn:hover svg { scale: 1.12; }
+.jcc-login-eye-btn.is-on svg { rotate: -12deg; }
+.jcc-login-eye-btn:active svg { scale: 0.9; }
+
+/* ---------- Sign In: authenticating + success ---------- */
+.jcc-login-auth {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+}
+.jcc-login-auth-label {
+    font-size: 0.9rem;
+    font-weight: 600;
+    animation: jccAuthLabel 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes jccAuthLabel {
+    from { opacity: 0; translate: 0 6px; }
+    to   { opacity: 1; translate: 0 0; }
+}
+.jcc-login-auth-bar {
+    width: 78%;
+    height: 3px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.28);
+    overflow: hidden;
+}
+.jcc-login-auth-fill {
+    display: block;
+    height: 100%;
+    width: 40%;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.95);
+    animation: jccAuthFill 1.4s ease-in-out infinite;
+}
+@keyframes jccAuthFill {
+    0%   { translate: -110% 0; }
+    100% { translate: 260% 0; }
+}
+
+.jcc-login-success {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-weight: 700;
+    animation: jccSuccessPop 420ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes jccSuccessPop {
+    0%   { scale: 0.86; opacity: 0; }
+    60%  { scale: 1.06; opacity: 1; }
+    100% { scale: 1; opacity: 1; }
+}
+.jcc-login-check {
+    stroke-dasharray: 26;
+    stroke-dashoffset: 26;
+    animation: jccCheckDraw 460ms cubic-bezier(0.22, 1, 0.36, 1) 90ms forwards;
+}
+@keyframes jccCheckDraw { to { stroke-dashoffset: 0; } }
+.jcc-login-submit.is-verified {
+    box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.2),
+                0 14px 30px -10px rgba(16, 185, 129, 0.5) !important;
+}
+
+/* ---------- Dashboard entrance after login ---------- */
+.card-grid > .metric-card {
+    animation: jccRevealItem 480ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+.card-grid > .metric-card:nth-child(1) { animation-delay: 60ms; }
+.card-grid > .metric-card:nth-child(2) { animation-delay: 130ms; }
+.card-grid > .metric-card:nth-child(3) { animation-delay: 200ms; }
+.card-grid > .metric-card:nth-child(4) { animation-delay: 270ms; }
+
+@media (prefers-reduced-motion: reduce) {
+    .jcc-login-3d-stage,
+    .jcc-login-3d-stage.is-shaking,
+    .jcc-login-glare,
+    .jcc-login-mark::after,
+    .jcc-login-mark, .jcc-login-title, .jcc-login-subtitle,
+    .jcc-login-card form .input-group, .jcc-login-helper-row, .jcc-login-submit,
+    .jcc-login-auth-label, .jcc-login-auth-fill, .jcc-login-success,
+    .card-grid > .metric-card {
+        animation: none !important;
+    }
+    .jcc-login-ambient-one, .jcc-login-ambient-two, .jcc-login-aurora { translate: none; }
+    .jcc-login-input:focus { scale: 1; }
+    .jcc-login-check { stroke-dashoffset: 0; animation: none; }
+}
+
+/* ============================================================
+   Notification panel: solid, not glass.
+   Page content showed through the translucent material and made
+   the notification text hard to read. Same call as the modals.
+   ============================================================ */
+.bell-dropdown {
+    background: var(--surface) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 14px !important;
+    box-shadow: 0 18px 44px rgba(15, 23, 42, 0.22) !important;
+    isolation: auto;
+}
+[data-theme='dark'] .bell-dropdown {
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.6) !important;
+}
+.bell-dropdown::before,
+.bell-dropdown::after {
+    content: none !important;
+    display: none !important;
+}
+.bell-dropdown-header {
+    background: var(--surface-2) !important;
+    border-bottom: 1px solid var(--border) !important;
+}
+/* notification rows stay readable on the solid panel */
+.bell-note { background: transparent; }
+.bell-note:hover { background: var(--hover); }

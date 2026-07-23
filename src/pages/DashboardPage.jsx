@@ -20,6 +20,7 @@ const DashboardPage = () => {
     const modalContentRef = useRef(null);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState('all');
+    const [pendingActions, setPendingActions] = useState({ toApprove: 0, drafts: 0, rejected: 0, pendingMine: 0, needsMyInput: 0 });
     const { getToken, user } = useAuth(); // Get user for role check
     const isAdmin = String(user?.role || '').toLowerCase() === 'admin';
     const navigate = useNavigate(); // For navigation
@@ -43,9 +44,21 @@ const DashboardPage = () => {
         }
     };
 
+    const fetchPendingActions = async () => {
+        try {
+            const res = await fetch('/api/jcc/pending-actions', {
+                headers: { Authorization: `Bearer ${getToken()}`, 'X-Device-ID': getDeviceId() },
+            });
+            if (res.ok) setPendingActions(await res.json());
+        } catch (error) {
+            console.warn('Pending actions fetch failed:', error);
+        }
+    };
+
     useEffect(() => {
         fetchDashboardData();
         fetchPOBudget();
+        fetchPendingActions();
         if (canViewAssignedInvoices) {
             fetchAssignedInvoices(); // Fetch assigned invoices
         } else {
@@ -377,6 +390,45 @@ const DashboardPage = () => {
 
                 </div>
 
+                {/* My Pending Actions — one glance at everything needing me */}
+                {(pendingActions.toApprove > 0 || pendingActions.drafts > 0 || pendingActions.rejected > 0 || pendingActions.pendingMine > 0 || pendingActions.needsMyInput > 0) && (
+                    <div style={{ marginBottom: 'var(--spacing-xl)', padding: '16px 18px', background: 'linear-gradient(135deg, #EFF6FF, #F0FDF4)', border: '1px solid #DBEAFE', borderRadius: '12px' }}>
+                        <h3 style={{ margin: '0 0 12px 0', color: 'var(--text-strong)', fontSize: '1.05rem' }}>👋 My Pending Actions</h3>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+                            {pendingActions.needsMyInput > 0 && (
+                                <button onClick={() => navigate('/voucher-history')} style={{ cursor: 'pointer', textAlign: 'left', border: '1px solid #FCD34D', background: '#FFFBEB', borderRadius: '10px', padding: '12px 16px', minWidth: '150px' }}>
+                                    <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#B45309' }}>{pendingActions.needsMyInput}</div>
+                                    <div style={{ fontSize: '0.85rem', color: '#92400E' }}>Info requested — respond →</div>
+                                </button>
+                            )}
+                            {pendingActions.toApprove > 0 && (
+                                <button onClick={() => navigate('/coordinator')} style={{ cursor: 'pointer', textAlign: 'left', border: '1px solid #FCD34D', background: '#FFFBEB', borderRadius: '10px', padding: '12px 16px', minWidth: '150px' }}>
+                                    <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#B45309' }}>{pendingActions.toApprove}</div>
+                                    <div style={{ fontSize: '0.85rem', color: '#92400E' }}>Claims to approve →</div>
+                                </button>
+                            )}
+                            {pendingActions.drafts > 0 && (
+                                <button onClick={() => navigate('/voucher')} style={{ cursor: 'pointer', textAlign: 'left', border: '1px solid #C7D2FE', background: '#EEF2FF', borderRadius: '10px', padding: '12px 16px', minWidth: '150px' }}>
+                                    <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#4338CA' }}>{pendingActions.drafts}</div>
+                                    <div style={{ fontSize: '0.85rem', color: '#4338CA' }}>Drafts to finish →</div>
+                                </button>
+                            )}
+                            {pendingActions.rejected > 0 && (
+                                <button onClick={() => navigate('/voucher-history')} style={{ cursor: 'pointer', textAlign: 'left', border: '1px solid #FECACA', background: '#FEF2F2', borderRadius: '10px', padding: '12px 16px', minWidth: '150px' }}>
+                                    <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#B91C1C' }}>{pendingActions.rejected}</div>
+                                    <div style={{ fontSize: '0.85rem', color: '#B91C1C' }}>Rejected — need fixing →</div>
+                                </button>
+                            )}
+                            {pendingActions.pendingMine > 0 && (
+                                <button onClick={() => navigate('/voucher-history')} style={{ cursor: 'pointer', textAlign: 'left', border: '1px solid #BFDBFE', background: '#EFF6FF', borderRadius: '10px', padding: '12px 16px', minWidth: '150px' }}>
+                                    <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#1D4ED8' }}>{pendingActions.pendingMine}</div>
+                                    <div style={{ fontSize: '0.85rem', color: '#1D4ED8' }}>My claims in progress →</div>
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                )}
+
                 {/* Stats Cards */}
                 <div className="card-grid mb-xl" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
                     <div className="metric-card">
@@ -404,7 +456,7 @@ const DashboardPage = () => {
                 {/* Assigned Invoices Section */}
                 {canViewAssignedInvoices && assignedInvoices.length > 0 && (
                     <div className="glass-card" style={{ marginBottom: 'var(--spacing-xl)' }}>
-                        <h3 style={{ margin: 0, marginBottom: 'var(--spacing-lg)', color: '#0f172a' }}>
+                        <h3 style={{ margin: 0, marginBottom: 'var(--spacing-lg)', color: 'var(--text-strong)' }}>
                             {isAdmin ? 'All Assigned Invoices' : 'Invoices Assigned to You'}
                         </h3>
 
@@ -481,10 +533,10 @@ const DashboardPage = () => {
                 {/* Vendor Dues Table */}
                 <div className="glass-card" style={{ marginBottom: 'var(--spacing-xl)' }}>
                     <div className="flex justify-between items-center mb-lg">
-                        <h3 style={{ margin: 0, color: '#0f172a' }}>Vendor Dues Breakdown</h3>
+                        <h3 style={{ margin: 0, color: 'var(--text-strong)' }}>Vendor Dues Breakdown</h3>
                         <select
                             className="input-field"
-                            style={{ width: 'auto', background: 'white', border: '1px solid #CCC' }}
+                            style={{ width: 'auto', background: 'var(--surface)', border: '1px solid #CCC' }}
                             value={filter}
                             onChange={(e) => setFilter(e.target.value)}
                         >
@@ -533,8 +585,8 @@ const DashboardPage = () => {
                 </div>
 
                 {/* PO Budget Tracking */}
-                <div className="glass-card" style={{ background: 'white', border: '1px solid #E0E0E0' }}>
-                    <h3 className="mb-lg" style={{ color: '#0f172a', fontSize: '1.25rem', fontWeight: 600 }}>PO Budget Tracking</h3>
+                <div className="glass-card" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                    <h3 className="mb-lg" style={{ color: 'var(--text-strong)', fontSize: '1.25rem', fontWeight: 600 }}>PO Budget Tracking</h3>
 
                     <div className="table-container">
                         <table className="table">
@@ -555,9 +607,9 @@ const DashboardPage = () => {
                                 ) : (
                                     poBudget.map((po) => (
                                         <tr key={po.poNumber || `po-${po.totalAmount}-${po.usedAmount}`}>
-                                            <td style={{ fontWeight: 600, color: '#0f172a' }}>{po.poNumber}</td>
+                                            <td style={{ fontWeight: 600, color: 'var(--text-strong)' }}>{po.poNumber}</td>
                                             <td>₹{po.totalAmount.toLocaleString()}</td>
-                                            <td style={{ color: '#666' }}>₹{po.usedAmount.toLocaleString()}</td>
+                                            <td style={{ color: 'var(--text-muted)' }}>₹{po.usedAmount.toLocaleString()}</td>
                                             <td style={{
                                                 color: po.remainingAmount > 0 ? '#10B981' : '#EF4444',
                                                 fontWeight: 600
@@ -569,7 +621,7 @@ const DashboardPage = () => {
                                                     <div style={{
                                                         flex: 1,
                                                         height: '20px',
-                                                        background: '#E0E0E0',
+                                                        background: 'var(--border)',
                                                         borderRadius: '10px',
                                                         overflow: 'hidden'
                                                     }}>
@@ -634,16 +686,16 @@ const DashboardPage = () => {
                                 width: 'min(920px, 96vw)',
                                 maxHeight: '88vh',
                                 overflow: 'auto',
-                                background: '#ffffff',
+                                background: 'var(--surface)',
                                 borderRadius: '14px',
-                                border: '1px solid #E2E8F0',
+                                border: '1px solid var(--border)',
                                 boxShadow: '0 20px 50px rgba(15, 23, 42, 0.25)',
                                 padding: '1rem',
                                 margin: '0 auto',
                             }}
                         >
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                                <h3 style={{ margin: 0, color: '#0f172a' }}>Invoice Details</h3>
+                                <h3 style={{ margin: 0, color: 'var(--text-strong)' }}>Invoice Details</h3>
                                 <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                                     <button className="btn btn-sm btn-outline" onClick={handleOpenPrevTrackedInvoice} disabled={!hasPrevTrackedInvoice}>Previous</button>
                                     <button className="btn btn-sm btn-outline" onClick={handleOpenNextTrackedInvoice} disabled={!hasNextTrackedInvoice}>Next</button>
@@ -687,12 +739,12 @@ const DashboardPage = () => {
                                 >
                                     Refresh History
                                 </button>
-                                {loadingHistoryId === selectedTrackedInvoice.id && <span style={{ color: '#64748b', fontSize: '0.82rem' }}>Loading...</span>}
+                                {loadingHistoryId === selectedTrackedInvoice.id && <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>Loading...</span>}
                             </div>
 
                             {loadingHistoryId === selectedTrackedInvoice.id && (
-                                <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '0.85rem', marginBottom: '0.85rem' }}>
-                                    <div style={{ marginBottom: '0.65rem', fontWeight: 600, color: '#1E293B' }}>Assignment Lifecycle</div>
+                                <div style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: '10px', padding: '0.85rem', marginBottom: '0.85rem' }}>
+                                    <div style={{ marginBottom: '0.65rem', fontWeight: 600, color: 'var(--text-strong)' }}>Assignment Lifecycle</div>
                                     {[1, 2, 3].map((line) => (
                                         <div
                                             key={`shimmer-${line}`}
@@ -700,7 +752,7 @@ const DashboardPage = () => {
                                                 height: '14px',
                                                 borderRadius: '8px',
                                                 marginBottom: '0.55rem',
-                                                background: 'linear-gradient(90deg, #e2e8f0 25%, #f8fafc 50%, #e2e8f0 75%)',
+                                                background: 'linear-gradient(90deg, var(--border) 25%, var(--surface-2) 50%, var(--border) 75%)',
                                                 backgroundSize: '320px 100%',
                                                 animation: 'dashboardHistoryShimmer 1.2s linear infinite',
                                             }}
@@ -710,8 +762,8 @@ const DashboardPage = () => {
                             )}
 
                             {invoiceHistories[selectedTrackedInvoice.id] && (
-                                <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '0.85rem' }}>
-                                    <div style={{ marginBottom: '0.65rem', fontWeight: 600, color: '#1E293B' }}>
+                                <div style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: '10px', padding: '0.85rem' }}>
+                                    <div style={{ marginBottom: '0.65rem', fontWeight: 600, color: 'var(--text-strong)' }}>
                                         Assignment Lifecycle
                                     </div>
                                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
@@ -727,12 +779,12 @@ const DashboardPage = () => {
                                     {invoiceHistories[selectedTrackedInvoice.id].history.length === 0 ? (
                                         <div className="text-muted">No history events available.</div>
                                     ) : (
-                                        <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: '0.75rem' }}>
+                                        <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem' }}>
                                             {invoiceHistories[selectedTrackedInvoice.id].history.map((event) => (
                                                 <div key={event.id} style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.5rem' }}>
-                                                    <span style={{ minWidth: '185px', color: '#64748B' }}>{formatDateTime(event.action_at)}</span>
-                                                    <span style={{ fontWeight: 600, color: '#1E293B', textTransform: 'capitalize' }}>{event.action_type.replace('_', ' ')}</span>
-                                                    <span style={{ color: '#334155' }}>
+                                                    <span style={{ minWidth: '185px', color: 'var(--text-muted)' }}>{formatDateTime(event.action_at)}</span>
+                                                    <span style={{ fontWeight: 600, color: 'var(--text-strong)', textTransform: 'capitalize' }}>{event.action_type.replace('_', ' ')}</span>
+                                                    <span style={{ color: 'var(--text-body)' }}>
                                                         by {event.action_by_name || '-'}
                                                         {event.assigned_to_name ? ` | assigned to ${event.assigned_to_name}` : ''}
                                                         {event.notes ? ` | ${event.notes}` : ''}

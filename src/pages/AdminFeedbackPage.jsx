@@ -168,7 +168,7 @@ const AdminFeedbackPage = () => {
   } else if (rows.length === 0) {
     tableBodyContent = (
       <tr>
-        <td colSpan="10" className="text-center" style={{ color: '#64748B' }}>No feedback found.</td>
+        <td colSpan="10" className="text-center" style={{ color: 'var(--text-muted)' }}>No feedback found.</td>
       </tr>
     );
   } else {
@@ -188,11 +188,11 @@ const AdminFeedbackPage = () => {
         <td>{formatDateTime(row.created_at)}</td>
         <td>
           <div style={{ fontWeight: 600 }}>{row.submitted_by_name || 'Unknown'}</div>
-          <div style={{ fontSize: '0.78rem', color: '#64748B' }}>{row.submitted_by_email || '-'}</div>
+          <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{row.submitted_by_email || '-'}</div>
         </td>
         <td style={{ textTransform: 'capitalize' }}>{String(row.feedback_type || 'other').replaceAll('_', ' ')}</td>
         <td>
-          <div style={{ color: '#64748B', fontSize: '0.8rem', whiteSpace: 'normal', wordBreak: 'break-word' }}>{row.description}</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', whiteSpace: 'normal', wordBreak: 'break-word' }}>{row.description}</div>
         </td>
         <td>{row.module_path || '-'}</td>
         <td>
@@ -297,7 +297,7 @@ const AdminFeedbackPage = () => {
             <label className="input-label" htmlFor="feedback-search-filter">Search</label>
             <input
               id="feedback-search-filter"
-              className="input-field"
+              className="input-field premium-search-field"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search description, page, user"

@@ -121,13 +121,13 @@ const compactStyles = `
         flex-direction: column;
         gap: 0.2rem;
         font-size: 0.78rem;
-        color: #475569;
+        color: var(--text-body);
         white-space: normal;
     }
 
     .vendor-compact .vendor-meta-label {
         font-weight: 600;
-        color: #0f172a;
+        color: var(--text-strong);
         margin-right: 0.35rem;
     }
 
@@ -409,15 +409,15 @@ const VendorManagementPage = () => {
             <style>{compactStyles}</style>
             <div className="fade-in">
                 <div style={{
-                background: '#fff',
+                background: 'var(--surface)',
                 color: 'white',
                 padding: '1.15rem 1.5rem',
                 borderRadius: '0.9rem',
                 marginBottom: '1.25rem',
-                border: '1px solid #e2e8f0',
+                border: '1px solid var(--border)',
                 }}>
-                    <h1 style={{ margin: 0, fontSize: '1.6rem', color: 'black' }}>{entitySingular} Management</h1>
-                    <p style={{ margin: '0.4rem 0 0 0', opacity: 0.9, color: 'black', fontSize: '0.98rem' }}>Manage core {entitySingularLower} details in one place</p>
+                    <h1 style={{ margin: 0, fontSize: '1.6rem', color: 'var(--text-strong)' }}>{entitySingular} Management</h1>
+                    <p style={{ margin: '0.4rem 0 0 0', opacity: 0.9, color: 'var(--text-strong)', fontSize: '0.98rem' }}>Manage core {entitySingularLower} details in one place</p>
                 </div>
 
                 {success && (
@@ -447,8 +447,8 @@ const VendorManagementPage = () => {
                 )}
 
                 <div className="card-grid vendor-layout-grid">
-                    <div className="glass-card vendor-form-card" style={{ background: 'white', border: '1px solid #E0E0E0', alignSelf: 'start', height: '590px', overflowY: 'auto' }}>
-                        <h3 style={{ marginTop: 0, marginBottom: '1rem', color: '#0F172A' }}>Add {entitySingular} Entry</h3>
+                    <div className="glass-card vendor-form-card" style={{ background: 'var(--surface)', border: '1px solid var(--border)', alignSelf: 'start', height: '590px', overflowY: 'auto' }}>
+                        <h3 style={{ marginTop: 0, marginBottom: '1rem', color: 'var(--text-strong)' }}>Add {entitySingular} Entry</h3>
                         <div style={{ marginBottom: '1rem' }}>
                             <input
                                 ref={excelInputRef}
@@ -466,7 +466,7 @@ const VendorManagementPage = () => {
                             >
                                 {importing ? `Importing ${entityPluralLower}...` : `Upload Excel (${entitySingular} List)`}
                             </button>
-                            <small style={{ display: 'block', marginTop: '0.5rem', color: '#64748b' }}>
+                            <small style={{ display: 'block', marginTop: '0.5rem', color: 'var(--text-muted)' }}>
                                 Upload .xlsx/.xls with columns like {entitySingular} Name, {entitySingular} ID, {entitySingular} Address and Email ID.
                             </small>
                         </div>
@@ -528,12 +528,12 @@ const VendorManagementPage = () => {
                         </form>
                     </div>
 
-                    <div className="glass-card vendor-list-card" style={{ background: 'white', border: '1px solid #E0E0E0', height: '590px', display: 'flex', flexDirection: 'column' }}>
+                    <div className="glass-card vendor-list-card" style={{ background: 'var(--surface)', border: '1px solid var(--border)', height: '590px', display: 'flex', flexDirection: 'column' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', gap: '1rem' }}>
-                            <h3 style={{ margin: 0, color: '#0F172A' }}>{entitySingular} List</h3>
+                            <h3 style={{ margin: 0, color: 'var(--text-strong)' }}>{entitySingular} List</h3>
                             <input
                                 type="text"
-                                className="input-field"
+                                className="input-field premium-search-field"
                                 style={{ maxWidth: '360px' }}
                                 value={query}
                                 onChange={(e) => setQuery(e.target.value)}
@@ -562,7 +562,7 @@ const VendorManagementPage = () => {
                                     <tbody>
                                         {filteredVendors.length === 0 ? (
                                             <tr>
-                                                <td colSpan="6" className="text-center" style={{ color: '#64748B' }}>
+                                                <td colSpan="6" className="text-center" style={{ color: 'var(--text-muted)' }}>
                                                     No {entityPluralLower} found.
                                                 </td>
                                             </tr>

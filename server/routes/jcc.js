@@ -4,8 +4,9 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import jwt from 'jsonwebtoken';
 import db from '../database.js';
-import { authenticateToken, authorizeRoles } from '../middleware/auth.js';
+import { authenticateToken, authorizeRoles, JWT_SECRET } from '../middleware/auth.js';
 import { generateJCCPDF } from '../utils/pdfGenerator.js';
 import { notifyVoucherCreated, notifyVoucherApproved, notifyNextApprover, notifyVoucherRejected, sendEmail } from '../utils/emailService.js';
 
@@ -14,6 +15,7 @@ const __dirname = path.dirname(__filename);
 
 
 import { extractInvoiceData } from '../utils/ocrProcessor.js';
+import { extractPdfWithOpenDataLoader } from '../services/pdfExtractor.js';
 
 const router = express.Router();
 
@@ -41,6 +43,35 @@ const PAYMENT_TRANSITIONS = {
 
 const CLAIM_DATE_LOOKBACK_DAYS = 15;
 const INVOICE_DATE_LOOKBACK_DAYS = 15;
+// Outdoor/field-duty exception: when the claimer was out on duty they may file an
+// invoice older than the standard 15-day window, bounded by this hard cap.
+const OUTDOOR_DUTY_LOOKBACK_DAYS = 45;
+const OUTDOOR_REMARK_MIN_LENGTH = 10;
+
+// One-click email approval: a signed, expiring token bound to a specific voucher,
+// approval level, approver, AND the voucher's current approval_nonce. GET shows a
+// confirmation page (so email link scanners cannot auto-approve); POST performs it.
+// The nonce is bumped whenever a voucher re-enters approval (resubmit / respond-info),
+// which invalidates any older email link — preventing replay of a stale link.
+const APPROVAL_TOKEN_TTL = '7d';
+
+const currentApprovalNonce = (voucherId) => {
+  const row = db.prepare('SELECT approval_nonce FROM voucher_requests WHERE id = ?').get(voucherId);
+  return Number(row?.approval_nonce) || 0;
+};
+
+const generateApprovalToken = (voucherId, level, approverId) =>
+  jwt.sign(
+    { purpose: 'jcc-approve', voucherId: Number(voucherId), level: Number(level), approverId: Number(approverId), nonce: currentApprovalNonce(voucherId) },
+    JWT_SECRET,
+    { expiresIn: APPROVAL_TOKEN_TTL }
+  );
+
+const approvalLink = (voucherId, level, approverId) => {
+  const base = (process.env.APP_BASE_URL || '').trim().replace(/\/$/, '');
+  if (!base) return '';
+  return `${base}/api/jcc/approve-via-link/${generateApprovalToken(voucherId, level, approverId)}`;
+};
 
 const setPaymentTimestamps = (status) => {
   const tsMap = {
@@ -130,6 +161,18 @@ const findUserByName = (name) => {
   `).get(normalized) || null;
 };
 
+// Authorization for viewing a voucher's data / files: the creator, an assigned
+// approver, or a privileged oversight role. Blocks IDOR (one claimant reading
+// another claimant's attachment/PDF by guessing the id).
+const canViewVoucher = (req, voucher) => {
+  if (!voucher) return false;
+  if (['admin', 'coordinator', 'manager', 'final_approver'].includes(req.user.role)) return true;
+  if (voucher.user_id === req.user.id) return true;
+  const name = String(req.user.name || '').trim().toLowerCase();
+  return String(voucher.approver1_name || '').trim().toLowerCase() === name
+    || String(voucher.approver2_name || '').trim().toLowerCase() === name;
+};
+
 const normalizeDuplicateCsvPair = (value) => {
   const text = String(value ?? '').trim();
   if (!text) return '';
@@ -148,6 +191,12 @@ const parseVoucherMaterials = (body) => {
     amount: normalizeDuplicateCsvPair(item.amount ?? item.projectAmount ?? ''),
     projectCode: normalizeDuplicateCsvPair(item.projectCode ?? item.project_code ?? ''),
     projectName: normalizeDuplicateCsvPair(item.projectName ?? item.project_name ?? ''),
+    // ─── FIX: descriptionOfMaterial was previously missing from this mapper ───
+    // Without this, the frontend's descriptionOfMaterial was silently discarded
+    // and never written to the voucher_materials table → blank in the PDF.
+    descriptionOfMaterial: normalizeDuplicateCsvPair(
+      item.descriptionOfMaterial ?? item.description_of_material ?? ''
+    ),
   });
 
   const hasMaterialKeys = (value) => (
@@ -157,7 +206,10 @@ const parseVoucherMaterials = (body) => {
     || 'project_code' in value
     || 'projectName' in value
     || 'project_name' in value
+    || 'descriptionOfMaterial' in value
+    || 'description_of_material' in value
   );
+
 
   const parseObjectValue = (value, extractFromUnknown) => {
     if (hasMaterialKeys(value)) return [normalizeMaterial(value)];
@@ -231,10 +283,10 @@ const parseVoucherMaterials = (body) => {
     const map = new Map();
     const extractIndexAndField = (key) => {
       const patterns = [
-        /^materials\[(\d+)\]\[(amount|projectCode|projectName|project_code|project_name)\]$/,
-        /^materials\.(\d+)\.(amount|projectCode|projectName|project_code|project_name)$/,
-        /^materials\[(\d+)\]\.(amount|projectCode|projectName|project_code|project_name)$/,
-        /^(amount|projectCode|projectName|project_code|project_name)_(\d+)$/,
+        /^materials\[(\d+)\]\[(amount|projectCode|projectName|project_code|project_name|descriptionOfMaterial|description_of_material)\]$/,
+        /^materials\.(\d+)\.(amount|projectCode|projectName|project_code|project_name|descriptionOfMaterial|description_of_material)$/,
+        /^materials\[(\d+)\]\.(amount|projectCode|projectName|project_code|project_name|descriptionOfMaterial|description_of_material)$/,
+        /^(amount|projectCode|projectName|project_code|project_name|descriptionOfMaterial|description_of_material)_(\d+)$/,
       ];
 
       for (const pattern of patterns) {
@@ -242,7 +294,7 @@ const parseVoucherMaterials = (body) => {
         if (!match) continue;
 
         // Pattern variant where field appears first: amount_0
-        if (/^(amount|projectCode|projectName|project_code|project_name)_/.test(key)) {
+        if (/^(amount|projectCode|projectName|project_code|project_name|descriptionOfMaterial|description_of_material)_/.test(key)) {
           return { index: Number(match[2]), field: match[1] };
         }
 
@@ -257,12 +309,13 @@ const parseVoucherMaterials = (body) => {
       if (!parsed) return;
 
       const { index, field } = parsed;
-      if (!map.has(index)) map.set(index, { amount: '', projectCode: '', projectName: '' });
+      if (!map.has(index)) map.set(index, { amount: '', projectCode: '', projectName: '', descriptionOfMaterial: '' });
       const target = map.get(index);
 
       if (field === 'amount') target.amount = value ?? '';
       if (field === 'projectCode' || field === 'project_code') target.projectCode = value ?? '';
       if (field === 'projectName' || field === 'project_name') target.projectName = value ?? '';
+      if (field === 'descriptionOfMaterial' || field === 'description_of_material') target.descriptionOfMaterial = value ?? '';
     });
 
     return [...map.entries()]
@@ -327,14 +380,23 @@ const parseVoucherMaterials = (body) => {
         amount: String(item.amount ?? '').trim(),
         projectCode: String(item.projectCode ?? '').trim(),
         projectName: String(item.projectName ?? '').trim(),
+        // descriptionOfMaterial MUST be included — omitting it caused it to be silently dropped
+        descriptionOfMaterial: String(item.descriptionOfMaterial ?? '').trim(),
       };
-      return [JSON.stringify(normalized), normalized];
+      // Dedup key excludes description so that rows with same amount/code/name but different
+      // descriptions aren't wrongly merged. When there IS a duplicate, prefer the one with a description.
+      const dedupKey = JSON.stringify({
+        amount: normalized.amount,
+        projectCode: normalized.projectCode,
+        projectName: normalized.projectName,
+      });
+      return [dedupKey, normalized];
     })
   ).values()];
 
   // Keep only rows with at least one meaningful value.
   return uniqueCandidates
-    .filter((item) => item.amount || item.projectCode || item.projectName);
+    .filter((item) => item.amount || item.projectCode || item.projectName || item.descriptionOfMaterial);
 };
 
 const SUPPLIER_ACK_TOKEN_VALIDITY_HOURS = 24 * 7;
@@ -346,7 +408,66 @@ const createHttpError = (statusCode, message) => {
   return error;
 };
 
-const formatJccId = (voucherId) => `JCC${String(voucherId).padStart(4, '0')}`;
+// ─── JCC Number: Financial-Year-Aware Sequential Generator ──────────────────
+// Format:  JCC/YY-YY/NNNN  (e.g. JCC/25-26/0001)
+// The sequence resets every April 1st (start of Indian financial year).
+// Numbers are stored in the voucher_requests table itself (jcc_number column).
+// For backward-compat, old rows without jcc_number fall back to JCC0001 style.
+
+(() => {
+  // Ensure the jcc_number column exists (idempotent)
+  try {
+    db.exec(`ALTER TABLE voucher_requests ADD COLUMN jcc_number TEXT`);
+  } catch (_) { /* column already exists */ }
+})();
+
+/**
+ * Returns the Indian financial year string for a given date.
+ * April–March:  2025-04-01 → "25-26", 2025-03-31 → "24-25"
+ */
+const getFinancialYear = (date = new Date()) => {
+  const month = date.getMonth(); // 0-based
+  const year  = date.getFullYear();
+  if (month >= 3) { // April (3) onwards
+    return `${String(year).slice(-2)}-${String(year + 1).slice(-2)}`;
+  }
+  return `${String(year - 1).slice(-2)}-${String(year).slice(-2)}`;
+};
+
+/**
+ * Assigns a new unique JCC number to a freshly-inserted voucher and saves it.
+ * Uses a sequential counter (total JCC numbers assigned so far + 1)
+ * so the FIRST claim is always JCC0001 regardless of the database row ID.
+ * Returns the JCC number string (e.g. "JCC0001").
+ */
+const assignJccNumber = (voucherId) => {
+  // Count how many vouchers already have a jcc_number assigned
+  // (excluding the one we are about to assign, which has none yet)
+  const { count } = db.prepare(`
+    SELECT COUNT(*) AS count FROM voucher_requests
+    WHERE jcc_number IS NOT NULL AND jcc_number != ''
+  `).get();
+
+  const seq = (count || 0) + 1;
+  const jccNum = `JCC${String(seq).padStart(4, '0')}`;
+
+  db.prepare(`UPDATE voucher_requests SET jcc_number = ? WHERE id = ?`)
+    .run(jccNum, voucherId);
+
+  return jccNum;
+};
+
+/**
+ * Returns the display JCC number for a voucher.
+ * Prefers the stored jcc_number; falls back to legacy JCC0001 style for old rows.
+ */
+const formatJccId = (voucherId) => {
+  if (!voucherId) return 'JCC0000';
+  const row = db.prepare(`SELECT jcc_number FROM voucher_requests WHERE id = ?`).get(voucherId);
+  return row?.jcc_number || `JCC${String(voucherId).padStart(4, '0')}`;
+};
+// ─────────────────────────────────────────────────────────────────────────────
+
 
 const escapeHtml = (value) => String(value ?? '')
   .replaceAll('&', '&amp;')
@@ -726,7 +847,7 @@ const createVoucherPdfArtifact = async (voucherId) => {
     throw createHttpError(404, 'Voucher not found');
   }
 
-  if (voucher.status !== 'approved') {
+  if (voucher.status !== 'approved' && voucher.status !== 'processed') {
     throw createHttpError(403, 'Voucher must be fully approved to download JCC PDF');
   }
 
@@ -779,7 +900,7 @@ const createVoucherPdfArtifact = async (voucherId) => {
   })();
 
   const materialsQuery = db.prepare(`
-    SELECT amount, project_code, project_name
+    SELECT amount, project_code, project_name, description_of_material
     FROM voucher_materials
     WHERE voucher_id = ?
     ORDER BY id ASC
@@ -791,12 +912,17 @@ const createVoucherPdfArtifact = async (voucherId) => {
         amount: normalizeDuplicateCsvPair(row.amount),
         project_code: normalizeDuplicateCsvPair(row.project_code),
         project_name: normalizeDuplicateCsvPair(row.project_name),
+        description_of_material: normalizeDuplicateCsvPair(row.description_of_material),
       };
       return [JSON.stringify(normalized), normalized];
     })
-  ).values()].filter((row) => row.amount || row.project_code || row.project_name);
+  ).values()].filter((row) => row.amount || row.project_code || row.project_name || row.description_of_material);
 
   const isMaterialsEmpty = normalizedMaterials.length === 0;
+
+  // Use the voucher's main description field as fallback when individual
+  // material rows have no description_of_material saved.
+  const voucherDescriptionFallback = String(voucher.description || '').trim();
 
   const pdfItems = isMaterialsEmpty ? [{
     loc: voucher.expense_booking_location || 'PEW',
@@ -809,6 +935,7 @@ const createVoucherPdfArtifact = async (voucherId) => {
     project: voucher.project_name || '',
     project_code: voucher.project_code || '',
     amount: voucher.basic_amount,
+    description_of_material: voucherDescriptionFallback,
   }] : normalizedMaterials.map((material) => ({
     loc: voucher.expense_booking_location || 'PEW',
     dept: (() => {
@@ -820,6 +947,8 @@ const createVoucherPdfArtifact = async (voucherId) => {
     project: material.project_name || '',
     project_code: material.project_code || '',
     amount: material.amount,
+    // Use material-specific description if available; fall back to voucher description
+    description_of_material: String(material.description_of_material || '').trim() || voucherDescriptionFallback,
   }));
 
   const pdfData = {
@@ -839,14 +968,14 @@ const createVoucherPdfArtifact = async (voucherId) => {
         action_by: 'INITIATOR',
         person: resolvePersonName(voucher.user_name || creatorFromUserManagement?.name, creatorFromUserManagement?.name || voucher.user_name || '-'),
         psno: creatorFromUserManagement?.ps_number || voucher.creator_ps_number || '-',
-        action: 'Voucher Initiated',
+        action: 'Initiated',
         date: formatDate(voucher.claimed_date),
       },
       {
         action_by: 'FIRST APPROVER',
         person: resolvePersonName(voucher.approver1_name, voucher.approver1_name || '-'),
         psno: getPSNumberFromName(voucher.approver1_name),
-        action: voucher.approver1_status === 'approved' ? 'Approved' : (voucher.approver1_status || '-'),
+        action: voucher.approver1_status === 'approved' ? 'Reviewed' : (voucher.approver1_status || '-'),
         date: voucher.approver1_date ? formatDate(voucher.approver1_date) : '-',
       },
       {
@@ -877,14 +1006,15 @@ const createVoucherPdfArtifact = async (voucherId) => {
   };
 
   const jccId = formatJccId(voucher.id);
-  const downloadFilename = `${jccId}.pdf`;
+  const downloadFilename = `${jccId.replace(/\//g, '-')}.pdf`;
   const tempDir = path.join(__dirname, '../temp');
   if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true });
   }
 
   const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-  const pdfPath = path.join(tempDir, `${jccId}-${uniqueSuffix}.pdf`);
+  const safeJccId = jccId.replace(/\//g, '-');
+  const pdfPath = path.join(tempDir, `${safeJccId}-${uniqueSuffix}.pdf`);
 
   await generateJCCPDF(pdfData, pdfPath);
 
@@ -1098,6 +1228,128 @@ router.post('/po-suppliers', authenticateToken, authorizeRoles('admin'), (req, r
 });
 
 
+// Extract data from PDF using OpenDataLoader
+router.post('/extract-pdf', authenticateToken, upload.single('invoice'), async (req, res) => {
+  let uploadedPath = null;
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Invoice file is required' });
+    }
+
+    uploadedPath = req.file.path;
+    const fileType = req.file.mimetype || '';
+    
+    if (fileType !== 'application/pdf') {
+      return res.status(400).json({ error: 'Only PDF files are supported for this extraction method' });
+    }
+
+    // ── Step 1: Try OpenDataLoader (Java/Apache Tika-based) ──────────────────────────
+    // Wrapped in try/catch: Java may be unavailable or crash in some environments
+    // (e.g. missing native lcms2 lib, OOM, etc.). In that case we fall straight to
+    // the pdfjs geometric parser which requires NO Java at all.
+    let extraction = { invoiceNumber: '', amount: '', basicAmount: '', date: '', poNumber: '', vendorName: '', rawText: '', lineItems: [] };
+    let openDataLoaderFailed = false;
+    try {
+      extraction = await extractPdfWithOpenDataLoader(uploadedPath);
+    } catch (odlError) {
+      openDataLoaderFailed = true;
+      console.warn('⚠️  OpenDataLoader/Java failed — falling back directly to pdfjs geometric parser. Reason:', odlError.message?.split('\n')[0] || odlError.message);
+    }
+
+    // ── Step 2: Fallback to pdfjs/Tesseract OCR parser ───────────────────────────────
+    // Triggers when: (a) OpenDataLoader threw an error, OR (b) it returned incomplete data
+    if (openDataLoaderFailed || !extraction.invoiceNumber || !extraction.amount || !extraction.date || !extraction.poNumber || !extraction.lineItems || extraction.lineItems.length === 0) {
+        try {
+            if (!openDataLoaderFailed) {
+                console.log('OpenDataLoader missed some fields or line items, falling back to OCR/Geometric parser...');
+            }
+            const fallbackResult = await extractInvoiceData(uploadedPath, fileType);
+            
+            // Merge missing fields from fallback
+            extraction.invoiceNumber = extraction.invoiceNumber || fallbackResult.invoiceNumber || '';
+            extraction.amount = extraction.amount || fallbackResult.amount || '';
+            extraction.date = extraction.date || fallbackResult.date || '';
+            extraction.poNumber = extraction.poNumber || fallbackResult.poNumber || '';
+            extraction.vendorName = extraction.vendorName || fallbackResult.vendorName || '';
+            
+            // If rawText was basically empty (like an image tag), replace it with OCR text
+            const textLen = (extraction.rawText || '').replace(/!\[.*?\]\(.*?\)/g, '').trim().length;
+            if (textLen < 50 && fallbackResult.text) {
+                extraction.rawText = fallbackResult.text;
+            }
+
+            if (!extraction.lineItems || extraction.lineItems.length === 0) {
+                extraction.lineItems = fallbackResult.lineItems || [];
+            }
+        } catch (fbError) {
+            console.warn('Fallback extraction failed, proceeding with original data:', fbError.message);
+        }
+    }
+
+
+    // Hornbill Vendor Specific Cleanup: Strip the generic 'Services' prefix to expose actual item details
+    // Check both vendorName and rawText (covers both text and image-based PDFs)
+    const hornbillCheckText = (extraction.vendorName || '') + ' ' + (extraction.rawText || '');
+    const isHornbill = /hornbill|AAECH5664G1ZG|HBS\//i.test(hornbillCheckText);
+                       
+    if (isHornbill && extraction.lineItems) {
+        // Set vendorName explicitly if not already set
+        if (!extraction.vendorName || !extraction.vendorName.toLowerCase().includes('hornbill')) {
+            extraction.vendorName = 'Hornbill Studios Private Limited';
+        }
+        extraction.lineItems.forEach(item => {
+            if (item.description) {
+                // Remove 'Services' or 'Services \n' from the start of the description
+                item.description = item.description.replace(/^services\s*[\n\r]*\s*/i, '').trim();
+            }
+        });
+    }
+
+    // ─── Auto-derive basicAmount and grossAmount from line items if not already set ───
+    // This handles vendors (e.g. Hornbill) whose PDFs don't carry explicit TAXABLE AMOUNT labels
+    const nonSummaryItems = (extraction.lineItems || []).filter(item => !item.isSummary);
+    if (nonSummaryItems.length > 0) {
+        const itemsSum = nonSummaryItems.reduce((sum, item) => {
+            const raw = String(item.amount || '').replace(/[₹,\s]/g, '');
+            return sum + (parseFloat(raw) || 0);
+        }, 0);
+
+        if (itemsSum > 0) {
+            // Set basicAmount from line items sum if not already provided
+            if (!extraction.basicAmount || parseFloat(extraction.basicAmount) <= 0) {
+                extraction.basicAmount = itemsSum.toFixed(2);
+            }
+            // Set gross amount if not already provided: basic + 18% GST
+            if (!extraction.amount || parseFloat(extraction.amount) <= 0) {
+                extraction.amount = (parseFloat(extraction.basicAmount) * 1.18).toFixed(2);
+            }
+        }
+    }
+
+    return res.json({
+      vendorName: extraction.vendorName || '',
+      invoiceNumber: extraction.invoiceNumber || '',
+      amount: extraction.amount || '',
+      basicAmount: extraction.basicAmount || '',
+      date: extraction.date || '',
+      poNumber: extraction.poNumber || '',
+      rawText: extraction.rawText || '',
+      lineItems: extraction.lineItems || []
+    });
+  } catch (error) {
+    console.error('JCC PDF extraction API error:', error);
+    return res.status(500).json({ error: 'Failed to extract PDF data: ' + error.message });
+  } finally {
+    if (uploadedPath && fs.existsSync(uploadedPath)) {
+      try {
+        fs.unlinkSync(uploadedPath);
+      } catch (cleanupError) {
+        console.warn('Failed to clean up extracted temp file:', cleanupError.message);
+      }
+    }
+  }
+});
+
 // Extract data from uploaded invoice
 router.post('/extract-invoice', authenticateToken, upload.single('invoice'), async (req, res) => {
   try {
@@ -1127,7 +1379,7 @@ router.post('/extract-invoice', authenticateToken, upload.single('invoice'), asy
 });
 
 // Create voucher request with file upload
-router.post('/create-voucher', authenticateToken, upload.single('attachment'), (req, res) => {
+router.post('/create-voucher', authenticateToken, authorizeRoles('initiator', 'user', 'admin'), upload.single('attachment'), async (req, res) => {
   try {
     const {
       claimedBy,
@@ -1147,7 +1399,14 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
       projectAmount,
       approver1,  // Selected manager from dropdown
       approver2,  // Selected final approver from dropdown
+      outdoorDuty,      // 'true' when the claimer was out on field duty
+      outdoorFrom,      // start of outdoor duty (YYYY-MM-DD)
+      outdoorTo,        // end / return date of outdoor duty (YYYY-MM-DD)
+      outdoorRemark,    // justification for the backdated invoice
     } = req.body;
+
+    // Normalize the outdoor-duty flag (multipart form fields arrive as strings)
+    const isOutdoorDuty = outdoorDuty === true || outdoorDuty === 'true' || outdoorDuty === 'on' || outdoorDuty === '1';
 
     const normalizedClaimedDate = String(claimedDate || '').trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedClaimedDate)) {
@@ -1179,11 +1438,70 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
       return res.status(400).json({ error: 'Invoice Date is invalid' });
     }
 
-    const minInvoiceDate = new Date(today);
-    minInvoiceDate.setDate(minInvoiceDate.getDate() - INVOICE_DATE_LOOKBACK_DAYS);
+    // Outdoor/field-duty exception path. When the claimer was out on duty we allow
+    // an older invoice (up to OUTDOOR_DUTY_LOOKBACK_DAYS), but only if the trip is
+    // documented and the invoice actually falls within the trip window — this
+    // prevents unrelated old invoices from being backdated under the exception.
+    let normalizedOutdoorFrom = null;
+    let normalizedOutdoorTo = null;
+    let normalizedOutdoorRemark = null;
 
-    if (invoiceDateObj < minInvoiceDate || invoiceDateObj > today) {
-      return res.status(400).json({ error: `Invoice Date must be within the last ${INVOICE_DATE_LOOKBACK_DAYS} days` });
+    if (isOutdoorDuty) {
+      normalizedOutdoorFrom = String(outdoorFrom || '').trim();
+      normalizedOutdoorTo = String(outdoorTo || '').trim();
+      normalizedOutdoorRemark = String(outdoorRemark || '').trim();
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedOutdoorFrom)) {
+        return res.status(400).json({ error: 'Outdoor duty "From" date is invalid' });
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedOutdoorTo)) {
+        return res.status(400).json({ error: 'Outdoor duty "To" date is invalid' });
+      }
+      if (normalizedOutdoorRemark.length < OUTDOOR_REMARK_MIN_LENGTH) {
+        return res.status(400).json({ error: `Please provide a reason for the outdoor duty (at least ${OUTDOOR_REMARK_MIN_LENGTH} characters)` });
+      }
+
+      const outdoorFromObj = new Date(`${normalizedOutdoorFrom}T00:00:00`);
+      const outdoorToObj = new Date(`${normalizedOutdoorTo}T00:00:00`);
+      if (Number.isNaN(outdoorFromObj.getTime()) || Number.isNaN(outdoorToObj.getTime())) {
+        return res.status(400).json({ error: 'Outdoor duty dates are invalid' });
+      }
+      if (outdoorFromObj > outdoorToObj) {
+        return res.status(400).json({ error: 'Outdoor duty "From" date cannot be after the "To" date' });
+      }
+      if (outdoorToObj > today) {
+        return res.status(400).json({ error: 'Outdoor duty "To" date cannot be in the future' });
+      }
+
+      const minOutdoorDate = new Date(today);
+      minOutdoorDate.setDate(minOutdoorDate.getDate() - OUTDOOR_DUTY_LOOKBACK_DAYS);
+      if (outdoorFromObj < minOutdoorDate) {
+        return res.status(400).json({ error: `Outdoor duty cannot start more than ${OUTDOOR_DUTY_LOOKBACK_DAYS} days ago` });
+      }
+
+      // Invoice must belong to the trip: between the outdoor start and today.
+      if (invoiceDateObj < outdoorFromObj || invoiceDateObj > today) {
+        return res.status(400).json({ error: 'Invoice Date must fall within your outdoor duty period' });
+      }
+    } else {
+      const minInvoiceDate = new Date(today);
+      minInvoiceDate.setDate(minInvoiceDate.getDate() - INVOICE_DATE_LOOKBACK_DAYS);
+
+      if (invoiceDateObj < minInvoiceDate || invoiceDateObj > today) {
+        return res.status(400).json({ error: `Invoice Date must be within the last ${INVOICE_DATE_LOOKBACK_DAYS} days` });
+      }
+    }
+
+    // ── Duplicate-invoice guard ──────────────────────────────────────────────
+    // Block an exact re-submission (same supplier + invoice number + amount that
+    // is not already rejected) — the classic accidental double-claim / double-pay.
+    const dupMatches = findDuplicateVouchers({ supplier, invoiceNumber });
+    const exactDup = dupMatches.find(d => Math.abs((parseFloat(d.basic_amount) || 0) - (parseFloat(basicAmount) || 0)) < 0.01);
+    if (exactDup) {
+      const dupId = exactDup.jcc_number || `JCC${String(exactDup.id).padStart(4, '0')}`;
+      return res.status(409).json({
+        error: `Duplicate claim: ${dupId} already exists for supplier "${supplier}", invoice "${invoiceNumber}" with the same amount (status: ${exactDup.status}). If this is genuinely a separate claim, please contact an administrator.`
+      });
     }
 
     const creatorRecord = db.prepare('SELECT id, name, email, ps_number FROM users WHERE id = ?').get(req.user.id);
@@ -1206,6 +1524,40 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
     const effectiveProjectName = projectName || materialsArr[0]?.projectName || '';
 
     const attachmentPath = req.file ? req.file.filename : null;
+
+    const poRecord = poNumber
+      ? db.prepare(`
+          SELECT buyer_name, buyer_email, vendor_name
+          FROM purchase_orders
+          WHERE po_number = ?
+          LIMIT 1
+        `).get(poNumber)
+      : null;
+
+    // ── Backend PO Budget Guard ──────────────────────────────────────────────────
+    // Block submission entirely if the selected PO has exceeded its budget,
+    // OR if this new claim would push it over. Server-side safety net.
+    if (poNumber) {
+      const poRow = db.prepare(`SELECT CAST(total_budget AS REAL) as totalBudget FROM purchase_orders WHERE po_number = ? AND status != 'closed' LIMIT 1`).get(poNumber);
+      if (poRow) {
+        const usedRow = db.prepare(`SELECT COALESCE(SUM(CAST(basic_amount AS REAL)), 0) as usedAmount FROM voucher_requests WHERE po_number = ? AND status != 'rejected'`).get(poNumber);
+        const totalBudget = poRow.totalBudget || 0;
+        const usedAmount = usedRow?.usedAmount || 0;
+        const thisClaimAmount = parseFloat(basicAmount) || 0;
+        // Block if already exceeded OR if this claim would push it over
+        if (totalBudget > 0 && (usedAmount >= totalBudget || (usedAmount + thisClaimAmount) > totalBudget)) {
+          const remaining = totalBudget - usedAmount;
+          return res.status(400).json({
+            error: usedAmount >= totalBudget
+              ? `PO ${poNumber} has already exceeded its approved budget (Used: ₹${usedAmount.toFixed(2)}, Total: ₹${totalBudget.toFixed(2)}). Please select a different PO.`
+              : `This claim (₹${thisClaimAmount.toFixed(2)}) would exceed the PO budget. Remaining: ₹${remaining.toFixed(2)}, Total: ₹${totalBudget.toFixed(2)}. Please select a different PO or reduce the amount.`
+          });
+        }
+      }
+    }
+
+    const buyerName = poRecord?.buyer_name || '';
+    const buyerEmail = poRecord?.buyer_email || '';
 
     // Validate approver1 was selected
     if (!approver1 || approver1.trim() === '') {
@@ -1289,22 +1641,25 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
 
     // Insert into voucher_requests table with sequential approval
     const result = db.prepare(`
-            INSERT INTO voucher_requests (
-                user_id, claimed_by, department, claimed_date,
-                supplier, expense_booking_location, description,
-                invoice_number, invoice_date, basic_amount, gross_amount,
-                nature_of_expenses, po_number, project_code, project_name,
-                project_amount, attachment_path,
-                approver1_name, approver2_name,
-                approver1_status, approver2_status,
-                current_approval_level, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_approval_1')
-        `).run(
+        INSERT INTO voucher_requests (
+          user_id, claimed_by, department, claimed_date,
+          supplier, buyer_name, buyer_email, expense_booking_location, description,
+          invoice_number, invoice_date, basic_amount, gross_amount,
+          nature_of_expenses, po_number, project_code, project_name,
+          project_amount, attachment_path,
+          outdoor_duty, outdoor_from, outdoor_to, outdoor_remark,
+          approver1_name, approver2_name,
+          approver1_status, approver2_status,
+          current_approval_level, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_approval_1')
+      `).run(
       req.user.id,
       claimedBy,
       department,
       normalizedClaimedDate,
       supplier,
+      buyerName,
+      buyerEmail,
       expenseBookingLocation,
       description,
       invoiceNumber,
@@ -1317,6 +1672,10 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
       effectiveProjectName,
       projectAmount,
       attachmentPath,
+      isOutdoorDuty ? 1 : 0,           // outdoor_duty
+      normalizedOutdoorFrom,           // outdoor_from (null when not outdoor)
+      normalizedOutdoorTo,             // outdoor_to
+      normalizedOutdoorRemark,         // outdoor_remark
       approver1User.name,        // Canonical manager name from users table
       finalApproverName,         // Selected final approver
       'pending',                 // approver1_status
@@ -1336,14 +1695,64 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
       voucherId = Number(latestVoucher?.id) || 0;
     }
 
-    // Save individual material lines
-    if (materialsArr.length > 0) {
+    // Assign a unique financial-year-aware JCC number (e.g. JCC/25-26/0001)
+    // This is stored in the DB and used everywhere — PDF header, emails, notifications.
+    const jccNumber = assignJccNumber(voucherId);
+
+    let finalMaterials = [...materialsArr];
+
+    // Root cause fix: Automatically fetch the Description of Material seamlessly
+    // from the attached PDF when the claim is submitted, exactly as requested by user.
+    if (attachmentPath && attachmentPath.toLowerCase().endsWith('.pdf')) {
+      try {
+        const filePath = path.join(__dirname, '../uploads', attachmentPath);
+        if (fs.existsSync(filePath)) {
+          const data = await extractInvoiceData(filePath, 'application/pdf');
+          if (data && data.lineItems) {
+            const extractedItems = data.lineItems.filter(item => !item.isSummary);
+            if (extractedItems.length > 0) {
+              if (finalMaterials.length > 0) {
+                 // Map descriptions to existing materials based on amount or index
+                 finalMaterials = finalMaterials.map(mat => {
+                    if (!mat.descriptionOfMaterial) {
+                       const matAmountNum = parseFloat(String(mat.amount).replace(/[^0-9.-]/g, ''));
+                       const match = extractedItems.find(item => {
+                           const extAmt = parseFloat(String(item.amount).replace(/[^0-9.-]/g, ''));
+                           return Math.abs(extAmt - matAmountNum) < 0.01;
+                       });
+                       if (match && (match.description || match.text)) {
+                           return { ...mat, descriptionOfMaterial: match.description || match.text };
+                       }
+                    }
+                    return mat;
+                 });
+              } else {
+                 // Auto-populate all materials if none were provided
+                 finalMaterials = extractedItems.map(item => ({
+                    amount: item.amount ? String(item.amount).replace(/[^0-9.-]/g, '') : '',
+                    projectCode: effectiveProjectCode || '',
+                    projectName: effectiveProjectName || '',
+                    descriptionOfMaterial: item.description || item.text || ''
+                 }));
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Auto-extraction during voucher creation failed:', err.message);
+      }
+    }
+
+    if (finalMaterials.length > 0) {
       const stmt = db.prepare(`
-        INSERT INTO voucher_materials (voucher_id, amount, project_code, project_name)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO voucher_materials (voucher_id, amount, project_code, project_name, description_of_material)
+        VALUES (?, ?, ?, ?, ?)
       `);
-      for (const item of materialsArr) {
-        stmt.run(voucherId, item.amount || null, item.projectCode || null, item.projectName || null);
+      // Use the voucher's main description as fallback when a material row has no description
+      const voucherDescFallback = String(description || '').trim() || null;
+      for (const item of finalMaterials) {
+        const descValue = String(item.descriptionOfMaterial || '').trim() || voucherDescFallback;
+        stmt.run(voucherId, item.amount || null, item.projectCode || null, item.projectName || null, descValue);
       }
     }
 
@@ -1426,7 +1835,7 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
     `).run(
       req.user.id,
       'JCC Voucher Created',
-      `Your JCC voucher JCC${String(voucherId).padStart(4, '0')} for ${supplier} (₹${basicAmount}) has been submitted for approval.`,
+      `Your JCC voucher ${jccNumber} for ${supplier} (₹${basicAmount}) has been submitted for approval.`,
       'success'
     );
 
@@ -1463,7 +1872,9 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
         expenseBookingLocation,
         creatorPsNumber: creatorPsNumber,
         approver1Name: approver1User.name,
-        approver2Name: finalApproverName
+        approver2Name: finalApproverName,
+        // One-click approve link for the Level 1 manager (opens a confirmation page)
+        approveLink: approvalLink(voucherId, 1, approver1User.id),
       };
 
       const creatorData = {
@@ -1513,6 +1924,7 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
       success: true,
       message: 'JCC voucher created successfully',
       voucherId,
+      jccNumber,
     });
   } catch (error) {
     console.error('Error creating voucher:', error);
@@ -1523,10 +1935,14 @@ router.post('/create-voucher', authenticateToken, upload.single('attachment'), (
 // Get voucher attachment file
 router.get('/voucher-file/:id', authenticateToken, (req, res) => {
   try {
-    const voucher = db.prepare('SELECT attachment_path FROM voucher_requests WHERE id = ?').get(req.params.id);
+    const voucher = db.prepare('SELECT user_id, attachment_path, approver1_name, approver2_name FROM voucher_requests WHERE id = ?').get(req.params.id);
 
     if (!voucher || !voucher.attachment_path) {
       return res.status(404).json({ error: 'File not found' });
+    }
+
+    if (!canViewVoucher(req, voucher)) {
+      return res.status(403).json({ error: 'Not authorized to view this file' });
     }
 
     const filePath = path.join(__dirname, '../../uploads/vouchers', voucher.attachment_path);
@@ -1545,6 +1961,13 @@ router.get('/voucher-file/:id', authenticateToken, (req, res) => {
 // Download JCC PDF for approved voucher (authenticated users)
 router.get(['/download-jcc-pdf/:id', '/voucher/:id/pdf', '/vouchers/:id/pdf'], authenticateToken, async (req, res) => {
   try {
+    const voucher = db.prepare('SELECT user_id, approver1_name, approver2_name FROM voucher_requests WHERE id = ?').get(req.params.id);
+    if (!voucher) {
+      return res.status(404).json({ error: 'Voucher not found' });
+    }
+    if (!canViewVoucher(req, voucher)) {
+      return res.status(403).json({ error: 'Not authorized to download this JCC' });
+    }
     await sendVoucherPdfDownload(res, req.params.id);
   } catch (error) {
     console.error('Error generating JCC PDF:', error);
@@ -1885,6 +2308,118 @@ router.get('/vouchers', authenticateToken, (req, res) => {
   }
 });
 
+// ─── GET /vouchers/:id ───────────────────────────────────────────────────────
+// Returns a single voucher by ID (live, fresh from DB).
+// Used by the frontend to get the current status before approve/reject.
+router.get('/vouchers/:id', authenticateToken, (req, res) => {
+  try {
+    const voucherId = req.params.id;
+    const voucher = db.prepare(`
+      SELECT v.*, u.name as user_name
+      FROM voucher_requests v
+      JOIN users u ON v.user_id = u.id
+      WHERE v.id = ?
+    `).get(voucherId);
+
+    if (!voucher) {
+      return res.status(404).json({ error: 'Voucher not found' });
+    }
+
+    // Authorisation: own voucher, admin/coordinator, or assigned approver
+    const isOwner = voucher.user_id === req.user.id;
+    const isPrivileged = ['admin', 'coordinator', 'manager', 'final_approver'].includes(req.user.role);
+    const userName = String(req.user.name || '').trim().toLowerCase();
+    const isApprover1 = String(voucher.approver1_name || '').trim().toLowerCase() === userName;
+    const isApprover2 = String(voucher.approver2_name || '').trim().toLowerCase() === userName;
+
+    if (!isOwner && !isPrivileged && !isApprover1 && !isApprover2) {
+      return res.status(403).json({ error: 'Not authorized to view this voucher' });
+    }
+
+    res.json(voucher);
+  } catch (error) {
+    console.error('Error fetching voucher:', error);
+    res.status(500).json({ error: 'Failed to fetch voucher' });
+  }
+});
+
+// ─── GET /my-approvals ────────────────────────────────────────────────────────
+// Returns ONLY the vouchers where the logged-in user is the assigned approver
+// at the current pending level. Uses DB-level LOWER() matching for reliability.
+router.get('/my-approvals', authenticateToken, authorizeRoles('manager', 'final_approver', 'admin'), (req, res) => {
+  try {
+    const userName = String(req.user.name || '').trim();
+    const role = req.user.role;
+    let vouchers = [];
+
+    if (role === 'manager' || role === 'admin') {
+      // Manager sees vouchers at Level 1 assigned to them
+      const level1 = db.prepare(`
+        SELECT v.*, u.name as user_name
+        FROM voucher_requests v
+        JOIN users u ON v.user_id = u.id
+        WHERE v.status = 'pending_approval_1'
+          AND v.approver1_status = 'pending'
+          AND LOWER(TRIM(v.approver1_name)) = LOWER(TRIM(?))
+        ORDER BY v.created_at DESC
+      `).all(userName);
+      vouchers = [...vouchers, ...level1];
+    }
+
+    if (role === 'final_approver' || role === 'admin') {
+      // Final approver sees vouchers at Level 2 assigned to them
+      const level2 = db.prepare(`
+        SELECT v.*, u.name as user_name
+        FROM voucher_requests v
+        JOIN users u ON v.user_id = u.id
+        WHERE v.status = 'pending_approval_2'
+          AND v.approver2_status = 'pending'
+          AND v.approver1_status = 'approved'
+          AND LOWER(TRIM(v.approver2_name)) = LOWER(TRIM(?))
+        ORDER BY v.created_at DESC
+      `).all(userName);
+      vouchers = [...vouchers, ...level2];
+    }
+
+    // ── Delegated approvals ──────────────────────────────────────────────────
+    // Also surface claims assigned to anyone who has an active delegation to me,
+    // tagged so the UI can show "on behalf of <delegator>".
+    const delegators = getActiveDelegatorsFor(req.user.id);
+    const seen = new Set(vouchers.map(v => v.id));
+    for (const d of delegators) {
+      const dName = String(d.delegator_name || '').trim();
+      if (!dName) continue;
+      const rows = [];
+      if (role === 'manager' || role === 'admin') {
+        rows.push(...db.prepare(`
+          SELECT v.*, u.name as user_name FROM voucher_requests v JOIN users u ON v.user_id = u.id
+          WHERE v.status = 'pending_approval_1' AND v.approver1_status = 'pending'
+            AND LOWER(TRIM(v.approver1_name)) = LOWER(TRIM(?)) ORDER BY v.created_at DESC
+        `).all(dName));
+      }
+      if (role === 'final_approver' || role === 'admin') {
+        rows.push(...db.prepare(`
+          SELECT v.*, u.name as user_name FROM voucher_requests v JOIN users u ON v.user_id = u.id
+          WHERE v.status = 'pending_approval_2' AND v.approver2_status = 'pending' AND v.approver1_status = 'approved'
+            AND LOWER(TRIM(v.approver2_name)) = LOWER(TRIM(?)) ORDER BY v.created_at DESC
+        `).all(dName));
+      }
+      for (const r of rows) {
+        if (seen.has(r.id)) continue;
+        seen.add(r.id);
+        vouchers.push({ ...r, delegatedFrom: d.delegator_name });
+      }
+    }
+
+    res.json(vouchers);
+  } catch (error) {
+    console.error('Error fetching my-approvals:', error);
+    res.status(500).json({ error: 'Failed to fetch approvals' });
+  }
+});
+
+
+
 router.get('/vouchers/:id/payment-log', authenticateToken, (req, res) => {
   try {
     const voucherId = req.params.id;
@@ -2037,6 +2572,27 @@ router.get('/managers', authenticateToken, (req, res) => {
   }
 });
 
+// Guard the single approve/reject endpoints: the caller must be the assigned
+// approver for this level (or an admin, or an active delegate of that approver),
+// and the claim must actually be awaiting that level's approval (blocks acting on
+// an info_requested / already-actioned claim). Returns null if allowed, else an
+// { code, error } to respond with.
+const authorizeApprover = (req, voucher, level) => {
+  if (voucher.status !== `pending_approval_${level}`) {
+    return { code: 400, error: `This claim is not awaiting Level ${level} approval.` };
+  }
+  if (req.user.role === 'admin') return null;
+  const userName = String(req.user.name || '').trim().toLowerCase();
+  const assignedName = String((level === 1 ? voucher.approver1_name : voucher.approver2_name) || '').trim().toLowerCase();
+  if (assignedName && assignedName === userName) return null;
+  // Active out-of-office delegate of the assigned approver may also act
+  const isDelegate = getActiveDelegatorsFor(req.user.id).some(
+    (d) => String(d.delegator_name || '').trim().toLowerCase() === assignedName
+  );
+  if (isDelegate) return null;
+  return { code: 403, error: 'This claim is assigned to a different approver.' };
+};
+
 // Approve voucher at Level 1
 router.post('/approve-level-1/:id', authenticateToken, authorizeRoles('manager'), (req, res) => {
   try {
@@ -2049,6 +2605,9 @@ router.post('/approve-level-1/:id', authenticateToken, authorizeRoles('manager')
     if (!voucher) {
       return res.status(404).json({ error: 'Voucher not found' });
     }
+
+    const authErr = authorizeApprover(req, voucher, 1);
+    if (authErr) return res.status(authErr.code).json({ error: authErr.error });
 
     if (voucher.current_approval_level !== 1) {
       return res.status(400).json({ error: 'Voucher is not at approval level 1' });
@@ -2095,7 +2654,9 @@ router.post('/approve-level-1/:id', authenticateToken, authorizeRoles('manager')
       if (voucher.approver2_name) {
         const nextApprover = findUserByName(voucher.approver2_name);
         if (nextApprover) {
-          notifyNextApprover(voucherData, creator, nextApprover)
+          // One-click approve link for the Final Approver (Level 2)
+          const nextApproverData = { ...voucherData, approveLink: approvalLink(voucher.id, 2, nextApprover.id) };
+          notifyNextApprover(nextApproverData, creator, nextApprover)
             .then(result => console.log('[Email] Final approver notified:', result))
             .catch(err => console.error('[Email] Final approver notification error:', err));
 
@@ -2133,7 +2694,7 @@ router.post('/approve-level-1/:id', authenticateToken, authorizeRoles('manager')
 
 
 // Approve voucher at Level 2 (Final Approval)
-router.post('/approve-level-2/:id', authenticateToken, authorizeRoles('final_approver'), (req, res) => {
+router.post('/approve-level-2/:id', authenticateToken, authorizeRoles('final_approver'), async (req, res) => {
   try {
     const { remark } = req.body;
     const voucherId = req.params.id;
@@ -2145,6 +2706,9 @@ router.post('/approve-level-2/:id', authenticateToken, authorizeRoles('final_app
       return res.status(404).json({ error: 'Voucher not found' });
     }
 
+    const authErr = authorizeApprover(req, voucher, 2);
+    if (authErr) return res.status(authErr.code).json({ error: authErr.error });
+
     if (voucher.current_approval_level !== 2) {
       return res.status(400).json({ error: 'Voucher is not at approval level 2' });
     }
@@ -2153,7 +2717,7 @@ router.post('/approve-level-2/:id', authenticateToken, authorizeRoles('final_app
       return res.status(400).json({ error: 'Approver 1 must approve first' });
     }
 
-    // Final approval
+    // ── STEP 1: Update DB immediately (this is the critical operation) ─────────
     db.prepare(`
       UPDATE voucher_requests SET
         approver2_status = 'approved',
@@ -2165,67 +2729,143 @@ router.post('/approve-level-2/:id', authenticateToken, authorizeRoles('final_app
       WHERE id = ?
     `).run(remark, voucherId);
 
-    insertPaymentLog({
-      voucherId,
-      oldStatus: voucher.payment_status || 'awaiting_approval',
-      newStatus: 'pending_payment',
-      referenceNo: null,
-      amount: voucher.basic_amount,
-      remarks: 'Voucher fully approved and moved to payment queue',
-      actionSource: 'approval_level_2',
-      user: req.user,
-    });
-
+    // ── STEP 2: Insert payment log (non-critical, wrapped safely) ──────────────
     try {
-      const creator = db.prepare('SELECT id, name, email, ps_number FROM users WHERE id = ?').get(voucher.user_id);
-      const manager = voucher.approver1_name
-        ? findUserByName(voucher.approver1_name)
-        : null;
-      const approver = { name: req.user.name, email: req.user.email };
-      const appBaseUrl = (process.env.APP_BASE_URL || '').replace(/\/$/, '');
-      const voucherData = {
-        voucherId: voucher.id,
-        voucherRequestId: `JCC${String(voucher.id).padStart(4, '0')}`,
-        supplier: voucher.supplier,
-        invoiceNumber: voucher.invoice_number,
-        invoiceDate: voucher.invoice_date,
-        department: voucher.department,
-        basicAmount: voucher.basic_amount,
-        grossAmount: voucher.gross_amount,
-        poNumber: voucher.po_number,
-        claimedBy: voucher.claimed_by,
-        natureOfExpenses: voucher.nature_of_expenses,
-        expenseBookingLocation: voucher.expense_booking_location,
-        jccLink: appBaseUrl ? `${appBaseUrl}/api/jcc/download-jcc-pdf/${voucher.id}` : '',
-        creatorPsNumber: creator ? creator.ps_number : '',
-        approver1Name: voucher.approver1_name,
-        approver2Name: voucher.approver2_name
-      };
-
-      // Email: initiator + manager (final approved notice) and final approver (confirmation)
-      notifyVoucherApproved(voucherData, approver, creator, 'Final Approver', manager)
-        .then(results => console.log('[Email] Level 2 approval notifications sent:', results))
-        .catch(err => console.error('[Email] Level 2 approval notification error:', err));
-
-      // In-app for creator: fully approved
-      if (creator) {
-        db.prepare(`INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)`)
-          .run(
-            creator.id,
-            'JCC Successfully Approved! ✓',
-            `Your JCC ${voucherData.voucherRequestId} (${voucher.supplier}, ₹${voucher.basic_amount}) has been fully approved by ${req.user.name}. You can now download the JCC PDF.`,
-            'success'
-          );
-      }
-    } catch (emailError) {
-      console.error('Error sending Level 2 approval emails/notifications:', emailError);
+      insertPaymentLog({
+        voucherId,
+        oldStatus: voucher.payment_status || 'awaiting_approval',
+        newStatus: 'pending_payment',
+        referenceNo: null,
+        amount: voucher.basic_amount,
+        remarks: 'Voucher fully approved and moved to payment queue',
+        actionSource: 'approval_level_2',
+        user: req.user,
+      });
+    } catch (logError) {
+      console.error('[approve-level-2] Payment log insert failed (non-critical):', logError);
     }
 
+    // ── STEP 3: Respond immediately — approver should NEVER wait for emails/PDFs ──
     res.json({
       message: 'Voucher fully approved by both approvers',
       voucherId: voucherId,
-      downloadPdf: true  // Signal frontend to download PDF
+      downloadPdf: true
     });
+
+    // ── STEP 4: Background post-processing (fire-and-forget) ─────────────────
+    // Wrapped in an async IIFE so any failure here NEVER affects the response above.
+    (async () => {
+      try {
+        const creator = db.prepare('SELECT id, name, email, ps_number FROM users WHERE id = ?').get(voucher.user_id);
+        const manager = voucher.approver1_name ? findUserByName(voucher.approver1_name) : null;
+        const approver = { name: req.user.name, email: req.user.email };
+        const appBaseUrl = (process.env.APP_BASE_URL || '').replace(/\/$/, '');
+
+        // Re-read the stored jcc_number so emails always show the correct number
+        const updatedVoucher = db.prepare('SELECT jcc_number FROM voucher_requests WHERE id = ?').get(voucherId);
+        const jccDisplayId = updatedVoucher?.jcc_number || `JCC${String(voucher.id).padStart(4, '0')}`;
+
+        const voucherData = {
+          voucherId: voucher.id,
+          voucherRequestId: jccDisplayId,
+          supplier: voucher.supplier,
+          invoiceNumber: voucher.invoice_number,
+          invoiceDate: voucher.invoice_date,
+          department: voucher.department,
+          basicAmount: voucher.basic_amount,
+          grossAmount: voucher.gross_amount,
+          poNumber: voucher.po_number,
+          claimedBy: voucher.claimed_by,
+          natureOfExpenses: voucher.nature_of_expenses,
+          expenseBookingLocation: voucher.expense_booking_location,
+          jccLink: appBaseUrl ? `${appBaseUrl}/api/jcc/download-jcc-pdf/${voucher.id}` : '',
+          creatorPsNumber: creator ? creator.ps_number : '',
+          approver1Name: voucher.approver1_name,
+          approver2Name: voucher.approver2_name
+        };
+
+        // Email: initiator + manager (final approved notice) and final approver (confirmation)
+        notifyVoucherApproved(voucherData, approver, creator, 'Final Approver', manager)
+          .then(results => console.log('[Email] Level 2 approval notifications sent:', results))
+          .catch(err => console.error('[Email] Level 2 approval notification error:', err));
+
+        // In-app notification for creator
+        if (creator) {
+          try {
+            db.prepare(`INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)`)
+              .run(
+                creator.id,
+                'JCC Successfully Approved! ✓',
+                `Your JCC ${jccDisplayId} (${voucher.supplier}, ₹${voucher.basic_amount}) has been fully approved by ${req.user.name}. You can now download the JCC PDF.`,
+                'success'
+              );
+          } catch (notifError) {
+            console.error('[approve-level-2] In-app notification error:', notifError);
+          }
+        }
+
+        // Buyer email with PDF attachment (only if buyer_email is present)
+        const buyerEmail = String(voucher.buyer_email || '').trim();
+        if (buyerEmail) {
+          let pdfArtifact = null;
+          try {
+            pdfArtifact = await createVoucherPdfArtifact(voucher.id);
+            const buyerPayload = {
+              buyerName: voucher.buyer_name || 'Buyer',
+              poNumber: voucher.po_number || '-',
+              supplier: voucher.supplier || '-',
+              amount: voucher.basic_amount || '-',
+              invoiceNumber: voucher.invoice_number || '-',
+              jccId: jccDisplayId,
+              pdfLink: voucherData.jccLink || ''
+            };
+
+            await sendEmail(
+              buyerEmail,
+              (payload) => ({
+                subject: `${payload.jccId} approved for PO ${payload.poNumber}`,
+                html: `
+                  <div style="font-family: Arial, sans-serif; max-width: 680px; margin: 0 auto; color: #1f2937; line-height: 1.6;">
+                    <p>Dear ${payload.buyerName},</p>
+                    <p><strong>${payload.jccId}</strong> has been approved against PO <strong>${payload.poNumber}</strong>.</p>
+                    <table style="border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px;">
+                      <tr><td style="padding: 6px 10px; border: 1px solid #e5e7eb;"><strong>Supplier</strong></td><td style="padding: 6px 10px; border: 1px solid #e5e7eb;">${payload.supplier}</td></tr>
+                      <tr><td style="padding: 6px 10px; border: 1px solid #e5e7eb;"><strong>Invoice Number</strong></td><td style="padding: 6px 10px; border: 1px solid #e5e7eb;">${payload.invoiceNumber}</td></tr>
+                      <tr><td style="padding: 6px 10px; border: 1px solid #e5e7eb;"><strong>Amount</strong></td><td style="padding: 6px 10px; border: 1px solid #e5e7eb;">INR ${payload.amount}</td></tr>
+                    </table>
+                    <p>JCC PDF is attached for your reference.</p>
+                    ${payload.pdfLink ? `<p>Download link: <a href="${payload.pdfLink}" style="color:#2563eb;">${payload.jccId} PDF</a></p>` : ''}
+                  </div>
+                `
+              }),
+              [buyerPayload],
+              {
+                entityType: 'buyer_notice',
+                entityId: jccDisplayId,
+                templateName: 'buyerJccApproved',
+                attachments: [{
+                  filename: pdfArtifact.downloadFilename,
+                  path: pdfArtifact.pdfPath
+                }]
+              }
+            );
+          } catch (buyerEmailError) {
+            console.error('[Email] Buyer approval email error:', buyerEmailError);
+          } finally {
+            try {
+              if (pdfArtifact?.pdfPath && fs.existsSync(pdfArtifact.pdfPath)) {
+                fs.unlinkSync(pdfArtifact.pdfPath);
+              }
+            } catch (cleanupError) {
+              console.error('Error deleting buyer PDF attachment:', cleanupError);
+            }
+          }
+        }
+      } catch (bgError) {
+        console.error('[approve-level-2] Background post-processing error (approval already saved):', bgError);
+      }
+    })();
+
   } catch (error) {
     console.error('Error approving level 2:', error);
     res.status(500).json({ error: 'Failed to approve voucher' });
@@ -2243,6 +2883,9 @@ router.post('/reject-level-1/:id', authenticateToken, authorizeRoles('manager'),
     if (!voucher) {
       return res.status(404).json({ error: 'Voucher not found' });
     }
+
+    const authErr = authorizeApprover(req, voucher, 1);
+    if (authErr) return res.status(authErr.code).json({ error: authErr.error });
 
     if (voucher.current_approval_level !== 1) {
       return res.status(400).json({ error: 'Voucher is not at approval level 1' });
@@ -2314,6 +2957,9 @@ router.post('/reject-level-2/:id', authenticateToken, authorizeRoles('final_appr
     if (!voucher) {
       return res.status(404).json({ error: 'Voucher not found' });
     }
+
+    const authErr = authorizeApprover(req, voucher, 2);
+    if (authErr) return res.status(authErr.code).json({ error: authErr.error });
 
     if (voucher.current_approval_level !== 2) {
       return res.status(400).json({ error: 'Voucher is not at approval level 2' });
@@ -2390,8 +3036,8 @@ router.post('/vouchers/:id/resubmit', authenticateToken, (req, res) => {
       return res.status(403).json({ error: 'Not authorized to resubmit this voucher' });
     }
 
-    if (voucher.status !== 'rejected') {
-      return res.status(400).json({ error: 'Only rejected vouchers can be resubmitted' });
+    if (voucher.status !== 'rejected' && voucher.status !== 'recalled') {
+      return res.status(400).json({ error: 'Only rejected or recalled claims can be resubmitted' });
     }
 
     // Update voucher and reset approval status
@@ -2419,6 +3065,7 @@ router.post('/vouchers/:id/resubmit', authenticateToken, (req, res) => {
         approver2_remark = NULL,
         approver2_date = NULL,
         current_approval_level = 1,
+        approval_nonce = COALESCE(approval_nonce, 0) + 1,
         created_at = datetime('now') -- Optional: Update timestamp to now
       WHERE id = ?
     `).run(
@@ -2437,6 +3084,238 @@ router.post('/vouchers/:id/resubmit', authenticateToken, (req, res) => {
   }
 });
 
+// ─── Recall a claim (by its creator or an admin) ─────────────────────────────
+// Pulls a claim back so the raiser can fix a mistake and resubmit under the SAME
+// JCC number. Puts it into an editable 'recalled' state; the existing resubmit
+// flow then sends it back through approval (same row → PO counted once). Bumps the
+// approval nonce so any outstanding email-approve links are invalidated.
+router.post('/vouchers/:id/recall', authenticateToken, (req, res) => {
+  try {
+    const voucherId = req.params.id;
+    const reason = String(req.body?.reason || '').trim();
+
+    const voucher = db.prepare('SELECT * FROM voucher_requests WHERE id = ?').get(voucherId);
+    if (!voucher) return res.status(404).json({ error: 'Voucher not found' });
+
+    if (voucher.user_id !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'You can only recall your own claim' });
+    }
+    // Can recall while the claim is still in the pipeline or already approved.
+    if (!['pending_approval_1', 'pending_approval_2', 'approved'].includes(voucher.status)) {
+      return res.status(400).json({ error: `A ${voucher.status} claim cannot be recalled` });
+    }
+
+    const jccId = voucher.jcc_number || `JCC${String(voucher.id).padStart(4, '0')}`;
+
+    // Move to the editable 'recalled' state; take it out of approval/payment queues.
+    db.prepare(`
+      UPDATE voucher_requests SET
+        status = 'recalled',
+        current_approval_level = NULL,
+        payment_status = 'awaiting_approval',
+        recall_reason = ?,
+        recalled_by = ?,
+        recalled_at = datetime('now'),
+        approval_nonce = COALESCE(approval_nonce, 0) + 1
+      WHERE id = ?
+    `).run(reason || null, req.user.name, voucherId);
+
+    // Audit trail (recall erases prior approvals — record who/when/why)
+    try {
+      db.prepare(`INSERT INTO audit_logs (user_id, user_name, action, entity_type, entity_id, details) VALUES (?, ?, ?, ?, ?, ?)`)
+        .run(req.user.id, req.user.name, 'RECALL_JCC', 'voucher_request', voucherId, `Recalled ${jccId}${reason ? ` — ${reason}` : ''}`);
+    } catch (e) { console.error('[recall] audit log failed:', e); }
+
+    // Notify the assigned approvers that the claim was pulled back
+    try {
+      [voucher.approver1_name, voucher.approver2_name].forEach((name) => {
+        const appr = name ? findUserByName(name) : null;
+        if (appr) {
+          db.prepare(`INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)`)
+            .run(appr.id, 'JCC recalled by claimant', `${req.user.name} recalled ${jccId} to make changes${reason ? ` (${reason})` : ''}. It will return for your approval after they resubmit.`, 'warning');
+        }
+      });
+    } catch (e) { console.error('[recall] notify failed:', e); }
+
+    res.json({ message: `${jccId} recalled. Edit it and resubmit — it keeps the same number and goes back for approval.` });
+  } catch (error) {
+    console.error('Error recalling voucher:', error);
+    res.status(500).json({ error: 'Failed to recall claim' });
+  }
+});
+
+// ─── "Request more info" (soft-return) ───────────────────────────────────────
+// Approver sends the claim back to the claimant with a question, WITHOUT rejecting.
+// The claim keeps all its data + any prior-level approval, and returns to the same
+// approver once the claimant responds.
+router.post('/request-info/:id', authenticateToken, authorizeRoles('manager', 'final_approver', 'admin'), (req, res) => {
+  try {
+    const voucherId = req.params.id;
+    const note = String(req.body?.note || '').trim();
+    if (!note) return res.status(400).json({ error: 'Please add a note describing what you need' });
+
+    const voucher = db.prepare('SELECT * FROM voucher_requests WHERE id = ?').get(voucherId);
+    if (!voucher) return res.status(404).json({ error: 'Voucher not found' });
+
+    const level = voucher.current_approval_level;
+    const role = req.user.role;
+    const userName = String(req.user.name || '').trim().toLowerCase();
+    const isA1 = String(voucher.approver1_name || '').trim().toLowerCase() === userName;
+    const isA2 = String(voucher.approver2_name || '').trim().toLowerCase() === userName;
+    const canL1 = level === 1 && voucher.status === 'pending_approval_1' && (role === 'manager' || role === 'admin') && (isA1 || role === 'admin');
+    const canL2 = level === 2 && voucher.status === 'pending_approval_2' && (role === 'final_approver' || role === 'admin') && (isA2 || role === 'admin');
+    if (!canL1 && !canL2) {
+      return res.status(400).json({ error: 'This claim is not awaiting your review right now' });
+    }
+
+    db.prepare(`UPDATE voucher_requests SET status='info_requested', info_requested_level=?, info_request_note=?, info_request_by=?, info_request_at=datetime('now'), info_response_note=NULL WHERE id=?`)
+      .run(level, note, req.user.name, voucherId);
+
+    const jccId = voucher.jcc_number || `JCC${String(voucher.id).padStart(4, '0')}`;
+    const creator = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(voucher.user_id);
+    if (creator) {
+      db.prepare(`INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)`)
+        .run(creator.id, 'More info needed on your JCC', `${req.user.name} needs more info on ${jccId}: "${note}"`, 'warning');
+      if (creator.email) {
+        try {
+          sendEmail(creator.email, () => ({
+            subject: `${jccId} — More information needed before approval`,
+            html: `<p><strong>${req.user.name}</strong> has requested more information on <strong>${jccId}</strong> before approving it:</p>
+                   <blockquote style="border-left:3px solid #f59e0b; padding-left:12px; color:#334155;">${note}</blockquote>
+                   <p>Please open the portal, update the claim if needed, and resend it — your claim is preserved and goes straight back to the same approver.</p>`,
+          }), [voucher], { entityType: 'jcc', entityId: jccId, templateName: 'jccInfoRequested' })
+            .catch(err => console.error('[Email] info-request failed:', err));
+        } catch (e) { console.error('[Email] info-request error:', e); }
+      }
+    }
+
+    res.json({ message: `Sent back to ${creator?.name || 'the claimant'} for more info` });
+  } catch (error) {
+    console.error('Error requesting info:', error);
+    res.status(500).json({ error: 'Failed to request info' });
+  }
+});
+
+// Claimant responds to an info request and resends to the SAME approver/level.
+// Preserves any earlier-level approval (e.g. if L2 asked, L1 stays approved).
+router.post('/vouchers/:id/respond-info', authenticateToken, (req, res) => {
+  try {
+    const voucherId = req.params.id;
+    const { description, gross_amount, basic_amount, po_number, invoice_number, responseNote } = req.body || {};
+
+    const voucher = db.prepare('SELECT * FROM voucher_requests WHERE id = ?').get(voucherId);
+    if (!voucher) return res.status(404).json({ error: 'Voucher not found' });
+    if (voucher.user_id !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Not authorized to respond to this claim' });
+    }
+    if (voucher.status !== 'info_requested') {
+      return res.status(400).json({ error: 'This claim is not awaiting your input' });
+    }
+
+    const returnLevel = Number(voucher.info_requested_level) === 2 ? 2 : 1;
+    const note = String(responseNote || '').trim();
+    const merged = {
+      description: description !== undefined ? description : voucher.description,
+      gross_amount: gross_amount || voucher.gross_amount,
+      basic_amount: basic_amount || voucher.basic_amount,
+      po_number: po_number || voucher.po_number,
+      invoice_number: invoice_number || voucher.invoice_number,
+    };
+
+    if (returnLevel === 2) {
+      db.prepare(`UPDATE voucher_requests SET description=?, gross_amount=?, basic_amount=?, po_number=?, invoice_number=?, info_response_note=?, status='pending_approval_2', current_approval_level=2, approver2_status='pending', approver2_remark=NULL, approver2_date=NULL, approval_nonce=COALESCE(approval_nonce,0)+1 WHERE id=?`)
+        .run(merged.description, merged.gross_amount, merged.basic_amount, merged.po_number, merged.invoice_number, note, voucherId);
+    } else {
+      db.prepare(`UPDATE voucher_requests SET description=?, gross_amount=?, basic_amount=?, po_number=?, invoice_number=?, info_response_note=?, status='pending_approval_1', current_approval_level=1, approver1_status='pending', approver1_remark=NULL, approver1_date=NULL, approval_nonce=COALESCE(approval_nonce,0)+1 WHERE id=?`)
+        .run(merged.description, merged.gross_amount, merged.basic_amount, merged.po_number, merged.invoice_number, note, voucherId);
+    }
+
+    const approverName = returnLevel === 2 ? voucher.approver2_name : voucher.approver1_name;
+    const approver = findUserByName(approverName);
+    const jccId = voucher.jcc_number || `JCC${String(voucher.id).padStart(4, '0')}`;
+    if (approver) {
+      db.prepare(`INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)`)
+        .run(approver.id, 'Claimant responded — ready for review', `${req.user.name} responded on ${jccId} and resent it for your approval.${note ? ` Note: "${note}"` : ''}`, 'info');
+    }
+
+    res.json({ message: 'Response sent — your claim is back with the approver' });
+  } catch (error) {
+    console.error('Error responding to info request:', error);
+    res.status(500).json({ error: 'Failed to send response' });
+  }
+});
+
+// ─── Claimant nudge: "Remind approver" ───────────────────────────────────────
+// Lets the person waiting ping the current approver (in-app + email).
+// Rate-limited to once per day per claim, and logged for the audit/escalation trail.
+router.post('/vouchers/:id/remind', authenticateToken, (req, res) => {
+  try {
+    const voucherId = req.params.id;
+    const voucher = db.prepare('SELECT * FROM voucher_requests WHERE id = ?').get(voucherId);
+    if (!voucher) return res.status(404).json({ error: 'Voucher not found' });
+    if (voucher.user_id !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'You can only remind on your own claims' });
+    }
+    if (!['pending_approval_1', 'pending_approval_2'].includes(voucher.status)) {
+      return res.status(400).json({ error: 'This claim is not awaiting approval right now' });
+    }
+
+    const level = Number(voucher.current_approval_level) === 2 ? 2 : 1;
+
+    // A reminder is only allowed once the current approver has actually held the
+    // claim for REMIND_MIN_DAYS. Measure from when it reached this approver:
+    // submission (created_at) for Level 1, or Level-1 approval for Level 2.
+    // Computed in SQL (julianday) so it is timezone-safe (both values are UTC).
+    const REMIND_MIN_DAYS = 3;
+    const sinceDate = level === 2 ? (voucher.approver1_date || voucher.created_at) : voucher.created_at;
+    const waitedRow = db.prepare(`SELECT (julianday('now') - julianday(?)) AS d`).get(sinceDate);
+    const waitedDays = Math.floor(Number(waitedRow?.d) || 0);
+    if (waitedDays < REMIND_MIN_DAYS) {
+      return res.status(400).json({ error: `You can remind the approver after ${REMIND_MIN_DAYS} days. This claim has been with the approver for ${waitedDays} day${waitedDays === 1 ? '' : 's'}.` });
+    }
+
+    // Rate-limit: one reminder per claim per day
+    const already = db.prepare(`SELECT id FROM jcc_reminder_nudges WHERE voucher_id = ? AND date(created_at) = date('now') LIMIT 1`).get(voucherId);
+    if (already) {
+      return res.status(429).json({ error: 'You already reminded the approver today. Please try again tomorrow.' });
+    }
+
+    const approverName = level === 2 ? voucher.approver2_name : voucher.approver1_name;
+    const approver = findUserByName(approverName);
+    const jccId = voucher.jcc_number || `JCC${String(voucher.id).padStart(4, '0')}`;
+
+    if (!approver) {
+      return res.status(400).json({ error: 'Could not find the current approver to remind' });
+    }
+
+    // Log the nudge (audit + rate-limit + feeds escalation later)
+    db.prepare(`INSERT INTO jcc_reminder_nudges (voucher_id, reminded_by_id, reminded_by_name, approver_name, level) VALUES (?, ?, ?, ?, ?)`)
+      .run(voucherId, req.user.id, req.user.name, approver.name, level);
+
+    // In-app notification
+    db.prepare(`INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)`)
+      .run(approver.id, 'Reminder: JCC pending your approval', `${req.user.name} is waiting on ${jccId} — it is still pending your ${level === 2 ? 'final ' : ''}approval.`, 'warning');
+
+    // Best-effort email
+    if (approver.email) {
+      try {
+        sendEmail(approver.email, () => ({
+          subject: `Reminder: ${jccId} is still pending your approval`,
+          html: `<p><strong>${req.user.name}</strong> is waiting on <strong>${jccId}</strong>, which is still pending your ${level === 2 ? 'final ' : ''}approval.</p>
+                 <p>Supplier: ${voucher.supplier || '-'} · Amount: ₹${Number(voucher.basic_amount || 0).toLocaleString('en-IN')}</p>
+                 <p>Please review it in the portal when you get a moment.</p>`,
+        }), [voucher], { entityType: 'jcc', entityId: jccId, templateName: 'jccManualReminder' })
+          .catch(err => console.error('[Email] manual reminder failed:', err));
+      } catch (e) { console.error('[Email] manual reminder error:', e); }
+    }
+
+    res.json({ message: `Reminder sent to ${approver.name}` });
+  } catch (error) {
+    console.error('Error sending reminder:', error);
+    res.status(500).json({ error: 'Failed to send reminder' });
+  }
+});
+
 // Get audit logs  
 router.get('/audit-logs', authenticateToken, authorizeRoles('coordinator', 'admin'), (req, res) => {
   try {
@@ -2452,8 +3331,134 @@ router.get('/audit-logs', authenticateToken, authorizeRoles('coordinator', 'admi
   }
 });
 
+// ─── GET /vouchers/:id/materials-list ────────────────────────────────────────
+// Returns all material rows for a single voucher (owner or admin/coordinator).
+router.get('/vouchers/:id/materials-list', authenticateToken, (req, res) => {
+  try {
+    const voucherId = req.params.id;
+    const voucher = db.prepare('SELECT user_id FROM voucher_requests WHERE id = ?').get(voucherId);
+    if (!voucher) return res.status(404).json({ error: 'Voucher not found' });
+
+    const isOwner = voucher.user_id === req.user.id;
+    const isPrivileged = ['admin', 'coordinator', 'manager', 'final_approver'].includes(req.user.role);
+    if (!isOwner && !isPrivileged) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+
+    const materials = db.prepare(`
+      SELECT id, amount, project_code, project_name, description_of_material
+      FROM voucher_materials WHERE voucher_id = ? ORDER BY id ASC
+    `).all(voucherId);
+
+    return res.json({ materials });
+  } catch (error) {
+    console.error('Error fetching materials list:', error);
+    return res.status(500).json({ error: 'Failed to fetch materials' });
+  }
+});
+
+// ─── POST /vouchers/:id/auto-extract-materials ───────────────────────────────
+// Extracts line items from the attached invoice and attempts to map them to materials
+router.post('/vouchers/:id/auto-extract-materials', authenticateToken, async (req, res) => {
+  try {
+    const voucherId = req.params.id;
+    const voucher = db.prepare('SELECT * FROM voucher_requests WHERE id = ?').get(voucherId);
+    if (!voucher) return res.status(404).json({ error: 'Voucher not found' });
+
+    const isOwner = voucher.user_id === req.user.id;
+    const isPrivileged = ['admin', 'coordinator', 'manager', 'final_approver'].includes(req.user.role);
+    if (!isOwner && !isPrivileged) return res.status(403).json({ error: 'Not authorized' });
+
+    if (!voucher.attachment_path) return res.status(400).json({ error: 'No invoice attached to this voucher' });
+    const filePath = path.join(__dirname, '../../uploads', voucher.attachment_path);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Attached invoice file not found' });
+
+    const data = await extractInvoiceData(filePath, 'application/pdf');
+    if (!data || !data.lineItems) return res.json({ materials: [] });
+
+    const extractedItems = data.lineItems.filter(item => !item.isSummary);
+    const materials = extractedItems.map(item => ({
+      descriptionOfMaterial: item.description || item.text || '',
+      amount: item.amount ? String(item.amount).replace(/[^0-9.-]/g, '') : '',
+      projectCode: voucher.project_code || '',
+      projectName: voucher.project_name || ''
+    }));
+
+    res.json({ materials });
+  } catch (error) {
+    console.error('Error auto-extracting materials:', error);
+    res.status(500).json({ error: 'Failed to extract materials from invoice' });
+  }
+});
+
+// ─── PUT /vouchers/:id/materials ─────────────────────────────────────────────
+
+// Update material rows for an existing voucher (owner or admin/coordinator).
+// Allows filling in description_of_material for vouchers created before the fix.
+router.put('/vouchers/:id/materials', authenticateToken, async (req, res) => {
+  try {
+    const voucherId = req.params.id;
+    const voucher = db.prepare('SELECT * FROM voucher_requests WHERE id = ?').get(voucherId);
+
+    if (!voucher) return res.status(404).json({ error: 'Voucher not found' });
+
+    // Only owner or admin/coordinator can update materials
+    const isOwner = voucher.user_id === req.user.id;
+    const isPrivileged = ['admin', 'coordinator'].includes(req.user.role);
+    if (!isOwner && !isPrivileged) {
+      return res.status(403).json({ error: 'Not authorized to update this voucher' });
+    }
+
+    const materials = req.body?.materials;
+    if (!Array.isArray(materials) || materials.length === 0) {
+      return res.status(400).json({ error: 'materials array is required' });
+    }
+
+    // Get existing material IDs for this voucher (ordered by id)
+    const existingRows = db.prepare(
+      'SELECT id FROM voucher_materials WHERE voucher_id = ? ORDER BY id ASC'
+    ).all(voucherId);
+
+    const updateStmt = db.prepare(
+      'UPDATE voucher_materials SET description_of_material = ?, project_code = ?, project_name = ?, amount = ? WHERE id = ?'
+    );
+
+    // Update each row by position; if frontend sends more rows than DB, insert them
+    const insertStmt = db.prepare(
+      'INSERT INTO voucher_materials (voucher_id, amount, project_code, project_name, description_of_material) VALUES (?, ?, ?, ?, ?)'
+    );
+
+    materials.forEach((mat, i) => {
+      const desc = String(mat.descriptionOfMaterial ?? mat.description_of_material ?? '').trim();
+      const projCode = String(mat.projectCode ?? mat.project_code ?? '').trim();
+      const projName = String(mat.projectName ?? mat.project_name ?? '').trim();
+      const amount = String(mat.amount ?? '').trim();
+
+      if (i < existingRows.length) {
+        updateStmt.run(desc || null, projCode || null, projName || null, amount || null, existingRows[i].id);
+      } else {
+        insertStmt.run(voucherId, amount || null, projCode || null, projName || null, desc || null);
+      }
+    });
+
+    // Audit log
+    db.prepare(
+      'INSERT INTO audit_logs (user_id, user_name, action, entity_type, entity_id, details) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(
+      req.user.id, req.user.name, 'UPDATE_MATERIALS', 'voucher_request', voucherId,
+      `Updated ${materials.length} material rows for voucher ${formatJccId(Number(voucherId))}`
+    );
+
+    return res.json({ success: true, message: 'Materials updated successfully' });
+  } catch (error) {
+    console.error('Error updating voucher materials:', error);
+    return res.status(500).json({ error: 'Failed to update materials' });
+  }
+});
+
 // Approve voucher
 router.post('/approve-voucher/:voucherId', authenticateToken, authorizeRoles('coordinator', 'admin'), (req, res) => {
+
   try {
     const { voucherId } = req.params;
 
@@ -2464,6 +3469,10 @@ router.post('/approve-voucher/:voucherId', authenticateToken, authorizeRoles('co
       JOIN users u ON v.user_id = u.id
       WHERE v.id = ?
     `).get(voucherId);
+
+    if (!voucher) {
+      return res.status(404).json({ error: 'Voucher not found' });
+    }
 
     // Update voucher status to approved
     db.prepare(`
@@ -2528,6 +3537,10 @@ router.post('/reject-voucher/:voucherId', authenticateToken, authorizeRoles('coo
       JOIN users u ON v.user_id = u.id
       WHERE v.id = ?
     `).get(voucherId);
+
+    if (!voucher) {
+      return res.status(404).json({ error: 'Voucher not found' });
+    }
 
     // Update voucher status to rejected
     db.prepare(`
@@ -2613,6 +3626,581 @@ router.post('/notifications/read-all', authenticateToken, (req, res) => {
   } catch (error) {
     console.error('Error marking all notifications as read:', error);
     res.status(500).json({ error: 'Failed to mark all notifications as read' });
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// PRODUCTIVITY FEATURES — drafts, clone/autofill, bulk approve, pending actions,
+// global search. All additive; none alter the existing approval money-path.
+// ════════════════════════════════════════════════════════════════════════════
+
+// Map a voucher_requests row → camelCase prefill object matching the request form.
+const mapVoucherToPrefill = (v) => ({
+  supplier: v.supplier || '',
+  buyerName: v.buyer_name || '',
+  buyerEmail: v.buyer_email || '',
+  department: v.department || '',
+  expenseBookingLocation: v.expense_booking_location || '',
+  natureOfExpenses: v.nature_of_expenses || '',
+  poNumber: v.po_number || '',
+  projectCode: v.project_code || '',
+  projectName: v.project_name || '',
+  approver1: v.approver1_name || '',
+  approver2: v.approver2_name || '',
+});
+
+const PRIVILEGED_ROLES = ['admin', 'coordinator', 'manager', 'final_approver'];
+
+// Find non-rejected vouchers with the same supplier + invoice number (case/space
+// insensitive). Used for duplicate-invoice detection.
+const findDuplicateVouchers = ({ supplier, invoiceNumber, excludeId }) => {
+  const s = String(supplier || '').trim();
+  const inv = String(invoiceNumber || '').trim();
+  if (!s || !inv) return [];
+  let rows = db.prepare(`
+    SELECT id, jcc_number, supplier, invoice_number, basic_amount, status, created_at, user_id
+    FROM voucher_requests
+    WHERE LOWER(TRIM(supplier)) = LOWER(TRIM(?))
+      AND LOWER(TRIM(invoice_number)) = LOWER(TRIM(?))
+      AND status != 'rejected'
+    ORDER BY created_at DESC
+  `).all(s, inv);
+  if (excludeId) rows = rows.filter(r => r.id !== Number(excludeId));
+  return rows;
+};
+
+// Today's date as YYYY-MM-DD via SQLite (keeps timezone consistent with date('now'))
+const isoToday = () => db.prepare(`SELECT date('now') AS d`).get()?.d || '';
+
+// Users who have delegated their approval authority TO `userId` and whose window
+// is active today. Returns [{ delegator_id, delegator_name }].
+const getActiveDelegatorsFor = (userId) => {
+  return db.prepare(`
+    SELECT delegator_id, delegator_name
+    FROM approval_delegations
+    WHERE delegate_id = ? AND date('now') BETWEEN from_date AND to_date
+  `).all(userId);
+};
+
+// ─── Drafts ───────────────────────────────────────────────────────────────────
+// Save (create or update) a draft. Body: { id?, title?, formData }
+router.post('/drafts', authenticateToken, (req, res) => {
+  try {
+    const { id, title, formData } = req.body || {};
+    if (!formData || typeof formData !== 'object') {
+      return res.status(400).json({ error: 'formData is required' });
+    }
+    const json = JSON.stringify(formData);
+    const draftTitle = String(title || formData.supplier || 'Untitled draft').slice(0, 120);
+
+    if (id) {
+      // Update only if the draft belongs to this user
+      const existing = db.prepare('SELECT id FROM voucher_drafts WHERE id = ? AND user_id = ?').get(id, req.user.id);
+      if (!existing) {
+        return res.status(404).json({ error: 'Draft not found' });
+      }
+      db.prepare(`UPDATE voucher_drafts SET title = ?, form_data = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?`)
+        .run(draftTitle, json, id, req.user.id);
+      return res.json({ id, message: 'Draft updated' });
+    }
+
+    const result = db.prepare(`INSERT INTO voucher_drafts (user_id, title, form_data) VALUES (?, ?, ?)`)
+      .run(req.user.id, draftTitle, json);
+    const newId = Number(result.lastInsertRowid) || db.prepare('SELECT last_insert_rowid() AS id').get()?.id;
+    res.json({ id: newId, message: 'Draft saved' });
+  } catch (error) {
+    console.error('Error saving draft:', error);
+    res.status(500).json({ error: 'Failed to save draft' });
+  }
+});
+
+// List current user's drafts (newest first)
+router.get('/drafts', authenticateToken, (req, res) => {
+  try {
+    const drafts = db.prepare(`SELECT id, title, updated_at FROM voucher_drafts WHERE user_id = ? ORDER BY updated_at DESC`).all(req.user.id);
+    res.json(drafts);
+  } catch (error) {
+    console.error('Error listing drafts:', error);
+    res.status(500).json({ error: 'Failed to list drafts' });
+  }
+});
+
+// Get a single draft (with parsed form data)
+router.get('/drafts/:id', authenticateToken, (req, res) => {
+  try {
+    const draft = db.prepare(`SELECT id, title, form_data, updated_at FROM voucher_drafts WHERE id = ? AND user_id = ?`).get(req.params.id, req.user.id);
+    if (!draft) {
+      return res.status(404).json({ error: 'Draft not found' });
+    }
+    let formData = {};
+    try { formData = JSON.parse(draft.form_data); } catch { formData = {}; }
+    res.json({ id: draft.id, title: draft.title, updatedAt: draft.updated_at, formData });
+  } catch (error) {
+    console.error('Error fetching draft:', error);
+    res.status(500).json({ error: 'Failed to fetch draft' });
+  }
+});
+
+// Delete a draft
+router.delete('/drafts/:id', authenticateToken, (req, res) => {
+  try {
+    const existing = db.prepare('SELECT id FROM voucher_drafts WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Draft not found' });
+    }
+    db.prepare('DELETE FROM voucher_drafts WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+    res.json({ message: 'Draft deleted' });
+  } catch (error) {
+    console.error('Error deleting draft:', error);
+    res.status(500).json({ error: 'Failed to delete draft' });
+  }
+});
+
+// ─── Clone / smart autofill ─────────────────────────────────────────────────
+// Prefill data to clone an existing voucher into a new claim. Invoice-specific
+// fields (number, date, amounts) are intentionally left blank to re-enter.
+router.get('/vouchers/:id/clone-data', authenticateToken, (req, res) => {
+  try {
+    const v = db.prepare('SELECT * FROM voucher_requests WHERE id = ?').get(req.params.id);
+    if (!v) {
+      return res.status(404).json({ error: 'Voucher not found' });
+    }
+    const isOwner = v.user_id === req.user.id;
+    if (!isOwner && !PRIVILEGED_ROLES.includes(req.user.role)) {
+      return res.status(403).json({ error: 'Not authorized to clone this voucher' });
+    }
+    res.json({ prefill: mapVoucherToPrefill(v) });
+  } catch (error) {
+    console.error('Error building clone data:', error);
+    res.status(500).json({ error: 'Failed to build clone data' });
+  }
+});
+
+// Most recent voucher created by the current user, as prefill (for "Repeat last claim")
+router.get('/last-claim', authenticateToken, (req, res) => {
+  try {
+    const v = db.prepare('SELECT * FROM voucher_requests WHERE user_id = ? ORDER BY created_at DESC LIMIT 1').get(req.user.id);
+    if (!v) {
+      return res.json({ prefill: null });
+    }
+    res.json({ prefill: mapVoucherToPrefill(v), fromJcc: v.jcc_number || `JCC${String(v.id).padStart(4, '0')}` });
+  } catch (error) {
+    console.error('Error fetching last claim:', error);
+    res.status(500).json({ error: 'Failed to fetch last claim' });
+  }
+});
+
+// Chained autofill: given a supplier, return the PO/buyer/project/approvers from
+// the current user's most recent claim for that supplier.
+router.get('/last-used-by-vendor', authenticateToken, (req, res) => {
+  try {
+    const supplier = String(req.query.supplier || '').trim();
+    if (!supplier) {
+      return res.status(400).json({ error: 'supplier is required' });
+    }
+    const v = db.prepare(`
+      SELECT * FROM voucher_requests
+      WHERE user_id = ? AND LOWER(TRIM(supplier)) = LOWER(TRIM(?))
+      ORDER BY created_at DESC LIMIT 1
+    `).get(req.user.id, supplier);
+    if (!v) {
+      return res.json({ prefill: null });
+    }
+    res.json({ prefill: mapVoucherToPrefill(v) });
+  } catch (error) {
+    console.error('Error fetching last-used-by-vendor:', error);
+    res.status(500).json({ error: 'Failed to fetch vendor defaults' });
+  }
+});
+
+// ─── Bulk approve / reject ───────────────────────────────────────────────────
+// Applies the same DB transitions as the single-approval endpoints, per voucher,
+// at whichever level the current user is authorised for. Skips anything not
+// assigned to them or not at the right level, and reports per-id results.
+const bulkProcess = (req, res, mode /* 'approve' | 'reject' */) => {
+  try {
+    const { ids, remark } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'ids array is required' });
+    }
+    if (mode === 'reject' && !String(remark || '').trim()) {
+      return res.status(400).json({ error: 'A remark is required when rejecting' });
+    }
+
+    const role = req.user.role;
+    const userName = String(req.user.name || '').trim().toLowerCase();
+    const results = [];
+
+    for (const rawId of ids) {
+      const id = Number(rawId);
+      const v = db.prepare('SELECT * FROM voucher_requests WHERE id = ?').get(id);
+      if (!v) { results.push({ id: rawId, ok: false, reason: 'not found' }); continue; }
+
+      const level = v.current_approval_level;
+      const isApprover1 = String(v.approver1_name || '').trim().toLowerCase() === userName;
+      const isApprover2 = String(v.approver2_name || '').trim().toLowerCase() === userName;
+
+      // Determine if this user may act on this voucher at its current level
+      const canLevel1 = level === 1 && v.status === 'pending_approval_1' && (isApprover1 || role === 'admin') && (role === 'manager' || role === 'admin');
+      const canLevel2 = level === 2 && v.status === 'pending_approval_2' && v.approver1_status === 'approved' && (isApprover2 || role === 'admin') && (role === 'final_approver' || role === 'admin');
+
+      if (!canLevel1 && !canLevel2) {
+        results.push({ id: rawId, ok: false, reason: 'not actionable by you at its current stage' });
+        continue;
+      }
+
+      const creator = db.prepare('SELECT id, name, email, ps_number FROM users WHERE id = ?').get(v.user_id);
+      const jccDisplayId = v.jcc_number || `JCC${String(v.id).padStart(4, '0')}`;
+
+      try {
+        if (mode === 'approve' && canLevel1) {
+          db.prepare(`UPDATE voucher_requests SET approver1_status='approved', approver1_remark=?, approver1_date=datetime('now'), approver2_status='pending', current_approval_level=2, status='pending_approval_2' WHERE id=?`)
+            .run(remark || 'Bulk approved', id);
+          // Notify next approver + creator in-app (best effort)
+          if (v.approver2_name) {
+            const nextApprover = findUserByName(v.approver2_name);
+            if (nextApprover) {
+              db.prepare(`INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)`)
+                .run(nextApprover.id, 'Action Required: JCC Final Approval', `JCC ${jccDisplayId} has passed Level 1 and needs your final approval.`, 'warning');
+            }
+          }
+          if (creator) {
+            db.prepare(`INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)`)
+              .run(creator.id, 'JCC Approved at Level 1', `Your JCC ${jccDisplayId} was approved by ${req.user.name} (Level 1) and is pending Final Approval.`, 'info');
+          }
+          results.push({ id: rawId, ok: true, action: 'approved-level-1' });
+        } else if (mode === 'approve' && canLevel2) {
+          db.prepare(`UPDATE voucher_requests SET approver2_status='approved', approver2_remark=?, approver2_date=datetime('now'), current_approval_level=NULL, status='approved', payment_status='pending_payment' WHERE id=?`)
+            .run(remark || 'Bulk approved', id);
+          try {
+            insertPaymentLog({ voucherId: id, oldStatus: v.payment_status || 'awaiting_approval', newStatus: 'pending_payment', referenceNo: null, amount: v.basic_amount, remarks: 'Bulk approved (Level 2) and moved to payment queue', actionSource: 'bulk_approval_level_2', user: req.user });
+          } catch (e) { console.error('[bulk] payment log failed (non-critical):', e); }
+          if (creator) {
+            db.prepare(`INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)`)
+              .run(creator.id, 'JCC Fully Approved', `Your JCC ${jccDisplayId} has been fully approved.`, 'success');
+          }
+          results.push({ id: rawId, ok: true, action: 'approved-level-2' });
+        } else if (mode === 'reject') {
+          const isLevel1 = canLevel1;
+          db.prepare(`UPDATE voucher_requests SET ${isLevel1 ? "approver1_status='rejected', approver1_remark=?, approver1_date=datetime('now')" : "approver2_status='rejected', approver2_remark=?, approver2_date=datetime('now')"}, current_approval_level=NULL, status='rejected' WHERE id=?`)
+            .run(remark, id);
+          if (creator) {
+            db.prepare(`INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)`)
+              .run(creator.id, 'JCC Rejected', `Your JCC ${jccDisplayId} was rejected by ${req.user.name}. Reason: ${remark}`, 'error');
+          }
+          results.push({ id: rawId, ok: true, action: isLevel1 ? 'rejected-level-1' : 'rejected-level-2' });
+        }
+      } catch (opErr) {
+        console.error(`[bulk ${mode}] failed for voucher ${id}:`, opErr);
+        results.push({ id: rawId, ok: false, reason: 'update failed' });
+      }
+    }
+
+    const succeeded = results.filter(r => r.ok).length;
+    res.json({ message: `${succeeded} of ${ids.length} ${mode === 'approve' ? 'approved' : 'rejected'}`, succeeded, total: ids.length, results });
+  } catch (error) {
+    console.error(`Error in bulk ${mode}:`, error);
+    res.status(500).json({ error: `Failed to bulk ${mode}` });
+  }
+};
+
+router.post('/bulk-approve', authenticateToken, authorizeRoles('manager', 'final_approver', 'admin'), (req, res) => bulkProcess(req, res, 'approve'));
+router.post('/bulk-reject', authenticateToken, authorizeRoles('manager', 'final_approver', 'admin'), (req, res) => bulkProcess(req, res, 'reject'));
+
+// ─── My Pending Actions (home widget) ────────────────────────────────────────
+router.get('/pending-actions', authenticateToken, (req, res) => {
+  try {
+    const role = req.user.role;
+    const userName = String(req.user.name || '').trim();
+    let toApprove = 0;
+
+    if (role === 'manager' || role === 'admin') {
+      toApprove += db.prepare(`SELECT COUNT(*) AS c FROM voucher_requests WHERE status='pending_approval_1' AND approver1_status='pending' AND LOWER(TRIM(approver1_name)) = LOWER(TRIM(?))`).get(userName)?.c || 0;
+    }
+    if (role === 'final_approver' || role === 'admin') {
+      toApprove += db.prepare(`SELECT COUNT(*) AS c FROM voucher_requests WHERE status='pending_approval_2' AND approver2_status='pending' AND approver1_status='approved' AND LOWER(TRIM(approver2_name)) = LOWER(TRIM(?))`).get(userName)?.c || 0;
+    }
+
+    // Include approvals delegated to me (active out-of-office cover)
+    let delegated = 0;
+    for (const d of getActiveDelegatorsFor(req.user.id)) {
+      const dName = String(d.delegator_name || '').trim();
+      if (!dName) continue;
+      if (role === 'manager' || role === 'admin') {
+        delegated += db.prepare(`SELECT COUNT(*) AS c FROM voucher_requests WHERE status='pending_approval_1' AND approver1_status='pending' AND LOWER(TRIM(approver1_name)) = LOWER(TRIM(?))`).get(dName)?.c || 0;
+      }
+      if (role === 'final_approver' || role === 'admin') {
+        delegated += db.prepare(`SELECT COUNT(*) AS c FROM voucher_requests WHERE status='pending_approval_2' AND approver2_status='pending' AND approver1_status='approved' AND LOWER(TRIM(approver2_name)) = LOWER(TRIM(?))`).get(dName)?.c || 0;
+      }
+    }
+    toApprove += delegated;
+
+    const drafts = db.prepare('SELECT COUNT(*) AS c FROM voucher_drafts WHERE user_id = ?').get(req.user.id)?.c || 0;
+    const rejected = db.prepare(`SELECT COUNT(*) AS c FROM voucher_requests WHERE user_id = ? AND status = 'rejected'`).get(req.user.id)?.c || 0;
+    const pendingMine = db.prepare(`SELECT COUNT(*) AS c FROM voucher_requests WHERE user_id = ? AND status IN ('pending_approval_1','pending_approval_2')`).get(req.user.id)?.c || 0;
+    const needsMyInput = db.prepare(`SELECT COUNT(*) AS c FROM voucher_requests WHERE user_id = ? AND status = 'info_requested'`).get(req.user.id)?.c || 0;
+
+    res.json({ toApprove, drafts, rejected, pendingMine, needsMyInput });
+  } catch (error) {
+    console.error('Error fetching pending actions:', error);
+    res.status(500).json({ error: 'Failed to fetch pending actions' });
+  }
+});
+
+// ─── Global search ───────────────────────────────────────────────────────────
+router.get('/search', authenticateToken, (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (q.length < 2) {
+      return res.json({ results: [] });
+    }
+    const like = `%${q}%`;
+    const privileged = PRIVILEGED_ROLES.includes(req.user.role);
+    const base = `
+      SELECT v.id, v.jcc_number, v.supplier, v.invoice_number, v.basic_amount, v.status, v.created_at
+      FROM voucher_requests v
+      WHERE (v.jcc_number LIKE ? OR v.supplier LIKE ? OR v.invoice_number LIKE ?)
+    `;
+    const rows = privileged
+      ? db.prepare(`${base} ORDER BY v.created_at DESC LIMIT 20`).all(like, like, like)
+      : db.prepare(`${base} AND v.user_id = ? ORDER BY v.created_at DESC LIMIT 20`).all(like, like, like, req.user.id);
+
+    res.json({ results: rows.map(r => ({
+      id: r.id,
+      jccNumber: r.jcc_number || `JCC${String(r.id).padStart(4, '0')}`,
+      supplier: r.supplier,
+      invoiceNumber: r.invoice_number,
+      basicAmount: r.basic_amount,
+      status: r.status,
+      createdAt: r.created_at,
+    })) });
+  } catch (error) {
+    console.error('Error in global search:', error);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+// ─── Duplicate invoice check ─────────────────────────────────────────────────
+// Proactive (non-blocking) lookup the form calls as the user types, to warn early.
+router.get('/check-duplicate', authenticateToken, (req, res) => {
+  try {
+    const matches = findDuplicateVouchers({ supplier: req.query.supplier, invoiceNumber: req.query.invoiceNumber });
+    const amount = parseFloat(req.query.amount);
+    res.json({
+      duplicates: matches.map(m => ({
+        id: m.id,
+        jccNumber: m.jcc_number || `JCC${String(m.id).padStart(4, '0')}`,
+        supplier: m.supplier,
+        invoiceNumber: m.invoice_number,
+        amount: m.basic_amount,
+        status: m.status,
+        createdAt: m.created_at,
+        sameAmount: !Number.isNaN(amount) && Math.abs((parseFloat(m.basic_amount) || 0) - amount) < 0.01,
+      })),
+    });
+  } catch (error) {
+    console.error('Error checking duplicate:', error);
+    res.status(500).json({ error: 'Duplicate check failed' });
+  }
+});
+
+// ─── Approver delegation (out-of-office) ─────────────────────────────────────
+// Create a delegation (current user delegates their approvals to someone else)
+router.post('/delegations', authenticateToken, authorizeRoles('manager', 'final_approver', 'admin'), (req, res) => {
+  try {
+    const { delegateName, fromDate, toDate, reason } = req.body || {};
+    const delegate = findUserByName(delegateName);
+    if (!delegate) {
+      return res.status(400).json({ error: 'Please choose a valid person to delegate to' });
+    }
+    if (delegate.id === req.user.id) {
+      return res.status(400).json({ error: 'You cannot delegate to yourself' });
+    }
+    const from = String(fromDate || '').trim();
+    const to = String(toDate || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).json({ error: 'Valid From and To dates are required' });
+    }
+    if (from > to) {
+      return res.status(400).json({ error: 'From date cannot be after To date' });
+    }
+    const result = db.prepare(`
+      INSERT INTO approval_delegations (delegator_id, delegator_name, delegate_id, delegate_name, from_date, to_date, reason)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(req.user.id, req.user.name, delegate.id, delegate.name, from, to, String(reason || '').trim());
+    const newId = Number(result.lastInsertRowid) || db.prepare('SELECT last_insert_rowid() AS id').get()?.id;
+
+    // Let the delegate know in-app
+    db.prepare(`INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)`)
+      .run(delegate.id, 'Approvals delegated to you', `${req.user.name} has delegated their approvals to you from ${from} to ${to}.`, 'info');
+
+    res.json({ id: newId, message: `Approvals delegated to ${delegate.name} (${from} → ${to})` });
+  } catch (error) {
+    console.error('Error creating delegation:', error);
+    res.status(500).json({ error: 'Failed to create delegation' });
+  }
+});
+
+// List delegations relevant to the current user (ones they created + ones to them)
+router.get('/delegations', authenticateToken, (req, res) => {
+  try {
+    const asDelegator = db.prepare(`SELECT * FROM approval_delegations WHERE delegator_id = ? ORDER BY from_date DESC`).all(req.user.id);
+    const asDelegate = db.prepare(`SELECT * FROM approval_delegations WHERE delegate_id = ? ORDER BY from_date DESC`).all(req.user.id);
+    const withActive = (rows) => rows.map(r => ({ ...r, active: r.from_date <= isoToday() && r.to_date >= isoToday() }));
+    res.json({ asDelegator: withActive(asDelegator), asDelegate: withActive(asDelegate) });
+  } catch (error) {
+    console.error('Error listing delegations:', error);
+    res.status(500).json({ error: 'Failed to list delegations' });
+  }
+});
+
+// Cancel a delegation (only the delegator can)
+router.delete('/delegations/:id', authenticateToken, (req, res) => {
+  try {
+    const row = db.prepare('SELECT id FROM approval_delegations WHERE id = ? AND delegator_id = ?').get(req.params.id, req.user.id);
+    if (!row) return res.status(404).json({ error: 'Delegation not found' });
+    db.prepare('DELETE FROM approval_delegations WHERE id = ?').run(req.params.id);
+    res.json({ message: 'Delegation cancelled' });
+  } catch (error) {
+    console.error('Error deleting delegation:', error);
+    res.status(500).json({ error: 'Failed to cancel delegation' });
+  }
+});
+
+// ─── One-click email approval (public, token-gated) ──────────────────────────
+const htmlPage = (title, bodyHtml, accent = '#0066CC') => `<!doctype html>
+<html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>${title}</title></head>
+<body style="font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#F1F5F9; margin:0; padding:40px 16px;">
+  <div style="max-width:520px; margin:0 auto; background:#fff; border-radius:14px; padding:28px; box-shadow:0 10px 30px rgba(0,0,0,0.08); border-top:5px solid ${accent};">
+    ${bodyHtml}
+  </div>
+</body></html>`;
+
+// Validate the token and return { payload, voucher, error }
+const resolveApprovalToken = (token) => {
+  let payload;
+  try {
+    payload = jwt.verify(token, JWT_SECRET);
+  } catch {
+    return { error: 'This approval link is invalid or has expired. Please approve from the portal.' };
+  }
+  if (!payload || payload.purpose !== 'jcc-approve') {
+    return { error: 'This link is not a valid approval link.' };
+  }
+  const voucher = db.prepare('SELECT * FROM voucher_requests WHERE id = ?').get(payload.voucherId);
+  if (!voucher) return { error: 'The claim for this link no longer exists.' };
+  return { payload, voucher };
+};
+
+// Confirm the token targets an actionable state for the intended approver
+const checkApprovable = (payload, voucher) => {
+  // Nonce must match the voucher's current nonce — an old link becomes invalid
+  // once the claim has re-entered approval (resubmit / respond-info bumps it).
+  if (Number(payload.nonce || 0) !== (Number(voucher.approval_nonce) || 0)) {
+    return 'This approval link has expired because the claim was updated. Please approve from the portal.';
+  }
+  if (payload.level === 1) {
+    if (voucher.status !== 'pending_approval_1' || voucher.approver1_status !== 'pending') return 'This claim is no longer awaiting Level 1 approval.';
+    const approver = findUserByName(voucher.approver1_name);
+    if (!approver || approver.id !== payload.approverId) return 'This link is not associated with the current Level 1 approver.';
+  } else if (payload.level === 2) {
+    if (voucher.status !== 'pending_approval_2' || voucher.approver2_status !== 'pending' || voucher.approver1_status !== 'approved') return 'This claim is not awaiting your Final Approval.';
+    const approver = findUserByName(voucher.approver2_name);
+    if (!approver || approver.id !== payload.approverId) return 'This link is not associated with the current Final Approver.';
+  } else {
+    return 'Unknown approval level.';
+  }
+  return null;
+};
+
+// GET — show a confirmation page (does NOT approve; protects against link scanners)
+router.get('/approve-via-link/:token', (req, res) => {
+  const { token } = req.params;
+  const { payload, voucher, error } = resolveApprovalToken(token);
+  if (error) return res.status(400).send(htmlPage('Approval Link', `<h2 style="margin-top:0;color:#B91C1C;">Cannot open this link</h2><p style="color:#334155;">${error}</p>`, '#B91C1C'));
+
+  const notActionable = checkApprovable(payload, voucher);
+  const jccId = voucher.jcc_number || `JCC${String(voucher.id).padStart(4, '0')}`;
+  if (notActionable) {
+    return res.status(200).send(htmlPage('Approval Link', `<h2 style="margin-top:0;color:#B45309;">Nothing to approve</h2><p style="color:#334155;">${notActionable}</p><p style="color:#64748B;font-size:13px;">${jccId}</p>`, '#B45309'));
+  }
+
+  const levelLabel = payload.level === 1 ? 'Level 1 (Manager) Approval' : 'Final Approval';
+  const body = `
+    <h2 style="margin-top:0;color:#0F172A;">Confirm ${levelLabel}</h2>
+    <p style="color:#334155;">You are about to approve <strong>${jccId}</strong>.</p>
+    <table style="width:100%;border-collapse:collapse;font-size:14px;color:#334155;margin:12px 0;">
+      <tr><td style="padding:4px 0;color:#64748B;">Supplier</td><td style="text-align:right;font-weight:600;">${voucher.supplier || '-'}</td></tr>
+      <tr><td style="padding:4px 0;color:#64748B;">Invoice No.</td><td style="text-align:right;font-weight:600;">${voucher.invoice_number || '-'}</td></tr>
+      <tr><td style="padding:4px 0;color:#64748B;">Amount</td><td style="text-align:right;font-weight:600;">₹${Number(voucher.basic_amount || 0).toLocaleString('en-IN')}</td></tr>
+    </table>
+    <form method="POST" action="/api/jcc/approve-via-link/${token}" style="margin-top:16px;">
+      <button type="submit" style="width:100%;background:#059669;color:#fff;border:none;padding:13px;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;">✓ Approve ${jccId}</button>
+    </form>
+    <p style="color:#94A3B8;font-size:12px;margin-top:14px;">If you did not intend to approve this, simply close this page.</p>`;
+  return res.status(200).send(htmlPage(`Approve ${jccId}`, body, '#059669'));
+});
+
+// POST — perform the approval
+router.post('/approve-via-link/:token', (req, res) => {
+  const { token } = req.params;
+  const { payload, voucher, error } = resolveApprovalToken(token);
+  if (error) return res.status(400).send(htmlPage('Approval', `<h2 style="margin-top:0;color:#B91C1C;">Link error</h2><p style="color:#334155;">${error}</p>`, '#B91C1C'));
+
+  const notActionable = checkApprovable(payload, voucher);
+  const jccId = voucher.jcc_number || `JCC${String(voucher.id).padStart(4, '0')}`;
+  if (notActionable) {
+    return res.status(200).send(htmlPage('Approval', `<h2 style="margin-top:0;color:#B45309;">Already handled</h2><p style="color:#334155;">${notActionable}</p>`, '#B45309'));
+  }
+
+  try {
+    const approverUser = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(payload.approverId);
+    const creator = db.prepare('SELECT id, name, email, ps_number FROM users WHERE id = ?').get(voucher.user_id);
+
+    if (payload.level === 1) {
+      db.prepare(`UPDATE voucher_requests SET approver1_status='approved', approver1_remark=?, approver1_date=datetime('now'), approver2_status='pending', current_approval_level=2, status='pending_approval_2' WHERE id=?`)
+        .run('Approved via email link', voucher.id);
+      // Notify the final approver (in-app + email w/ their own one-click link)
+      if (voucher.approver2_name) {
+        const nextApprover = findUserByName(voucher.approver2_name);
+        if (nextApprover) {
+          db.prepare(`INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)`)
+            .run(nextApprover.id, 'Action Required: JCC Final Approval', `JCC ${jccId} has passed Level 1 and needs your final approval.`, 'warning');
+          try {
+            const voucherData = {
+              voucherId: voucher.id, voucherRequestId: jccId, supplier: voucher.supplier, invoiceNumber: voucher.invoice_number,
+              invoiceDate: voucher.invoice_date, department: voucher.department, basicAmount: voucher.basic_amount, grossAmount: voucher.gross_amount,
+              poNumber: voucher.po_number, claimedBy: voucher.claimed_by, approver1Name: voucher.approver1_name, approver2Name: voucher.approver2_name,
+              approveLink: approvalLink(voucher.id, 2, nextApprover.id),
+            };
+            notifyNextApprover(voucherData, creator, nextApprover).catch(err => console.error('[Email] next approver (via-link):', err));
+          } catch (e) { console.error('[via-link] next-approver email failed:', e); }
+        }
+      }
+      if (creator) {
+        db.prepare(`INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)`)
+          .run(creator.id, 'JCC Approved at Level 1', `Your JCC ${jccId} was approved by ${approverUser?.name || 'the manager'} (Level 1) and is pending Final Approval.`, 'info');
+      }
+    } else {
+      db.prepare(`UPDATE voucher_requests SET approver2_status='approved', approver2_remark=?, approver2_date=datetime('now'), current_approval_level=NULL, status='approved', payment_status='pending_payment' WHERE id=?`)
+        .run('Approved via email link', voucher.id);
+      try {
+        insertPaymentLog({ voucherId: voucher.id, oldStatus: voucher.payment_status || 'awaiting_approval', newStatus: 'pending_payment', referenceNo: null, amount: voucher.basic_amount, remarks: 'Approved via email link (Level 2)', actionSource: 'approval_via_link_level_2', user: approverUser || { id: payload.approverId } });
+      } catch (e) { console.error('[via-link] payment log failed:', e); }
+      if (creator) {
+        db.prepare(`INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)`)
+          .run(creator.id, 'JCC Fully Approved', `Your JCC ${jccId} has been fully approved.`, 'success');
+      }
+    }
+
+    const successBody = `<h2 style="margin-top:0;color:#059669;">✓ Approved</h2>
+      <p style="color:#334155;"><strong>${jccId}</strong> has been ${payload.level === 1 ? 'approved at Level 1 and sent for Final Approval' : 'fully approved'}.</p>
+      <p style="color:#64748B;font-size:13px;">You can close this page.</p>`;
+    return res.status(200).send(htmlPage(`Approved ${jccId}`, successBody, '#059669'));
+  } catch (err) {
+    console.error('Error approving via link:', err);
+    return res.status(500).send(htmlPage('Approval', `<h2 style="margin-top:0;color:#B91C1C;">Something went wrong</h2><p style="color:#334155;">Could not approve right now. Please try from the portal.</p>`, '#B91C1C'));
   }
 });
 

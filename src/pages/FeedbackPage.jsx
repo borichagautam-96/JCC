@@ -131,27 +131,27 @@ const FeedbackPage = () => {
 
   let historyContent = null;
   if (loadingMine) {
-    historyContent = <p style={{ margin: 0, color: '#64748B' }}>Loading...</p>;
+    historyContent = <p style={{ margin: 0, color: 'var(--text-muted)' }}>Loading...</p>;
   } else if (mineRows.length === 0) {
-    historyContent = <p style={{ margin: 0, color: '#64748B' }}>No feedback submitted yet.</p>;
+    historyContent = <p style={{ margin: 0, color: 'var(--text-muted)' }}>No feedback submitted yet.</p>;
   } else {
     historyContent = (
       <div style={{ display: 'grid', gap: '0.8rem' }}>
         {mineRows.map((row) => (
-          <div key={row.id} style={{ border: '1px solid #E2E8F0', borderRadius: '10px', padding: '0.75rem' }}>
+          <div key={row.id} style={{ border: '1px solid var(--border)', borderRadius: '10px', padding: '0.75rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.6rem', marginBottom: '0.3rem' }}>
-              <strong style={{ color: '#0F172A', textTransform: 'capitalize' }}>{String(row.feedback_type || 'other').replace('_', ' ')}</strong>
-              <span style={{ fontSize: '0.78rem', color: '#475569', textTransform: 'capitalize' }}>
+              <strong style={{ color: 'var(--text-strong)', textTransform: 'capitalize' }}>{String(row.feedback_type || 'other').replace('_', ' ')}</strong>
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-body)', textTransform: 'capitalize' }}>
                 {STATUS_LABELS[row.status] || row.status}
               </span>
             </div>
-            <p style={{ margin: '0 0 0.4rem 0', color: '#334155', fontSize: '0.9rem' }}>{row.description}</p>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.55rem', color: '#64748B', fontSize: '0.78rem' }}>
+            <p style={{ margin: '0 0 0.4rem 0', color: 'var(--text-body)', fontSize: '0.9rem' }}>{row.description}</p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.55rem', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
               {row.module_path ? <span>{row.module_path}</span> : null}
               <span>{formatDateTime(row.created_at)}</span>
             </div>
             {row.admin_note ? (
-              <div style={{ marginTop: '0.55rem', fontSize: '0.82rem', color: '#475569' }}>
+              <div style={{ marginTop: '0.55rem', fontSize: '0.82rem', color: 'var(--text-body)' }}>
                 <strong>Admin Note:</strong> {row.admin_note}
               </div>
             ) : null}
@@ -243,7 +243,7 @@ const FeedbackPage = () => {
             </>
           )}
 
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', color: '#334155' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', color: 'var(--text-body)' }}>
             <input
               type="checkbox"
               checked={form.contactAllowed}

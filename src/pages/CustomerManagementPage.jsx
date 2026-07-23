@@ -172,8 +172,8 @@ const CustomerManagementPage = () => {
 
             {/* Actions Bar */}
             <div style={{
-                background: 'white',
-                border: '1px solid #E0E0E0',
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
                 borderRadius: '8px',
                 padding: '1.5rem',
                 marginBottom: '1.5rem',
@@ -185,13 +185,14 @@ const CustomerManagementPage = () => {
                 <div style={{ flex: 1, minWidth: '250px' }}>
                     <input
                         type="text"
+                        className="premium-search-field"
                         placeholder="Search customers..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         style={{
                             width: '100%',
                             padding: '0.75rem',
-                            border: '1px solid #D1D5DB',
+                            border: '1px solid var(--border)',
                             borderRadius: '6px',
                             fontSize: '1rem'
                         }}
@@ -239,22 +240,22 @@ const CustomerManagementPage = () => {
 
             {/* Customers Table */}
             <div style={{
-                background: 'white',
-                border: '1px solid #E0E0E0',
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
                 borderRadius: '8px',
                 overflow: 'hidden'
             }}>
                 <div style={{ overflowX: 'auto' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                        <thead style={{ background: '#F9FAFB' }}>
+                        <thead style={{ background: 'var(--surface-2)' }}>
                             <tr>
-                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #E5E7EB' }}>Code</th>
-                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #E5E7EB' }}>Name</th>
-                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #E5E7EB' }}>Contact</th>
-                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #E5E7EB' }}>Email</th>
-                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #E5E7EB' }}>Phone</th>
-                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #E5E7EB' }}>City</th>
-                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #E5E7EB' }}>Actions</th>
+                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>Code</th>
+                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>Name</th>
+                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>Contact</th>
+                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>Email</th>
+                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>Phone</th>
+                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>City</th>
+                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -266,7 +267,7 @@ const CustomerManagementPage = () => {
                                 </tr>
                             ) : (
                                 customers.map(customer => (
-                                    <tr key={customer.id} style={{ borderBottom: '1px solid #F3F4F6' }}>
+                                    <tr key={customer.id} style={{ borderBottom: '1px solid var(--surface-3)' }}>
                                         <td style={{ padding: '1rem', fontFamily: 'monospace', color: '#0066CC' }}>{customer.customer_code}</td>
                                         <td style={{ padding: '1rem', fontWeight: 600 }}>{customer.customer_name}</td>
                                         <td style={{ padding: '1rem' }}>{customer.contact_person || '-'}</td>
@@ -329,7 +330,7 @@ const CustomerManagementPage = () => {
                                         value={formData.customer_code}
                                         onChange={(e) => setFormData({ ...formData, customer_code: e.target.value })}
                                         required
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
                                 <div>
@@ -339,7 +340,7 @@ const CustomerManagementPage = () => {
                                         value={formData.customer_name}
                                         onChange={(e) => setFormData({ ...formData, customer_name: e.target.value })}
                                         required
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
                                 <div>
@@ -348,7 +349,7 @@ const CustomerManagementPage = () => {
                                         type="text"
                                         value={formData.contact_person}
                                         onChange={(e) => setFormData({ ...formData, contact_person: e.target.value })}
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
                                 <div>
@@ -357,7 +358,7 @@ const CustomerManagementPage = () => {
                                         type="email"
                                         value={formData.email}
                                         onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
                                 <div>
@@ -366,7 +367,7 @@ const CustomerManagementPage = () => {
                                         type="text"
                                         value={formData.phone}
                                         onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
                                 <div>
@@ -375,7 +376,7 @@ const CustomerManagementPage = () => {
                                         type="text"
                                         value={formData.city}
                                         onChange={(e) => setFormData({ ...formData, city: e.target.value })}
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
                                 <div>
@@ -384,7 +385,7 @@ const CustomerManagementPage = () => {
                                         type="text"
                                         value={formData.state}
                                         onChange={(e) => setFormData({ ...formData, state: e.target.value })}
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
                                 <div>
@@ -393,7 +394,7 @@ const CustomerManagementPage = () => {
                                         type="text"
                                         value={formData.pincode}
                                         onChange={(e) => setFormData({ ...formData, pincode: e.target.value })}
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
                                 <div>
@@ -402,7 +403,7 @@ const CustomerManagementPage = () => {
                                         type="text"
                                         value={formData.gst_number}
                                         onChange={(e) => setFormData({ ...formData, gst_number: e.target.value })}
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
                                 <div>
@@ -411,7 +412,7 @@ const CustomerManagementPage = () => {
                                         type="text"
                                         value={formData.pan_number}
                                         onChange={(e) => setFormData({ ...formData, pan_number: e.target.value })}
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
                             </div>
@@ -421,7 +422,7 @@ const CustomerManagementPage = () => {
                                     value={formData.address}
                                     onChange={(e) => setFormData({ ...formData, address: e.target.value })}
                                     rows="3"
-                                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                    style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                 />
                             </div>
                             <div className="app-modal-actions">

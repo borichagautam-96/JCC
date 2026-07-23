@@ -301,6 +301,9 @@ router.get('/', authenticateToken, authorizeRoles(['admin']), (req, res) => {
             'device_bound_ip',
             'device_unbound_at',
             'account_limit',
+            'is_printer_operator',
+            'is_printer_coordinator',
+            'location_id',
         ];
 
         const selectOptionalColumns = optionalUserColumns.map((columnName) => (
@@ -339,9 +342,11 @@ router.get('/me', authenticateToken, (req, res) => {
     try {
         const user = db.prepare(`
             SELECT u.id, u.ps_number, u.name, u.email, u.role, u.manager_id, u.profile_completed,
-                   m.name as manager_name
+                   u.is_printer_operator, u.is_printer_coordinator, u.location_id,
+                   m.name as manager_name, l.name as location_name
             FROM users u
             LEFT JOIN users m ON u.manager_id = m.id
+            LEFT JOIN locations l ON u.location_id = l.id
             WHERE u.id = ?
         `).get(req.user.id);
 
@@ -356,6 +361,10 @@ router.get('/me', authenticateToken, (req, res) => {
             email: user.email,
             role: user.role,
             profile_completed: Number(user.profile_completed || 0),
+            is_printer_operator: Number(user.is_printer_operator || 0),
+            is_printer_coordinator: Number(user.is_printer_coordinator || 0),
+            location_id: user.location_id || null,
+            location_name: user.location_name || null,
             manager_id: user.manager_id,
             manager_name: user.manager_name || null
         });
@@ -389,17 +398,26 @@ router.post('/complete-profile', authenticateToken, (req, res) => {
             return res.status(409).json({ error: 'This email is already linked to another account.' });
         }
 
+        // Home location (site) — validated against the master if provided.
+        let locationId = null;
+        if (req.body?.location_id != null && req.body.location_id !== '') {
+            locationId = parseInt(req.body.location_id, 10);
+            const loc = db.prepare('SELECT id FROM locations WHERE id = ? AND active = 1').get(locationId);
+            if (!loc) return res.status(400).json({ error: 'Please select a valid location.' });
+        }
+
         db.prepare(`
             UPDATE users
             SET name = ?,
                 email = ?,
+                location_id = COALESCE(?, location_id),
                 profile_completed = 1,
                 profile_verified_at = datetime('now')
             WHERE id = ?
-        `).run(name, email, userId);
+        `).run(name, email, locationId, userId);
 
         const updatedUser = db.prepare(`
-            SELECT id, ps_number, name, email, role, must_change_password, profile_completed, profile_verified_at
+            SELECT id, ps_number, name, email, role, must_change_password, profile_completed, profile_verified_at, location_id
             FROM users
             WHERE id = ?
         `).get(userId);
@@ -792,6 +810,60 @@ router.post('/:id/account-limit', authenticateToken, authorizeRoles(['admin']), 
     } catch (error) {
         console.error('Error updating account limit:', error);
         res.status(500).json({ error: 'Failed to update account limit' });
+    }
+});
+
+// Toggle whether a user is a designated Printer Operator (printing module).
+router.post('/:id/printer-operator', authenticateToken, authorizeRoles(['admin']), (req, res) => {
+    try {
+        const userId = req.params.id;
+        const enabled = req.body?.enabled ? 1 : 0;
+        const user = db.prepare('SELECT id, name FROM users WHERE id = ?').get(userId);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        db.prepare('UPDATE users SET is_printer_operator = ? WHERE id = ?').run(enabled, userId);
+        res.json({ message: `${user.name} is ${enabled ? 'now' : 'no longer'} a printer operator`, is_printer_operator: enabled });
+    } catch (error) {
+        console.error('Error updating printer operator flag:', error);
+        res.status(500).json({ error: 'Failed to update printer operator flag' });
+    }
+});
+
+// Set a user's home location (admin) — used for routing print jobs by site.
+router.post('/:id/location', authenticateToken, authorizeRoles(['admin']), (req, res) => {
+    try {
+        const userId = req.params.id;
+        const user = db.prepare('SELECT id, name FROM users WHERE id = ?').get(userId);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+        let locationId = null;
+        if (req.body?.location_id != null && req.body.location_id !== '') {
+            locationId = parseInt(req.body.location_id, 10);
+            const loc = db.prepare('SELECT id FROM locations WHERE id = ?').get(locationId);
+            if (!loc) return res.status(400).json({ error: 'Invalid location' });
+        }
+        db.prepare('UPDATE users SET location_id = ? WHERE id = ?').run(locationId, userId);
+        res.json({ message: `Location updated for ${user.name}`, location_id: locationId });
+    } catch (error) {
+        console.error('Error setting user location:', error);
+        res.status(500).json({ error: 'Failed to set location' });
+    }
+});
+
+// Toggle whether a user is a designated Printing Coordinator (printing module).
+router.post('/:id/printer-coordinator', authenticateToken, authorizeRoles(['admin']), (req, res) => {
+    try {
+        const userId = req.params.id;
+        const enabled = req.body?.enabled ? 1 : 0;
+        const user = db.prepare('SELECT id, name FROM users WHERE id = ?').get(userId);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        db.prepare('UPDATE users SET is_printer_coordinator = ? WHERE id = ?').run(enabled, userId);
+        res.json({ message: `${user.name} is ${enabled ? 'now' : 'no longer'} a printing coordinator`, is_printer_coordinator: enabled });
+    } catch (error) {
+        console.error('Error updating printing coordinator flag:', error);
+        res.status(500).json({ error: 'Failed to update printing coordinator flag' });
     }
 });
 

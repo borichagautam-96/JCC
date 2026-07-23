@@ -196,8 +196,8 @@ const ProjectManagementPage = () => {
 
             {/* Actions Bar */}
             <div style={{
-                background: 'white',
-                border: '1px solid #E0E0E0',
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
                 borderRadius: '8px',
                 padding: '1.5rem',
                 marginBottom: '1.5rem',
@@ -209,13 +209,14 @@ const ProjectManagementPage = () => {
                 <div style={{ flex: 1, minWidth: '250px' }}>
                     <input
                         type="text"
+                        className="premium-search-field"
                         placeholder="Search projects..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         style={{
                             width: '100%',
                             padding: '0.75rem',
-                            border: '1px solid #D1D5DB',
+                            border: '1px solid var(--border)',
                             borderRadius: '6px',
                             fontSize: '1rem'
                         }}
@@ -243,22 +244,22 @@ const ProjectManagementPage = () => {
 
             {/* Projects Table */}
             <div style={{
-                background: 'white',
-                border: '1px solid #E0E0E0',
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
                 borderRadius: '8px',
                 overflow: 'hidden'
             }}>
                 <div style={{ overflowX: 'auto' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                        <thead style={{ background: '#F9FAFB' }}>
+                        <thead style={{ background: 'var(--surface-2)' }}>
                             <tr>
-                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #E5E7EB' }}>Project Code</th>
-                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #E5E7EB' }}>Project Name</th>
-                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #E5E7EB' }}>Customer</th>
-                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #E5E7EB' }}>Contract #</th>
-                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #E5E7EB' }}>Value</th>
-                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #E5E7EB' }}>Status</th>
-                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid #E5E7EB' }}>Actions</th>
+                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>Project Code</th>
+                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>Project Name</th>
+                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>Customer</th>
+                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>Contract #</th>
+                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>Value</th>
+                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>Status</th>
+                                <th style={{ padding: '1rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -270,14 +271,14 @@ const ProjectManagementPage = () => {
                                 </tr>
                             ) : (
                                 projects.map(project => (
-                                    <tr key={project.id} style={{ borderBottom: '1px solid #F3F4F6' }}>
+                                    <tr key={project.id} style={{ borderBottom: '1px solid var(--surface-3)' }}>
                                         <td style={{ padding: '1rem', fontFamily: 'monospace', color: '#7C3AED', fontWeight: 600 }}>
                                             {project.project_code}
                                         </td>
                                         <td style={{ padding: '1rem', fontWeight: 600 }}>{project.project_name}</td>
                                         <td style={{ padding: '1rem' }}>
                                             <div>{project.customer_name}</div>
-                                            <div style={{ fontSize: '0.75rem', color: '#666' }}>{project.customer_code}</div>
+                                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{project.customer_code}</div>
                                         </td>
                                         <td style={{ padding: '1rem' }}>{project.contract_number || '-'}</td>
                                         <td style={{ padding: '1rem' }}>
@@ -341,7 +342,7 @@ const ProjectManagementPage = () => {
                                         value={formData.project_code}
                                         onChange={(e) => setFormData({ ...formData, project_code: e.target.value })}
                                         required
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
 
@@ -354,7 +355,7 @@ const ProjectManagementPage = () => {
                                         value={formData.customer_id}
                                         onChange={(e) => setFormData({ ...formData, customer_id: e.target.value })}
                                         required
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     >
                                         <option value="">Select Customer</option>
                                         {customers.map(customer => (
@@ -375,7 +376,7 @@ const ProjectManagementPage = () => {
                                         value={formData.project_name}
                                         onChange={(e) => setFormData({ ...formData, project_name: e.target.value })}
                                         required
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
 
@@ -388,7 +389,7 @@ const ProjectManagementPage = () => {
                                         type="text"
                                         value={formData.contract_number}
                                         onChange={(e) => setFormData({ ...formData, contract_number: e.target.value })}
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
 
@@ -401,7 +402,7 @@ const ProjectManagementPage = () => {
                                         type="date"
                                         value={formData.contract_date}
                                         onChange={(e) => setFormData({ ...formData, contract_date: e.target.value })}
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
 
@@ -415,7 +416,7 @@ const ProjectManagementPage = () => {
                                         step="0.01"
                                         value={formData.contract_value}
                                         onChange={(e) => setFormData({ ...formData, contract_value: e.target.value })}
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
 
@@ -427,7 +428,7 @@ const ProjectManagementPage = () => {
                                     <select
                                         value={formData.status}
                                         onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     >
                                         <option value="active">Active</option>
                                         <option value="completed">Completed</option>
@@ -444,7 +445,7 @@ const ProjectManagementPage = () => {
                                         type="date"
                                         value={formData.start_date}
                                         onChange={(e) => setFormData({ ...formData, start_date: e.target.value })}
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
 
@@ -457,7 +458,7 @@ const ProjectManagementPage = () => {
                                         type="date"
                                         value={formData.end_date}
                                         onChange={(e) => setFormData({ ...formData, end_date: e.target.value })}
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', borderRadius: '4px' }}
+                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
                             </div>

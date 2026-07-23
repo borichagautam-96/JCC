@@ -304,7 +304,7 @@ const ROLE_COLORS = {
     final_approver: { bg: '#F3E8FF', color: '#6B21A8' },
     coordinator: { bg: '#E0F2FE', color: '#0369A1' },
     initiator: { bg: '#DCFCE7', color: '#15803D' },
-    user: { bg: '#F3F4F6', color: '#374151' },
+    user: { bg: '#F3F4F6', color: 'var(--text-body)' },
     vendor: { bg: '#FFF1F2', color: '#BE123C' },
 };
 
@@ -514,7 +514,7 @@ const SOPPage = () => {
                 {search && (
                     <button
                         onClick={() => setSearch('')}
-                        style={{ background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}
+                        style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}
                     >
                         Clear
                     </button>

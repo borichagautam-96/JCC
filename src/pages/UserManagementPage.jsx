@@ -90,6 +90,21 @@ const UserManagementPage = () => {
         'X-Device-ID': getDeviceId(),
     });
 
+    // Uniform, compact style for the row action buttons (consistent size = tidy table).
+    const rowActionBtn = (bg) => ({
+        minWidth: '68px',
+        padding: '0.32rem 0.75rem',
+        background: bg,
+        color: 'white',
+        border: 'none',
+        borderRadius: '6px',
+        fontSize: '0.8rem',
+        fontWeight: 600,
+        cursor: 'pointer',
+        transition: 'opacity 0.2s ease',
+        whiteSpace: 'nowrap',
+    });
+
     const parseJsonSafe = async (response) => {
         try {
             return await response.json();
@@ -98,9 +113,37 @@ const UserManagementPage = () => {
         }
     };
 
+    const [locations, setLocations] = useState([]);
+
+    const fetchLocations = async () => {
+        try {
+            const res = await fetch('/api/locations', { headers: authHeaders() });
+            if (res.ok) setLocations(await res.json());
+        } catch (e) {
+            console.warn('location load failed', e);
+        }
+    };
+
+    const handleSetLocation = async (userId, locationId) => {
+        try {
+            const response = await fetch(`/api/users/${userId}/location`, {
+                method: 'POST',
+                headers: authHeaders(),
+                body: JSON.stringify({ location_id: locationId || null }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error);
+            setSuccess(data.message);
+            fetchUsers();
+        } catch (error) {
+            setError(error.message);
+        }
+    };
+
     useEffect(() => {
         fetchUsers();
         fetchManagers();
+        fetchLocations();
         if (SHOW_APP_SECURITY_SETTINGS) {
             fetchAppSettings();
         }
@@ -273,7 +316,10 @@ const UserManagementPage = () => {
             password: '',
             role: user.role,
             manager_id: '',
-            account_limit: user.account_limit || 1
+            account_limit: user.account_limit || 1,
+            is_printer_coordinator: Number(user.is_printer_coordinator) === 1,
+            is_printer_operator: Number(user.is_printer_operator) === 1,
+            location_id: user.location_id ? String(user.location_id) : '',
         });
         setShowEditModal(true);
     };
@@ -304,6 +350,29 @@ const UserManagementPage = () => {
             if (!response.ok) {
                 const data = await response.json();
                 throw new Error(data.error || 'Failed to update user');
+            }
+
+            // Apply printing-role flag changes (separate endpoints) only if changed.
+            const coordChanged = Number(editingUser.is_printer_coordinator) === 1 !== !!formData.is_printer_coordinator;
+            const opChanged = Number(editingUser.is_printer_operator) === 1 !== !!formData.is_printer_operator;
+            if (coordChanged) {
+                await fetch(`/api/users/${editingUser.id}/printer-coordinator`, {
+                    method: 'POST', headers: authHeaders(),
+                    body: JSON.stringify({ enabled: formData.is_printer_coordinator ? 1 : 0 }),
+                });
+            }
+            if (opChanged) {
+                await fetch(`/api/users/${editingUser.id}/printer-operator`, {
+                    method: 'POST', headers: authHeaders(),
+                    body: JSON.stringify({ enabled: formData.is_printer_operator ? 1 : 0 }),
+                });
+            }
+            // Apply location change if different.
+            if (String(editingUser.location_id || '') !== String(formData.location_id || '')) {
+                await fetch(`/api/users/${editingUser.id}/location`, {
+                    method: 'POST', headers: authHeaders(),
+                    body: JSON.stringify({ location_id: formData.location_id || null }),
+                });
             }
 
             setSuccess('User updated successfully!');
@@ -425,6 +494,38 @@ const UserManagementPage = () => {
         }
     };
 
+    const handleTogglePrinterOperator = async (user) => {
+        try {
+            const response = await fetch(`/api/users/${user.id}/printer-operator`, {
+                method: 'POST',
+                headers: authHeaders(),
+                body: JSON.stringify({ enabled: Number(user.is_printer_operator) === 1 ? 0 : 1 })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error);
+            setSuccess(data.message);
+            fetchUsers();
+        } catch (error) {
+            setError(error.message);
+        }
+    };
+
+    const handleTogglePrinterCoordinator = async (user) => {
+        try {
+            const response = await fetch(`/api/users/${user.id}/printer-coordinator`, {
+                method: 'POST',
+                headers: authHeaders(),
+                body: JSON.stringify({ enabled: Number(user.is_printer_coordinator) === 1 ? 0 : 1 })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error);
+            setSuccess(data.message);
+            fetchUsers();
+        } catch (error) {
+            setError(error.message);
+        }
+    };
+
     const openDeviceModal = (user) => {
         setSelectedDeviceUser(user);
         setShowDeviceModal(true);
@@ -446,14 +547,14 @@ const UserManagementPage = () => {
             }
             return { label: 'Expired', bg: '#FEE2E2', color: '#991B1B' };
         }
-        return { label: 'No Session', bg: '#F3F4F6', color: '#6B7280' };
+        return { label: 'No Session', bg: '#F3F4F6', color: 'var(--text-muted)' };
     };
 
     return (
         <div className="fade-in" style={{ padding: '2rem', maxWidth: '1400px', margin: '0 auto' }}>
             {/* Header */}
             <div style={{
-                background: '#fff',
+                background: 'var(--surface)',
                 color: 'white',
                 padding: '1.75rem 2rem',
                 borderRadius: '10px',
@@ -464,8 +565,8 @@ const UserManagementPage = () => {
                 boxShadow: '0 2px 8px rgba(0, 102, 204, 0.15)'
             }}>
                 <div>
-                    <h1 style={{ margin: 0, fontSize: '1.75rem', color: 'black' }}>User Management</h1>
-                    <p style={{ margin: '0.5rem 0 0 0', opacity: 0.9, color: 'black' }}>
+                    <h1 style={{ margin: 0, fontSize: '1.75rem', color: 'var(--text-strong)' }}>User Management</h1>
+                    <p style={{ margin: '0.5rem 0 0 0', opacity: 0.9, color: 'var(--text-strong)' }}>
                         Manage users, device bindings, and session security
                     </p>
                 </div>
@@ -555,15 +656,15 @@ const UserManagementPage = () => {
 
             {SHOW_APP_SECURITY_SETTINGS && (
                 <div style={{
-                    background: 'white',
-                    border: '1px solid #E2E8F0',
+                    background: 'var(--surface)',
+                    border: '1px solid var(--border)',
                     borderRadius: '10px',
                     padding: '1rem',
                     marginBottom: '1.25rem'
                 }}>
-                    <h3 style={{ margin: '0 0 0.75rem 0', color: '#0F172A' }}>App Security & Return Workflow Settings</h3>
+                    <h3 style={{ margin: '0 0 0.75rem 0', color: 'var(--text-strong)' }}>App Security & Return Workflow Settings</h3>
                     {appSettingsLoading ? (
-                        <p style={{ margin: 0, color: '#64748B' }}>Loading settings...</p>
+                        <p style={{ margin: 0, color: 'var(--text-muted)' }}>Loading settings...</p>
                     ) : (
                         <div style={{ display: 'grid', gap: '0.9rem' }}>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: '0.75rem', alignItems: 'end' }}>
@@ -605,18 +706,18 @@ const UserManagementPage = () => {
                             <button className="btn btn-primary" onClick={saveAppSettings}>Save Settings</button>
                             </div>
 
-                            <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: '0.9rem' }}>
-                                <h4 style={{ margin: '0 0 0.6rem 0', color: '#1E293B', fontSize: '0.95rem' }}>Notification Settings Panel</h4>
-                                <p style={{ margin: '0 0 0.75rem 0', color: '#64748B', fontSize: '0.86rem' }}>
+                            <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.9rem' }}>
+                                <h4 style={{ margin: '0 0 0.6rem 0', color: 'var(--text-strong)', fontSize: '0.95rem' }}>Notification Settings Panel</h4>
+                                <p style={{ margin: '0 0 0.75rem 0', color: 'var(--text-muted)', fontSize: '0.86rem' }}>
                                     Enable or disable which roles receive reminder notifications and reminder emails.
                                 </p>
 
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.9rem' }}>
-                                    <div style={{ border: '1px solid #E2E8F0', borderRadius: '8px', padding: '0.8rem' }}>
-                                        <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: '#0F172A' }}>In-app reminder notifications</div>
+                                    <div style={{ border: '1px solid var(--border)', borderRadius: '8px', padding: '0.8rem' }}>
+                                        <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: 'var(--text-strong)' }}>In-app reminder notifications</div>
                                         <div style={{ display: 'grid', gap: '0.4rem' }}>
                                             {REMINDER_ROLE_OPTIONS.map((role) => (
-                                                <label key={`notify-${role.value}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.88rem', color: '#334155' }}>
+                                                <label key={`notify-${role.value}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.88rem', color: 'var(--text-body)' }}>
                                                     <input
                                                         type="checkbox"
                                                         checked={appSettings.reminder_notification_roles.includes(role.value)}
@@ -628,11 +729,11 @@ const UserManagementPage = () => {
                                         </div>
                                     </div>
 
-                                    <div style={{ border: '1px solid #E2E8F0', borderRadius: '8px', padding: '0.8rem' }}>
-                                        <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: '#0F172A' }}>Reminder emails by role</div>
+                                    <div style={{ border: '1px solid var(--border)', borderRadius: '8px', padding: '0.8rem' }}>
+                                        <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: 'var(--text-strong)' }}>Reminder emails by role</div>
                                         <div style={{ display: 'grid', gap: '0.4rem' }}>
                                             {REMINDER_ROLE_OPTIONS.map((role) => (
-                                                <label key={`email-${role.value}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.88rem', color: '#334155' }}>
+                                                <label key={`email-${role.value}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.88rem', color: 'var(--text-body)' }}>
                                                     <input
                                                         type="checkbox"
                                                         checked={appSettings.reminder_email_roles.includes(role.value)}
@@ -653,8 +754,8 @@ const UserManagementPage = () => {
             {/* ===== USERS TAB ===== */}
             {activeTab === 'users' && (
                 <div style={{
-                    background: 'white',
-                    border: '1px solid #E0E0E0',
+                    background: 'var(--surface)',
+                    border: '1px solid var(--border)',
                     borderRadius: '10px',
                     overflow: 'auto',
                     boxShadow: '0 1px 6px rgba(0, 0, 0, 0.06)'
@@ -695,7 +796,7 @@ const UserManagementPage = () => {
                                                 {user.ps_number || '-'}
                                             </td>
                                             <td style={{ fontSize: '0.95rem' }}>{user.name}</td>
-                                            <td style={{ fontSize: '0.9rem', color: '#555' }}>{user.email}</td>
+                                            <td style={{ fontSize: '0.9rem', color: 'var(--text-body)' }}>{user.email}</td>
                                             <td>
                                                 <span style={{
                                                     padding: '5px 12px',
@@ -747,12 +848,12 @@ const UserManagementPage = () => {
                                                     style={{
                                                         padding: '5px 8px',
                                                         borderRadius: '6px',
-                                                        border: '1px solid #D1D5DB',
+                                                        border: '1px solid var(--border)',
                                                         fontSize: '0.9rem',
                                                         fontWeight: 600,
                                                         width: '60px',
                                                         cursor: 'pointer',
-                                                        background: '#FAFAFA'
+                                                        background: 'var(--surface-2)'
                                                     }}
                                                 >
                                                     <option value={1}>1</option>
@@ -763,43 +864,22 @@ const UserManagementPage = () => {
                                                 </select>
                                             </td>
                                             <td>
-                                                <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                                <div style={{ display: 'flex', gap: '0.35rem', justifyContent: 'flex-start', alignItems: 'center' }}>
                                                     <button
                                                         onClick={() => handleEdit(user)}
-                                                        style={{
-                                                            padding: '0.28rem 0.7rem',
-                                                            background: '#3B82F6',
-                                                            color: 'white',
-                                                            border: 'none',
-                                                            borderRadius: '6px',
-                                                            fontSize: '0.79rem',
-                                                            fontWeight: 600,
-                                                            cursor: 'pointer',
-                                                            transition: 'all 0.2s ease',
-                                                            boxShadow: '0 1px 3px rgba(59, 130, 246, 0.25)'
-                                                        }}
-                                                        onMouseEnter={e => e.target.style.opacity = '0.85'}
-                                                        onMouseLeave={e => e.target.style.opacity = '1'}
+                                                        style={rowActionBtn('#3B82F6')}
+                                                        onMouseEnter={e => e.currentTarget.style.opacity = '0.85'}
+                                                        onMouseLeave={e => e.currentTarget.style.opacity = '1'}
+                                                        title="Edit user, role & printing access"
                                                     >
                                                         Edit
                                                     </button>
                                                     {user.registered_device_id && (
                                                         <button
                                                             onClick={() => handleUnbindDevice(user.id)}
-                                                            style={{
-                                                                padding: '0.28rem 0.7rem',
-                                                                background: '#F59E0B',
-                                                                color: 'white',
-                                                                border: 'none',
-                                                                borderRadius: '6px',
-                                                                fontSize: '0.79rem',
-                                                                fontWeight: 600,
-                                                                cursor: 'pointer',
-                                                                transition: 'all 0.2s ease',
-                                                                boxShadow: '0 1px 3px rgba(245, 158, 11, 0.25)'
-                                                            }}
-                                                            onMouseEnter={e => e.target.style.opacity = '0.85'}
-                                                            onMouseLeave={e => e.target.style.opacity = '1'}
+                                                            style={rowActionBtn('#F59E0B')}
+                                                            onMouseEnter={e => e.currentTarget.style.opacity = '0.85'}
+                                                            onMouseLeave={e => e.currentTarget.style.opacity = '1'}
                                                             title="Unbind device"
                                                         >
                                                             Unbind
@@ -807,20 +887,10 @@ const UserManagementPage = () => {
                                                     )}
                                                     <button
                                                         onClick={() => handleDelete(user.id)}
-                                                        style={{
-                                                            padding: '0.28rem 0.7rem',
-                                                            background: '#EF4444',
-                                                            color: 'white',
-                                                            border: 'none',
-                                                            borderRadius: '6px',
-                                                            cursor: 'pointer',
-                                                            fontSize: '0.79rem',
-                                                            fontWeight: 600,
-                                                            transition: 'all 0.2s ease',
-                                                            boxShadow: '0 1px 3px rgba(239, 68, 68, 0.25)'
-                                                        }}
-                                                        onMouseEnter={e => e.target.style.opacity = '0.85'}
-                                                        onMouseLeave={e => e.target.style.opacity = '1'}
+                                                        style={rowActionBtn('#EF4444')}
+                                                        onMouseEnter={e => e.currentTarget.style.opacity = '0.85'}
+                                                        onMouseLeave={e => e.currentTarget.style.opacity = '1'}
+                                                        title="Delete user"
                                                     >
                                                         Delete
                                                     </button>
@@ -838,14 +908,14 @@ const UserManagementPage = () => {
             {/* ===== AUDIT LOG TAB ===== */}
             {activeTab === 'audit' && (
                 <div style={{
-                    background: 'white',
-                    border: '1px solid #E0E0E0',
+                    background: 'var(--surface)',
+                    border: '1px solid var(--border)',
                     borderRadius: '8px',
                     overflow: 'auto'
                 }}>
-                    <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid #E0E0E0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Device Binding Audit Log</h3>
-                        <button onClick={fetchAuditLogs} style={{ padding: '0.4rem 0.85rem', background: '#E5E7EB', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem' }}>
+                        <button onClick={fetchAuditLogs} style={{ padding: '0.4rem 0.85rem', background: 'var(--border)', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem' }}>
                             Refresh
                         </button>
                     </div>
@@ -875,7 +945,7 @@ const UserManagementPage = () => {
                                         'ACCOUNT_LIMIT_CHANGED': { bg: '#DBEAFE', color: '#1E40AF' },
                                         'DATA_CLEARED': { bg: '#F3E8FF', color: '#6B21A8' }
                                     };
-                                    const actionStyle = actionColors[log.action] || { bg: '#F3F4F6', color: '#374151' };
+                                    const actionStyle = actionColors[log.action] || { bg: '#F3F4F6', color: 'var(--text-body)' };
                                     return (
                                         <tr key={log.id}>
                                             <td style={{ fontSize: '0.85rem', whiteSpace: 'nowrap' }}>{new Date(log.created_at).toLocaleString()}</td>
@@ -915,12 +985,12 @@ const UserManagementPage = () => {
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                             <h2 style={{ margin: 0 }}>Device Info — {selectedDeviceUser.name}</h2>
                             <button onClick={() => { setShowDeviceModal(false); setSelectedDeviceUser(null); }}
-                                style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#6B7280' }}>x</button>
+                                style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-muted)' }}>x</button>
                         </div>
 
                         {/* Device Binding Info */}
-                        <div style={{ background: '#F9FAFB', borderRadius: '8px', padding: '1.25rem', marginBottom: '1rem' }}>
-                            <h4 style={{ margin: '0 0 0.75rem 0', color: '#374151', fontSize: '1rem' }}>Device Binding</h4>
+                        <div style={{ background: 'var(--surface-2)', borderRadius: '8px', padding: '1.25rem', marginBottom: '1rem' }}>
+                            <h4 style={{ margin: '0 0 0.75rem 0', color: 'var(--text-body)', fontSize: '1rem' }}>Device Binding</h4>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.9rem' }}>
                                 <div><strong>Status:</strong></div>
                                 <div>
@@ -960,8 +1030,8 @@ const UserManagementPage = () => {
                         </div>
 
                         {/* Active Session Info */}
-                        <div style={{ background: '#F9FAFB', borderRadius: '8px', padding: '1.25rem', marginBottom: '1.5rem' }}>
-                            <h4 style={{ margin: '0 0 0.75rem 0', color: '#374151', fontSize: '1rem' }}>Active Session</h4>
+                        <div style={{ background: 'var(--surface-2)', borderRadius: '8px', padding: '1.25rem', marginBottom: '1.5rem' }}>
+                            <h4 style={{ margin: '0 0 0.75rem 0', color: 'var(--text-body)', fontSize: '1rem' }}>Active Session</h4>
                             {selectedDeviceUser.active_session ? (
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.9rem' }}>
                                     <div><strong>Session Started:</strong></div>
@@ -977,7 +1047,7 @@ const UserManagementPage = () => {
                                     <div>{selectedDeviceUser.active_session.ip_address || '-'}</div>
                                 </div>
                             ) : (
-                                <p style={{ color: '#6B7280', margin: 0 }}>No active session</p>
+                                <p style={{ color: 'var(--text-muted)', margin: 0 }}>No active session</p>
                             )}
                         </div>
 
@@ -1067,11 +1137,11 @@ const UserManagementPage = () => {
                                     />
                                     <span style={{
                                         padding: '0 12px',
-                                        background: '#E5E7EB',
-                                        border: '1px solid #D1D5DB',
+                                        background: 'var(--border)',
+                                        border: '1px solid var(--border)',
                                         borderLeft: 'none',
                                         borderRadius: '0 6px 6px 0',
-                                        color: '#374151',
+                                        color: 'var(--text-body)',
                                         fontWeight: 500,
                                         fontSize: '0.88rem',
                                         display: 'flex',
@@ -1098,7 +1168,7 @@ const UserManagementPage = () => {
                                     />
                                     <EyeBtn show={showAddPw} onToggle={() => setShowAddPw(!showAddPw)} />
                                 </div>
-                                <small style={{ color: '#666', fontSize: '0.85rem' }}>
+                                <small style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
                                     User must change this password on first login
                                 </small>
                             </div>
@@ -1132,7 +1202,7 @@ const UserManagementPage = () => {
                                     <option value={4}>4</option>
                                     <option value={5}>5</option>
                                 </select>
-                                <small style={{ color: '#666', fontSize: '0.85rem' }}>
+                                <small style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
                                     How many accounts can share one browser/device. Default is 1 (strict one-to-one).
                                 </small>
                             </div>
@@ -1161,8 +1231,8 @@ const UserManagementPage = () => {
                                     }}
                                     style={{
                                         flex: 1,
-                                        background: '#E5E7EB',
-                                        color: '#374151'
+                                        background: 'var(--border)',
+                                        color: 'var(--text-body)'
                                     }}
                                 >
                                     Cancel
@@ -1186,7 +1256,7 @@ const UserManagementPage = () => {
                                 className="input-field"
                                 value={formData.ps_number}
                                 disabled
-                                style={{ background: '#F3F4F6', cursor: 'not-allowed' }}
+                                style={{ background: 'var(--surface-3)', cursor: 'not-allowed' }}
                             />
                         </div>
 
@@ -1218,11 +1288,11 @@ const UserManagementPage = () => {
                                 />
                                 <span style={{
                                     padding: '0 12px',
-                                    background: '#E5E7EB',
-                                    border: '1px solid #D1D5DB',
+                                    background: 'var(--border)',
+                                    border: '1px solid var(--border)',
                                     borderLeft: 'none',
                                     borderRadius: '0 6px 6px 0',
-                                    color: '#374151',
+                                    color: 'var(--text-body)',
                                     fontWeight: 500,
                                     fontSize: '0.88rem',
                                     display: 'flex',
@@ -1266,6 +1336,23 @@ const UserManagementPage = () => {
                         </div>
 
                         <div className="input-group">
+                            <label className="input-label">Location / Site</label>
+                            <select
+                                className="input-field"
+                                value={formData.location_id || ''}
+                                onChange={(e) => setFormData({ ...formData, location_id: e.target.value })}
+                            >
+                                <option value="">— none —</option>
+                                {locations.map((l) => (
+                                    <option key={l.id} value={l.id}>{l.name}</option>
+                                ))}
+                            </select>
+                            <small style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                                Used to route print jobs to the right site.
+                            </small>
+                        </div>
+
+                        <div className="input-group">
                             <label className="input-label">Account Limit per Device</label>
                             <select
                                 className="input-field"
@@ -1278,8 +1365,33 @@ const UserManagementPage = () => {
                                 <option value={4}>4</option>
                                 <option value={5}>5</option>
                             </select>
-                            <small style={{ color: '#666', fontSize: '0.85rem' }}>
+                            <small style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
                                 How many accounts can share one browser/device.
+                            </small>
+                        </div>
+
+                        <div className="input-group">
+                            <label className="input-label">Printing Module Access</label>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', border: '1px solid var(--border)', borderRadius: '8px', padding: '0.75rem 0.9rem', background: 'var(--surface-2)' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', fontSize: '0.9rem', color: 'var(--text-body)' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={!!formData.is_printer_coordinator}
+                                        onChange={(e) => setFormData({ ...formData, is_printer_coordinator: e.target.checked })}
+                                    />
+                                    <span><strong>Printing Coordinator</strong> — verifies, queues and assigns jobs at their location</span>
+                                </label>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', fontSize: '0.9rem', color: 'var(--text-body)' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={!!formData.is_printer_operator}
+                                        onChange={(e) => setFormData({ ...formData, is_printer_operator: e.target.checked })}
+                                    />
+                                    <span><strong>Printer Operator</strong> — prints and finishes assigned jobs</span>
+                                </label>
+                            </div>
+                            <small style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                                Independent of the JCC role above.
                             </small>
                         </div>
 
@@ -1310,8 +1422,8 @@ const UserManagementPage = () => {
                                 }}
                                 style={{
                                     flex: 1,
-                                    background: '#E5E7EB',
-                                    color: '#374151'
+                                    background: 'var(--border)',
+                                    color: 'var(--text-body)'
                                 }}
                             >
                                 Cancel

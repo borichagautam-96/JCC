@@ -7,7 +7,7 @@ const router = express.Router();
 // Get all projects
 router.get('/', authenticateToken, (req, res) => {
     try {
-        const { search, customer_id, status, limit = 100, offset = 0 } = req.query;
+        const { search, customer_id, status, debit_code, limit = 100, offset = 0 } = req.query;
 
         let query = `
       SELECT p.*, c.customer_name, c.customer_code,
@@ -35,6 +35,11 @@ router.get('/', authenticateToken, (req, res) => {
             params.push(status);
         }
 
+        if (debit_code) {
+            query += ' AND p.debit_code = ?';
+            params.push(debit_code);
+        }
+
         query += ' ORDER BY p.created_at DESC LIMIT ? OFFSET ?';
         params.push(parseInt(limit), parseInt(offset));
 
@@ -50,6 +55,24 @@ router.get('/', authenticateToken, (req, res) => {
     } catch (error) {
         console.error('Error fetching projects:', error);
         res.status(500).json({ error: 'Failed to fetch projects' });
+    }
+});
+
+// Distinct debit codes (for the printing-request Phase 1 dropdown).
+// Declared BEFORE '/:id' so it isn't captured as an id.
+router.get('/meta/debit-codes', authenticateToken, (req, res) => {
+    try {
+        const rows = db
+            .prepare(
+                `SELECT DISTINCT debit_code FROM projects
+                 WHERE debit_code IS NOT NULL AND TRIM(debit_code) != ''
+                 ORDER BY debit_code`
+            )
+            .all();
+        res.json(rows.map((r) => r.debit_code));
+    } catch (error) {
+        console.error('Error fetching debit codes:', error);
+        res.status(500).json({ error: 'Failed to fetch debit codes' });
     }
 });
 
@@ -116,7 +139,8 @@ router.post('/', authenticateToken, authorizeRoles('admin', 'coordinator', 'mana
             contract_value,
             start_date,
             end_date,
-            status
+            status,
+            debit_code
         } = req.body;
 
         if (!project_code || !project_name || !customer_id) {
@@ -138,8 +162,8 @@ router.post('/', authenticateToken, authorizeRoles('admin', 'coordinator', 'mana
         const result = db.prepare(`
       INSERT INTO projects (
         project_code, project_name, customer_id, contract_number,
-        contract_date, contract_value, start_date, end_date, status, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        contract_date, contract_value, start_date, end_date, status, debit_code, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
             project_code,
             project_name,
@@ -150,6 +174,7 @@ router.post('/', authenticateToken, authorizeRoles('admin', 'coordinator', 'mana
             start_date || null,
             end_date || null,
             status || 'active',
+            debit_code || null,
             req.user.id
         );
 
@@ -175,7 +200,8 @@ router.put('/:id', authenticateToken, authorizeRoles('admin', 'coordinator', 'ma
             contract_value,
             start_date,
             end_date,
-            status
+            status,
+            debit_code
         } = req.body;
 
         const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(req.params.id);
@@ -193,7 +219,8 @@ router.put('/:id', authenticateToken, authorizeRoles('admin', 'coordinator', 'ma
         contract_value = ?,
         start_date = ?,
         end_date = ?,
-        status = ?
+        status = ?,
+        debit_code = COALESCE(?, debit_code)
       WHERE id = ?
     `).run(
             project_code,
@@ -205,6 +232,7 @@ router.put('/:id', authenticateToken, authorizeRoles('admin', 'coordinator', 'ma
             start_date,
             end_date,
             status,
+            debit_code ?? null,
             req.params.id
         );
 

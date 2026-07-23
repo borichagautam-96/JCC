@@ -210,10 +210,10 @@ const LetterDetailPage = () => {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
                 {/* Left: Scanned Image */}
                 <div style={{
-                    background: 'white',
+                    background: 'var(--surface)',
                     padding: '1.5rem',
                     borderRadius: '8px',
-                    border: '1px solid #E5E7EB'
+                    border: '1px solid var(--border)'
                 }}>
                     <h3 style={{ marginTop: 0 }}>Scanned Document</h3>
                     {letter.original_file_path ? (
@@ -222,7 +222,7 @@ const LetterDetailPage = () => {
                             alt="Scanned letter"
                             style={{
                                 width: '100%',
-                                border: '1px solid #D1D5DB',
+                                border: '1px solid var(--border)',
                                 borderRadius: '4px'
                             }}
                         />
@@ -230,10 +230,10 @@ const LetterDetailPage = () => {
                         <div style={{
                             padding: '3rem',
                             textAlign: 'center',
-                            background: '#F9FAFB',
-                            border: '1px dashed #D1D5DB',
+                            background: 'var(--surface-2)',
+                            border: '1px dashed var(--border)',
                             borderRadius: '4px',
-                            color: '#9CA3AF'
+                            color: 'var(--text-faint)'
                         }}>
                             No scanned document available
                         </div>
@@ -242,10 +242,10 @@ const LetterDetailPage = () => {
 
                 {/* Right: Letter Details */}
                 <div style={{
-                    background: 'white',
+                    background: 'var(--surface)',
                     padding: '1.5rem',
                     borderRadius: '8px',
-                    border: '1px solid #E5E7EB'
+                    border: '1px solid var(--border)'
                 }}>
                     <h3 style={{ marginTop: 0 }}>Letter Details</h3>
 
@@ -259,12 +259,12 @@ const LetterDetailPage = () => {
                                 style={{
                                     width: '100%',
                                     padding: '0.5rem',
-                                    border: '1px solid #D1D5DB',
+                                    border: '1px solid var(--border)',
                                     borderRadius: '4px'
                                 }}
                             />
                         ) : (
-                            <p style={{ margin: 0, color: '#6B7280' }}>{letter.subject || '-'}</p>
+                            <p style={{ margin: 0, color: 'var(--text-muted)' }}>{letter.subject || '-'}</p>
                         )}
                     </div>
 
@@ -278,12 +278,12 @@ const LetterDetailPage = () => {
                                 style={{
                                     width: '100%',
                                     padding: '0.5rem',
-                                    border: '1px solid #D1D5DB',
+                                    border: '1px solid var(--border)',
                                     borderRadius: '4px'
                                 }}
                             />
                         ) : (
-                            <p style={{ margin: 0, color: '#6B7280' }}>{letter.sender_name || '-'}</p>
+                            <p style={{ margin: 0, color: 'var(--text-muted)' }}>{letter.sender_name || '-'}</p>
                         )}
                     </div>
 
@@ -297,13 +297,13 @@ const LetterDetailPage = () => {
                                 style={{
                                     width: '100%',
                                     padding: '0.5rem',
-                                    border: '1px solid #D1D5DB',
+                                    border: '1px solid var(--border)',
                                     borderRadius: '4px',
                                     fontFamily: 'inherit'
                                 }}
                             />
                         ) : (
-                            <p style={{ margin: 0, color: '#6B7280', whiteSpace: 'pre-wrap' }}>
+                            <p style={{ margin: 0, color: 'var(--text-muted)', whiteSpace: 'pre-wrap' }}>
                                 {letter.sender_address || '-'}
                             </p>
                         )}
@@ -319,12 +319,12 @@ const LetterDetailPage = () => {
                                 style={{
                                     width: '100%',
                                     padding: '0.5rem',
-                                    border: '1px solid #D1D5DB',
+                                    border: '1px solid var(--border)',
                                     borderRadius: '4px'
                                 }}
                             />
                         ) : (
-                            <p style={{ margin: 0, color: '#6B7280' }}>
+                            <p style={{ margin: 0, color: 'var(--text-muted)' }}>
                                 {letter.received_date ? new Date(letter.received_date).toLocaleDateString() : '-'}
                             </p>
                         )}
@@ -337,7 +337,7 @@ const LetterDetailPage = () => {
                         <div style={{
                             width: '100%',
                             height: '8px',
-                            background: '#E5E7EB',
+                            background: 'var(--border)',
                             borderRadius: '4px',
                             overflow: 'hidden'
                         }}>
@@ -354,10 +354,10 @@ const LetterDetailPage = () => {
 
             {/* OCR Text */}
             <div style={{
-                background: 'white',
+                background: 'var(--surface)',
                 padding: '1.5rem',
                 borderRadius: '8px',
-                border: '1px solid #E5E7EB',
+                border: '1px solid var(--border)',
                 marginTop: '2rem'
             }}>
                 <h3 style={{ marginTop: 0 }}>Extracted Text (OCR)</h3>
@@ -369,7 +369,7 @@ const LetterDetailPage = () => {
                         style={{
                             width: '100%',
                             padding: '1rem',
-                            border: '1px solid #D1D5DB',
+                            border: '1px solid var(--border)',
                             borderRadius: '4px',
                             fontFamily: 'monospace',
                             fontSize: '0.875rem'
@@ -377,10 +377,10 @@ const LetterDetailPage = () => {
                     />
                 ) : (
                     <pre style={{
-                        background: '#F9FAFB',
+                        background: 'var(--surface-2)',
                         padding: '1rem',
                         borderRadius: '4px',
-                        border: '1px solid #E5E7EB',
+                        border: '1px solid var(--border)',
                         whiteSpace: 'pre-wrap',
                         fontFamily: 'monospace',
                         fontSize: '0.875rem',
@@ -407,7 +407,7 @@ const LetterDetailPage = () => {
                                 style={{
                                     width: '100%',
                                     padding: '0.5rem',
-                                    border: '1px solid #D1D5DB',
+                                    border: '1px solid var(--border)',
                                     borderRadius: '4px'
                                 }}
                             />
@@ -423,7 +423,7 @@ const LetterDetailPage = () => {
                                 style={{
                                     width: '100%',
                                     padding: '0.5rem',
-                                    border: '1px solid #D1D5DB',
+                                    border: '1px solid var(--border)',
                                     borderRadius: '4px'
                                 }}
                             />
@@ -439,7 +439,7 @@ const LetterDetailPage = () => {
                                 style={{
                                     width: '100%',
                                     padding: '0.5rem',
-                                    border: '1px solid #D1D5DB',
+                                    border: '1px solid var(--border)',
                                     borderRadius: '4px'
                                 }}
                             />
@@ -454,7 +454,7 @@ const LetterDetailPage = () => {
                                 style={{
                                     width: '100%',
                                     padding: '0.5rem',
-                                    border: '1px solid #D1D5DB',
+                                    border: '1px solid var(--border)',
                                     borderRadius: '4px'
                                 }}
                             />

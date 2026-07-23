@@ -267,7 +267,7 @@ const AdminLogsPage = () => {
         if (rows.length === 0) {
             return [(
                 <tr key="empty-row">
-                    <td colSpan="7" style={{ textAlign: 'center', padding: '2rem', color: '#64748B' }}>
+                    <td colSpan="7" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
                         No activity logs found for selected filters.
                     </td>
                 </tr>
@@ -308,8 +308,8 @@ const AdminLogsPage = () => {
         <div className="container page-shell fade-in">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                 <div>
-                    <h1 style={{ margin: 0, fontSize: '1.35rem', color: '#0F172A' }}>Admin Logs</h1>
-                    <p style={{ margin: '0.35rem 0 0 0', color: '#64748B', fontSize: '0.92rem' }}>
+                    <h1 style={{ margin: 0, fontSize: '1.35rem', color: 'var(--text-strong)' }}>Admin Logs</h1>
+                    <p style={{ margin: '0.35rem 0 0 0', color: 'var(--text-muted)', fontSize: '0.92rem' }}>
                         View and filter application activity by user, event, module, date range, and success/failure.
                     </p>
                 </div>
@@ -319,8 +319,8 @@ const AdminLogsPage = () => {
             </div>
 
             <div style={{
-                background: 'white',
-                border: '1px solid #E2E8F0',
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
                 borderRadius: '10px',
                 padding: '1rem',
                 marginBottom: '1rem'
@@ -420,7 +420,7 @@ const AdminLogsPage = () => {
                         <label className="input-label" htmlFor="activity-search">Search</label>
                         <input
                             id="activity-search"
-                            className="input-field"
+                            className="input-field premium-search-field"
                             placeholder="Search in event/module/screen/entity/metadata"
                             value={filters.search}
                             onChange={(e) => updateFilter('search', e.target.value)}
@@ -436,7 +436,7 @@ const AdminLogsPage = () => {
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.9rem', gap: '0.75rem', flexWrap: 'wrap' }}>
-                    <div style={{ color: '#475569', fontSize: '0.9rem' }}>
+                    <div style={{ color: 'var(--text-body)', fontSize: '0.9rem' }}>
                         Showing {rows.length} of {total} logs
                     </div>
 
@@ -512,7 +512,7 @@ const AdminLogsPage = () => {
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-                <div style={{ color: '#475569', fontSize: '0.9rem' }}>
+                <div style={{ color: 'var(--text-body)', fontSize: '0.9rem' }}>
                     Page {page} of {totalPages}
                 </div>
 

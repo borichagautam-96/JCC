@@ -97,7 +97,7 @@
   left: 0.9rem;
   top: 50%;
   transform: translateY(-50%);
-  color: #94A3B8;
+  color: var(--text-faint);
   pointer-events: none;
 }
 
@@ -108,7 +108,7 @@
   border-radius: 8px;
   font-size: 0.9rem;
   background: #F8FAFC;
-  color: #1E293B;
+  color: var(--text-strong);
   outline: none;
   transition: border-color 0.2s;
   box-sizing: border-box;
@@ -148,7 +148,7 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: #94A3B8;
+  color: var(--text-faint);
   border-bottom: 1px solid #E2E8F0;
 }
 
@@ -163,7 +163,7 @@
   text-align: left;
   font-size: 0.85rem;
   font-weight: 500;
-  color: #475569;
+  color: var(--text-body);
   cursor: pointer;
   transition: all 0.15s ease;
   border-left: 3px solid transparent;
@@ -171,7 +171,7 @@
 
 .sop-tab-btn:hover {
   background: #F8FAFC;
-  color: #1E293B;
+  color: var(--text-strong);
 }
 
 .sop-tab-btn.active {
@@ -223,13 +223,13 @@
   margin: 0 0 0.15rem 0;
   font-size: 1.05rem;
   font-weight: 700;
-  color: #0F172A;
+  color: var(--text-strong);
 }
 
 .sop-section-header p {
   margin: 0;
   font-size: 0.82rem;
-  color: #64748B;
+  color: var(--text-muted);
 }
 
 .sop-steps {
@@ -274,13 +274,13 @@
   margin: 0 0 0.2rem 0;
   font-size: 0.9rem;
   font-weight: 600;
-  color: #1E293B;
+  color: var(--text-strong);
 }
 
 .sop-step-body p {
   margin: 0;
   font-size: 0.83rem;
-  color: #64748B;
+  color: var(--text-muted);
   line-height: 1.55;
 }
 
@@ -337,7 +337,7 @@
 .sop-empty {
   text-align: center;
   padding: 3rem 2rem;
-  color: #94A3B8;
+  color: var(--text-faint);
 }
 
 .sop-empty svg {
@@ -348,13 +348,13 @@
 .sop-empty h3 {
   margin: 0 0 0.5rem 0;
   font-size: 1.1rem;
-  color: #64748B;
+  color: var(--text-muted);
 }
 
 /* ── PDF content wrapper ─────────────────────────── */
 #sop-pdf-root {
   font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
-  color: #0F172A;
+  color: var(--text-strong);
   background: white;
 }
 
@@ -416,13 +416,13 @@
 .sop-pdf-step-body strong {
   display: block;
   font-size: 0.88rem;
-  color: #1E293B;
+  color: var(--text-strong);
   margin-bottom: 0.15rem;
 }
 
 .sop-pdf-step-body span {
   font-size: 0.82rem;
-  color: #475569;
+  color: var(--text-body);
 }
 
 /* ── Responsive ──────────────────────────────────── */

@@ -88,7 +88,7 @@ const ReminderHistoryPage = () => {
         if (!filteredRows.length) {
             return [(
                 <tr key="empty-row">
-                    <td colSpan="11" style={{ textAlign: 'center', padding: '2rem', color: '#64748B' }}>
+                    <td colSpan="11" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
                         No reminder records found for the selected filters.
                     </td>
                 </tr>
@@ -145,7 +145,7 @@ const ReminderHistoryPage = () => {
                     <td>
                         {row.requester_name || '-'}
                         {row.requester_role ? (
-                            <span style={{ color: '#64748B' }}> ({row.requester_role})</span>
+                            <span style={{ color: 'var(--text-muted)' }}> ({row.requester_role})</span>
                         ) : null}
                     </td>
                     <td>{row.status_text || '-'}</td>
@@ -159,8 +159,8 @@ const ReminderHistoryPage = () => {
         <div className="container page-shell fade-in">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                 <div>
-                    <h1 style={{ margin: 0, fontSize: '1.35rem', color: '#0F172A' }}>Reminder History</h1>
-                    <p style={{ margin: '0.35rem 0 0 0', color: '#64748B', fontSize: '0.92rem' }}>
+                    <h1 style={{ margin: 0, fontSize: '1.35rem', color: 'var(--text-strong)' }}>Reminder History</h1>
+                    <p style={{ margin: '0.35rem 0 0 0', color: 'var(--text-muted)', fontSize: '0.92rem' }}>
                         Track what reminders were sent for both Asset returns and pending JCC approvals.
                     </p>
                 </div>
@@ -191,7 +191,7 @@ const ReminderHistoryPage = () => {
                     <label className="input-label" htmlFor="reminder-history-search">Search</label>
                     <input
                         id="reminder-history-search"
-                        className="input-field"
+                        className="input-field premium-search-field"
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
                         placeholder="Search by JCC/Asset, vendor, pending with, requester, recipients"
@@ -213,8 +213,8 @@ const ReminderHistoryPage = () => {
             )}
 
             <div style={{
-                background: 'white',
-                border: '1px solid #E2E8F0',
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
                 borderRadius: '10px',
                 overflow: 'auto'
             }}>

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import LogoutButton from './LogoutButton';
 import {
     LayoutDashboard,
     Upload,
@@ -18,6 +19,10 @@ import {
     Activity,
     LogOut,
     BookOpen,
+    Printer,
+    Home,
+    BarChart3,
+    MapPin,
 } from 'lucide-react';
 
 const SHOW_ADMIN_LOGS = import.meta.env.VITE_SHOW_ADMIN_LOGS === 'true';
@@ -25,16 +30,18 @@ const ENABLE_ASSET_MODULE = import.meta.env.VITE_ENABLE_ASSET_MODULE === 'true';
 const ENABLE_FEEDBACK_MODULE = import.meta.env.VITE_ENABLE_FEEDBACK === 'true';
 
 const Navbar = ({ isOpen, onOpenTeam }) => {
-    const { user, logout } = useAuth();
+    const { user } = useAuth();
     const navigate = useNavigate();
     const location = useLocation();
 
-    const handleLogout = () => {
-        logout();
-        navigate('/login');
-    };
-
     const isActive = (path) => location.pathname === path;
+
+    // Which module are we in? Printing paths get the printing sidebar; everything
+    // else gets the JCC sidebar. This keeps the two sections visually separate.
+    const isPrinting = location.pathname.startsWith('/job-') || location.pathname.startsWith('/print-');
+    const isOperator = Number(user?.is_printer_operator) === 1 || user?.role === 'admin';
+    const isPrintCoordinator = Number(user?.is_printer_coordinator) === 1 || user?.role === 'admin';
+    const canRequestPrint = ['initiator', 'user', 'admin'].includes(user?.role);
 
     const navClass = (active) =>
         `group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${active
@@ -44,8 +51,7 @@ const Navbar = ({ isOpen, onOpenTeam }) => {
 
     return (
         <aside
-            className={`fixed left-0 top-0 z-40 flex h-screen w-72 flex-col border-r border-slate-200 bg-white transition-transform duration-300 ${isOpen ? 'translate-x-0' : '-translate-x-full'
-                }`}
+            className={`app-sidebar ${isOpen ? 'is-open' : ''} fixed left-0 top-0 z-40 flex h-screen w-72 flex-col border-r border-slate-200 bg-white`}
         >
 
             <div className="flex-column items-center justify-between border-b border-slate-200 px-5 pt-4">
@@ -69,6 +75,58 @@ const Navbar = ({ isOpen, onOpenTeam }) => {
             </div>
 
             <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
+                <Link to="/hub" className={navClass(isActive('/hub'))}>
+                    <Home size={18} />
+                    <span>Home / Switch Module</span>
+                </Link>
+
+                {isPrinting ? (
+                    <>
+                        <div className="mt-3 border-t border-slate-200 pt-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+                            Printing
+                        </div>
+                        {canRequestPrint && (
+                            <>
+                                <Link to="/job-history" className={navClass(isActive('/job-history'))}>
+                                    <Printer size={18} />
+                                    <span>My Printing Jobs</span>
+                                </Link>
+                                <Link to="/job-creation" className={navClass(isActive('/job-creation'))}>
+                                    <PlusSquare size={18} />
+                                    <span>New Printing Job</span>
+                                </Link>
+                            </>
+                        )}
+                        {isPrintCoordinator && (
+                            <Link to="/print-coordinator" className={navClass(isActive('/print-coordinator'))}>
+                                <CheckSquare size={18} />
+                                <span>Coordinator</span>
+                            </Link>
+                        )}
+                        {isPrintCoordinator && (
+                            <Link to="/print-reports" className={navClass(isActive('/print-reports'))}>
+                                <BarChart3 size={18} />
+                                <span>Reports</span>
+                            </Link>
+                        )}
+                        {isPrintCoordinator && (
+                            <Link to="/print-logs" className={navClass(isActive('/print-logs'))}>
+                                <Activity size={18} />
+                                <span>Activity Log</span>
+                            </Link>
+                        )}
+                        {isOperator && (
+                            <Link to="/print-operator" className={navClass(isActive('/print-operator'))}>
+                                <Printer size={18} />
+                                <span>Operator</span>
+                            </Link>
+                        )}
+                    </>
+                ) : (
+                <>
+                <div className="mt-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+                    JCC
+                </div>
                 <Link to="/" className={navClass(isActive('/'))}>
                     <LayoutDashboard size={18} />
                     <span>Dashboard</span>
@@ -100,6 +158,11 @@ const Navbar = ({ isOpen, onOpenTeam }) => {
                     <span>Claim History</span>
                 </Link>
 
+                <Link to="/track-claims" className={navClass(isActive('/track-claims'))}>
+                    <Activity size={18} />
+                    <span>Track Claims</span>
+                </Link>
+
                 {(user?.role === 'admin') && (
                     <>
                         {ENABLE_ASSET_MODULE && (
@@ -114,10 +177,6 @@ const Navbar = ({ isOpen, onOpenTeam }) => {
                                 </Link>
                             </>
                         )}
-                        <Link to="/reminder-history" className={navClass(isActive('/reminder-history'))}>
-                            <BellRing size={18} />
-                            <span>Reminder History</span>
-                        </Link>
                     </>
                 )}
 
@@ -151,6 +210,11 @@ const Navbar = ({ isOpen, onOpenTeam }) => {
                             <span>Vendor Management</span>
                         </Link>
 
+                        <Link to="/locations" className={navClass(isActive('/locations'))}>
+                            <MapPin size={18} />
+                            <span>Location Management</span>
+                        </Link>
+
                         <Link to="/user-management" className={navClass(isActive('/user-management'))}>
                             <Users size={18} />
                             <span>User Management</span>
@@ -171,15 +235,23 @@ const Navbar = ({ isOpen, onOpenTeam }) => {
                         )}
                     </>
                 )}
+                </>
+                )}
             </nav>
 
-            {/* SOP / Help Link — visible to all roles */}
+            {/* SOP / Help link is hidden for now.
+                It pointed at a single /sop page regardless of module, so opening it
+                from Printing dropped the user into the JCC sidebar. To restore it,
+                re-add this block with module-aware targets — e.g. /sop for JCC and
+                /printing-sop for Printing — using the same `isPrinting` check the
+                nav above uses. The route and SOPPage component are left intact.
             <div className="px-3 pb-2">
                 <Link to="/sop" className={navClass(isActive('/sop'))}>
                     <BookOpen size={18} />
-                    <span>Help & SOP</span>
+                    <span>Help &amp; SOP</span>
                 </Link>
             </div>
+            */}
 
             <div className="border-t border-slate-200 p-4">
                 <div className="mb-3 flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -192,14 +264,7 @@ const Navbar = ({ isOpen, onOpenTeam }) => {
                     </div>
                 </div>
 
-                <button
-                    type="button"
-                    onClick={handleLogout}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-red-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-red-600"
-                >
-                    <LogOut size={16} />
-                    <span>Logout</span>
-                </button>
+                <LogoutButton className="flex w-full items-center justify-center gap-2 rounded-xl bg-red-500 px-4 py-2.5 text-sm font-semibold text-white" />
             </div>
         </aside>
     );

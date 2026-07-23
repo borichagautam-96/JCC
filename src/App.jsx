@@ -8,6 +8,15 @@ import CoordinatorPage from './pages/CoordinatorPage';
 import DashboardPage from './pages/DashboardPage';
 import VoucherRequestPage from './pages/VoucherRequestPage';
 import VoucherHistoryPage from './pages/VoucherHistoryPage';
+import JobCreationPage from './pages/JobCreationPage';
+import JobHistoryPage from './pages/JobHistoryPage';
+import PrintCoordinatorPage from './pages/PrintCoordinatorPage';
+import PrintOperatorPage from './pages/PrintOperatorPage';
+import PrintReportsPage from './pages/PrintReportsPage';
+import PrintLogsPage from './pages/PrintLogsPage';
+import LocationManagementPage from './pages/LocationManagementPage';
+import HubPage from './pages/HubPage';
+import TrackClaimsPage from './pages/TrackClaimsPage';
 import UserManagementPage from './pages/UserManagementPage';
 import CompleteProfilePage from './pages/CompleteProfilePage';
 import CustomerManagementPage from './pages/CustomerManagementPage';
@@ -22,7 +31,6 @@ import VendorManagementPage from './pages/VendorManagementPage';
 import AssetTrackerPage from './pages/AssetTrackerPage';
 import ReturnTrackerPage from './pages/ReturnTrackerPage';
 import MonthlyVoucherTrackingPage from './pages/MonthlyVoucherTrackingPage';
-import ReminderHistoryPage from './pages/ReminderHistoryPage';
 import AdminLogsPage from './pages/AdminLogsPage';
 import FeedbackPage from './pages/FeedbackPage';
 import AdminFeedbackPage from './pages/AdminFeedbackPage';
@@ -58,7 +66,7 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
     }
 
     if (isCompleteProfilePage && isProfileCompleted) {
-        return <Navigate to="/" replace />;
+        return <Navigate to="/hub" replace />;
     }
 
     if (allowedRoles && !allowedRoles.includes(user.role)) {
@@ -157,7 +165,7 @@ const AppContent = () => {
                     <Routes>
                         <Route
                             path="/login"
-                            element={user ? <Navigate to={Number(user?.profile_completed ?? 0) === 1 ? "/" : "/complete-profile"} replace /> : <LoginPage />}
+                            element={user ? <Navigate to={Number(user?.profile_completed ?? 0) === 1 ? "/hub" : "/complete-profile"} replace /> : <LoginPage />}
                         />
 
                         <Route
@@ -165,6 +173,15 @@ const AppContent = () => {
                             element={
                                 <ProtectedRoute>
                                     <CompleteProfilePage />
+                                </ProtectedRoute>
+                            }
+                        />
+
+                        <Route
+                            path="/hub"
+                            element={
+                                <ProtectedRoute>
+                                    <HubPage />
                                 </ProtectedRoute>
                             }
                         />
@@ -208,7 +225,7 @@ const AppContent = () => {
                         <Route
                             path="/voucher"
                             element={
-                                <ProtectedRoute>
+                                <ProtectedRoute allowedRoles={['initiator', 'user', 'admin']}>
                                     <VoucherRequestPage />
                                 </ProtectedRoute>
                             }
@@ -228,6 +245,72 @@ const AppContent = () => {
                             element={
                                 <ProtectedRoute>
                                     <VoucherHistoryPage />
+                                </ProtectedRoute>
+                            }
+                        />
+
+                        <Route
+                            path="/job-creation"
+                            element={
+                                <ProtectedRoute allowedRoles={['initiator', 'user', 'admin']}>
+                                    <JobCreationPage />
+                                </ProtectedRoute>
+                            }
+                        />
+
+                        <Route
+                            path="/job-history"
+                            element={
+                                <ProtectedRoute allowedRoles={['initiator', 'user', 'admin']}>
+                                    <JobHistoryPage />
+                                </ProtectedRoute>
+                            }
+                        />
+
+                        {/* Printing coordinator/operator access is via module flags, not the
+                            JCC role — so these are open to any authenticated user and the
+                            backend + sidebar enforce who actually sees data. */}
+                        <Route
+                            path="/print-coordinator"
+                            element={
+                                <ProtectedRoute>
+                                    <PrintCoordinatorPage />
+                                </ProtectedRoute>
+                            }
+                        />
+
+                        <Route
+                            path="/print-operator"
+                            element={
+                                <ProtectedRoute>
+                                    <PrintOperatorPage />
+                                </ProtectedRoute>
+                            }
+                        />
+
+                        <Route
+                            path="/print-reports"
+                            element={
+                                <ProtectedRoute>
+                                    <PrintReportsPage />
+                                </ProtectedRoute>
+                            }
+                        />
+
+                        <Route
+                            path="/print-logs"
+                            element={
+                                <ProtectedRoute>
+                                    <PrintLogsPage />
+                                </ProtectedRoute>
+                            }
+                        />
+
+                        <Route
+                            path="/track-claims"
+                            element={
+                                <ProtectedRoute>
+                                    <TrackClaimsPage />
                                 </ProtectedRoute>
                             }
                         />
@@ -298,6 +381,12 @@ const AppContent = () => {
                             </ProtectedRoute>
                         } />
 
+                        <Route path="/locations" element={
+                            <ProtectedRoute allowedRoles={['admin']}>
+                                <LocationManagementPage />
+                            </ProtectedRoute>
+                        } />
+
                         <Route path="/assets" element={
                             ENABLE_ASSET_MODULE ? (
                                 <ProtectedRoute allowedRoles={['admin']}>
@@ -316,12 +405,6 @@ const AppContent = () => {
                             ) : (
                                 <Navigate to="/" replace />
                             )
-                        } />
-
-                        <Route path="/reminder-history" element={
-                            <ProtectedRoute allowedRoles={['admin']}>
-                                <ReminderHistoryPage />
-                            </ProtectedRoute>
                         } />
 
                         <Route path="/feedback" element={

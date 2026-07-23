@@ -193,11 +193,11 @@ const LetterTemplatesPage = () => {
                 </div>
             ) : templates.length === 0 ? (
                 <div style={{
-                    background: 'white',
+                    background: 'var(--surface)',
                     padding: '3rem',
                     borderRadius: '8px',
                     textAlign: 'center',
-                    color: '#9CA3AF'
+                    color: 'var(--text-faint)'
                 }}>
                     <p style={{ fontSize: '1.125rem', marginBottom: '1rem' }}>
                         No templates found
@@ -214,10 +214,10 @@ const LetterTemplatesPage = () => {
                         <div
                             key={template.id}
                             style={{
-                                background: 'white',
+                                background: 'var(--surface)',
                                 borderRadius: '8px',
                                 padding: '1.5rem',
-                                border: '1px solid #E5E7EB',
+                                border: '1px solid var(--border)',
                                 transition: 'all 0.2s',
                                 cursor: 'pointer'
                             }}
@@ -230,18 +230,18 @@ const LetterTemplatesPage = () => {
                             }}
                         >
                             <div style={{ marginBottom: '1rem' }}>
-                                <h3 style={{ margin: 0, fontSize: '1.25rem', color: '#1F2937' }}>
+                                <h3 style={{ margin: 0, fontSize: '1.25rem', color: 'var(--text-strong)' }}>
                                     {template.name}
                                 </h3>
                                 <span style={{
                                     display: 'inline-block',
                                     marginTop: '0.5rem',
                                     padding: '0.25rem 0.75rem',
-                                    background: '#F3F4F6',
+                                    background: 'var(--surface-3)',
                                     borderRadius: '12px',
                                     fontSize: '0.75rem',
                                     fontWeight: 600,
-                                    color: '#6B7280',
+                                    color: 'var(--text-muted)',
                                     textTransform: 'capitalize'
                                 }}>
                                     {template.template_type}
@@ -249,7 +249,7 @@ const LetterTemplatesPage = () => {
                             </div>
 
                             <p style={{
-                                color: '#6B7280',
+                                color: 'var(--text-muted)',
                                 fontSize: '0.875rem',
                                 marginBottom: '1rem',
                                 minHeight: '3rem'
@@ -259,7 +259,7 @@ const LetterTemplatesPage = () => {
 
                             <div style={{
                                 fontSize: '0.75rem',
-                                color: '#9CA3AF',
+                                color: 'var(--text-faint)',
                                 marginBottom: '1rem'
                             }}>
                                 Created by {template.created_by_name || 'Unknown'} on{' '}
@@ -326,7 +326,7 @@ const LetterTemplatesPage = () => {
                                     style={{
                                         width: '100%',
                                         padding: '0.75rem',
-                                        border: '1px solid #D1D5DB',
+                                        border: '1px solid var(--border)',
                                         borderRadius: '6px',
                                         fontSize: '1rem'
                                     }}
@@ -344,7 +344,7 @@ const LetterTemplatesPage = () => {
                                     style={{
                                         width: '100%',
                                         padding: '0.75rem',
-                                        border: '1px solid #D1D5DB',
+                                        border: '1px solid var(--border)',
                                         borderRadius: '6px',
                                         fontSize: '1rem',
                                         fontFamily: 'inherit'
@@ -362,10 +362,10 @@ const LetterTemplatesPage = () => {
                                     style={{
                                         width: '100%',
                                         padding: '0.75rem',
-                                        border: '1px solid #D1D5DB',
+                                        border: '1px solid var(--border)',
                                         borderRadius: '6px',
                                         fontSize: '1rem',
-                                        background: 'white'
+                                        background: 'var(--surface)'
                                     }}
                                 >
                                     <option value="general">General</option>
@@ -387,7 +387,7 @@ const LetterTemplatesPage = () => {
                                     style={{
                                         width: '100%',
                                         padding: '0.75rem',
-                                        border: '1px solid #D1D5DB',
+                                        border: '1px solid var(--border)',
                                         borderRadius: '6px',
                                         fontSize: '0.875rem',
                                         fontFamily: 'monospace'
@@ -400,7 +400,7 @@ const LetterTemplatesPage = () => {
                                     <label style={{ fontWeight: 600 }}>
                                         Letter Content * (HTML)
                                     </label>
-                                    <div style={{ fontSize: '0.75rem', color: '#6B7280' }}>
+                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                                         Insert variables:
                                         {commonVariables.slice(0, 4).map((v) => (
                                             <button
@@ -410,8 +410,8 @@ const LetterTemplatesPage = () => {
                                                 style={{
                                                     marginLeft: '0.5rem',
                                                     padding: '0.25rem 0.5rem',
-                                                    background: '#F3F4F6',
-                                                    border: '1px solid #D1D5DB',
+                                                    background: 'var(--surface-3)',
+                                                    border: '1px solid var(--border)',
                                                     borderRadius: '4px',
                                                     cursor: 'pointer',
                                                     fontSize: '0.75rem'
@@ -432,7 +432,7 @@ const LetterTemplatesPage = () => {
                                     style={{
                                         width: '100%',
                                         padding: '0.75rem',
-                                        border: '1px solid #D1D5DB',
+                                        border: '1px solid var(--border)',
                                         borderRadius: '6px',
                                         fontSize: '0.875rem',
                                         fontFamily: 'monospace'
@@ -452,7 +452,7 @@ const LetterTemplatesPage = () => {
                                     style={{
                                         width: '100%',
                                         padding: '0.75rem',
-                                        border: '1px solid #D1D5DB',
+                                        border: '1px solid var(--border)',
                                         borderRadius: '6px',
                                         fontSize: '0.875rem',
                                         fontFamily: 'monospace'

@@ -166,25 +166,25 @@ const MonthlyVoucherTrackingPage = () => {
         {summaryLoading ? <p>Loading monthly claims...</p> : (
           <>
             <div className="asset-voucher-grid">
-              {monthlySummary.length === 0 && <p style={{ color: '#6B7280' }}>No monthly claims generated for this month.</p>}
+              {monthlySummary.length === 0 && <p style={{ color: 'var(--text-muted)' }}>No monthly claims generated for this month.</p>}
               {monthlySummary.map((voucher) => (
                 <div key={voucher.id} className="asset-voucher-card">
                   <div style={{ fontWeight: 700 }}>{voucher.vendor_name}</div>
-                  <div style={{ color: '#4B5563', margin: '0.25rem 0' }}>Total: Rs. {Number(voucher.total_amount || 0).toFixed(2)}</div>
-                  <div style={{ fontSize: '0.85rem', color: '#6B7280' }}>{voucher.items?.length || 0} assets billed</div>
+                  <div style={{ color: 'var(--text-body)', margin: '0.25rem 0' }}>Total: Rs. {Number(voucher.total_amount || 0).toFixed(2)}</div>
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{voucher.items?.length || 0} assets billed</div>
                 </div>
               ))}
             </div>
 
-            <div className="asset-voucher-section" style={{ marginTop: '1rem', border: '1px solid #E5E7EB', borderRadius: '12px', padding: '1rem' }}>
+            <div className="asset-voucher-section" style={{ marginTop: '1rem', border: '1px solid var(--border)', borderRadius: '12px', padding: '1rem' }}>
               <h4 style={{ margin: '0 0 0.6rem 0', fontSize: '1.05rem', fontWeight: 700 }}>Created By User</h4>
               {creatorSummary.length === 0 ? (
-                <p style={{ color: '#6B7280', margin: 0 }}>No creator-wise claim data for this month.</p>
+                <p style={{ color: 'var(--text-muted)', margin: 0 }}>No creator-wise claim data for this month.</p>
               ) : (
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.95rem' }}>
                     <thead>
-                      <tr style={{ textAlign: 'left', borderBottom: '1px solid #E5E7EB' }}>
+                      <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
                         <th style={{ padding: '0.55rem 0.4rem' }}>User</th>
                         <th style={{ padding: '0.55rem 0.4rem' }}>Claims Created</th>
                         <th style={{ padding: '0.55rem 0.4rem' }}>Total Amount</th>
@@ -192,7 +192,7 @@ const MonthlyVoucherTrackingPage = () => {
                     </thead>
                     <tbody>
                       {creatorSummary.map((entry, index) => (
-                        <tr key={`${entry.user_id ?? 'unknown'}-${index}`} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                        <tr key={`${entry.user_id ?? 'unknown'}-${index}`} style={{ borderBottom: '1px solid var(--surface-3)' }}>
                           <td style={{ padding: '0.55rem 0.4rem', fontWeight: 600 }}>{entry.user_name || 'Unknown User'}</td>
                           <td style={{ padding: '0.55rem 0.4rem' }}>{Number(entry.voucher_count || 0)}</td>
                           <td style={{ padding: '0.55rem 0.4rem' }}>Rs. {Number(entry.total_amount || 0).toFixed(2)}</td>
