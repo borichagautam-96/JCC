@@ -7,3 +7,18 @@ dist
 *.tar
 *.zip
 backups
+# Runtime data — live database and its SQLite journals
+data/
+*.db-shm
+*.db-wal
+database.backup-*
+
+# User uploads (invoices, vouchers, print jobs) — never commit
+uploads/
+
+# Scratch / debug output
+temp/
+server/temp/
+debug_*.json
+debug_*.txt
+*.log
