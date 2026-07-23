@@ -22,3 +22,5 @@ server/temp/
 debug_*.json
 debug_*.txt
 *.log
+build_log.txt
+*.traineddata.tmp
