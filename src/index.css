@@ -4189,3 +4189,360 @@ html.is-logging-out #root {
 /* notification rows stay readable on the solid panel */
 .bell-note { background: transparent; }
 .bell-note:hover { background: var(--hover); }
+
+/* ============================================================
+   Pending Approvals — visual polish only.
+   Every rule targets pa-* hooks added to existing markup; no layout,
+   field or workflow was changed. Transform/opacity only.
+   ============================================================ */
+
+/* ---------- 1. Dashboard header ---------- */
+.pa-header {
+    position: relative;
+    overflow: hidden;
+    border-radius: 16px !important;
+    padding: 1.9rem 2.15rem !important;
+    background: linear-gradient(135deg, #1E6FD9 0%, #0066CC 48%, #0B5AAE 100%) !important;
+    box-shadow: 0 10px 30px -12px rgba(0, 102, 204, 0.55), 0 2px 6px rgba(15, 23, 42, 0.08);
+    animation: paHeaderIn 350ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes paHeaderIn {
+    from { opacity: 0; translate: 0 20px; }
+    to   { opacity: 1; translate: 0 0; }
+}
+.pa-header h1 {
+    font-size: 1.8rem !important;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+/* shield/check mark beside the title */
+.pa-header h1::before {
+    content: '';
+    width: 26px;
+    height: 26px;
+    flex-shrink: 0;
+    background: currentColor;
+    -webkit-mask: var(--pa-shield) center / contain no-repeat;
+            mask: var(--pa-shield) center / contain no-repeat;
+    opacity: 0.95;
+}
+:root {
+    --pa-shield: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'/><path d='M9 12l2 2 4-4'/></svg>");
+}
+.pa-header p { font-size: 0.97rem; opacity: 0.88 !important; }
+
+/* slow light sweep every 9s */
+.pa-header::after {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -30%;
+    width: 28%;
+    height: 200%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent);
+    transform: rotate(18deg);
+    pointer-events: none;
+    animation: paSweep 9s ease-in-out 1.2s infinite;
+}
+@keyframes paSweep {
+    0%      { left: -30%; opacity: 0; }
+    8%      { opacity: 1; }
+    26%     { left: 115%; opacity: 0; }
+    100%    { left: 115%; opacity: 0; }
+}
+
+/* ---------- 2/3. Cards + staggered entrance ---------- */
+.pa-card {
+    position: relative;
+    border-radius: 16px !important;
+    border-left: 3px solid rgba(0, 102, 204, 0.55) !important;
+    padding: 1.35rem 1.4rem !important;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 10px 26px -14px rgba(15, 23, 42, 0.28);
+    transition:
+        transform 250ms cubic-bezier(0.22, 1, 0.36, 1),
+        box-shadow 250ms cubic-bezier(0.22, 1, 0.36, 1),
+        border-color 250ms ease;
+    animation: paCardIn 300ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+    animation-delay: calc(var(--pa-i, 0) * 85ms);
+    will-change: transform;
+}
+@keyframes paCardIn {
+    from { opacity: 0; translate: 0 20px; }
+    to   { opacity: 1; translate: 0 0; }
+}
+.pa-card:hover {
+    transform: translateY(-4px) scale(1.01);
+    border-left-color: #0066CC !important;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08), 0 20px 42px -18px rgba(0, 102, 204, 0.42);
+}
+
+/* ---------- 4. Status badge ---------- */
+.pa-badge {
+    background: #FEF6E0 !important;
+    border: 1px solid #FCE3A6 !important;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.6), 0 1px 2px rgba(146, 64, 14, 0.08);
+    letter-spacing: 0.01em;
+    animation: paBadgeIn 300ms ease both, paBadgePulse 4s ease-in-out 1s infinite;
+}
+@keyframes paBadgeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes paBadgePulse {
+    0%, 100% { scale: 1; }
+    50%      { scale: 1.02; }
+}
+
+/* ---------- 5. Typography / field rows ---------- */
+.pa-row {
+    align-items: baseline;
+    gap: 1rem;
+    padding: 3px 0;
+}
+.pa-label {
+    font-size: 0.78rem !important;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+}
+.pa-value {
+    font-size: 0.95rem;
+    font-weight: 600;
+    text-align: right;
+    line-height: 1.35;
+}
+.pa-amount {
+    font-size: 1.18rem !important;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+.pa-card h3 { letter-spacing: -0.01em; }
+
+/* ---------- 6. Buttons ---------- */
+.pa-btn {
+    border-radius: 12px !important;
+    min-height: 38px;
+    letter-spacing: 0.01em;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+    transition:
+        transform 200ms cubic-bezier(0.22, 1, 0.36, 1),
+        box-shadow 200ms ease,
+        background 200ms ease,
+        border-color 200ms ease,
+        filter 200ms ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+.pa-btn:not(:disabled):hover { transform: translateY(-2px) scale(1.02); }
+.pa-btn:not(:disabled):active { transform: scale(0.95); transition-duration: 110ms; }
+.pa-btn:disabled { cursor: not-allowed; }
+
+.pa-btn-approve:not(:disabled):hover {
+    box-shadow: 0 8px 20px -6px rgba(5, 150, 105, 0.55), 0 0 14px rgba(16, 185, 129, 0.35);
+    filter: brightness(1.05);
+}
+.pa-btn-reject:not(:disabled):hover {
+    background: #B91C1C !important;
+    box-shadow: 0 8px 20px -6px rgba(220, 38, 38, 0.5);
+}
+.pa-btn-info:not(:disabled):hover {
+    background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%) !important;
+    box-shadow: 0 8px 20px -6px rgba(217, 119, 6, 0.5);
+}
+.pa-btn-view:not(:disabled):hover {
+    border-color: #0066CC !important;
+    background: rgba(0, 102, 204, 0.06) !important;
+    box-shadow: 0 8px 20px -8px rgba(0, 102, 204, 0.4);
+}
+/* icon micro-movement — the leading glyph is inside the label */
+.pa-btn-approve, .pa-btn-reject, .pa-btn-info, .pa-btn-view { position: relative; }
+.pa-btn-view::after {
+    content: '→';
+    display: inline-block;
+    margin-left: 2px;
+    transition: translate 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.pa-btn-view:hover::after { translate: 3px 0; }
+
+/* ---------- 7. Checkbox ---------- */
+.pa-check {
+    appearance: none;
+    -webkit-appearance: none;
+    position: relative;
+    border: 1.5px solid var(--border-strong);
+    border-radius: 5px;
+    background: var(--surface);
+    transition: background 250ms ease, border-color 250ms ease;
+    flex-shrink: 0;
+}
+.pa-check:hover { border-color: #0066CC; }
+.pa-check:checked { background: #0066CC; border-color: #0066CC; }
+.pa-check::before {
+    content: '';
+    position: absolute;
+    inset: -8px;
+    border-radius: 50%;
+    background: rgba(0, 102, 204, 0.28);
+    opacity: 0;
+    scale: 0.3;
+    pointer-events: none;
+}
+.pa-check:checked::before { animation: paRipple 450ms ease-out; }
+@keyframes paRipple {
+    0%   { opacity: 0.7; scale: 0.3; }
+    100% { opacity: 0; scale: 1.25; }
+}
+.pa-check::after {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 0.5px;
+    width: 4px;
+    height: 8px;
+    border: solid #fff;
+    border-width: 0 2px 2px 0;
+    rotate: 45deg;
+    opacity: 0;
+    scale: 0.5;
+    transition: opacity 150ms ease, scale 250ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.pa-check:checked::after { opacity: 1; scale: 1; }
+
+/* ---------- Bulk bar ---------- */
+.pa-bulkbar { border-radius: 12px; }
+
+/* ---------- 13. Skeleton loading ---------- */
+.pa-skel-header {
+    height: 104px;
+    border-radius: 16px;
+    margin-bottom: 2rem;
+    background: linear-gradient(100deg, var(--surface-3) 30%, var(--surface-2) 50%, var(--surface-3) 70%);
+    background-size: 220% 100%;
+    animation: paShimmer 1.5s ease-in-out infinite;
+}
+.pa-skel-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--border-strong);
+    border-radius: 16px;
+    padding: 1.35rem 1.4rem;
+    display: grid;
+    gap: 12px;
+    animation: paCardIn 300ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+    animation-delay: calc(var(--pa-i, 0) * 85ms);
+}
+.pa-skel {
+    border-radius: 8px;
+    background: linear-gradient(100deg, var(--surface-3) 30%, var(--surface-2) 50%, var(--surface-3) 70%);
+    background-size: 220% 100%;
+    animation: paShimmer 1.5s ease-in-out infinite;
+}
+.pa-skel-title { height: 20px; width: 46%; }
+.pa-skel-pill  { height: 18px; width: 34%; border-radius: 999px; }
+.pa-skel-row   { height: 13px; width: 100%; }
+.pa-skel-row.short { width: 62%; }
+.pa-skel-btn   { height: 38px; border-radius: 12px; margin-top: 4px; }
+.pa-skel-actions { display: flex; gap: 6px; }
+.pa-skel-chip  { height: 34px; flex: 1; border-radius: 12px; }
+@keyframes paShimmer {
+    0%   { background-position: 180% 0; }
+    100% { background-position: -80% 0; }
+}
+
+/* ---------- 14/15. Empty state + misc ---------- */
+.pa-empty { animation: paCardIn 380ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+    .pa-header, .pa-header::after, .pa-card, .pa-badge,
+    .pa-skel, .pa-skel-header, .pa-skel-card, .pa-check:checked::before {
+        animation: none !important;
+    }
+    .pa-card:hover, .pa-btn:hover { transform: none; }
+    .pa-btn-view:hover::after { translate: 0; }
+}
+
+
+/* ---------- 8. Approve: real spinner + success confirmation ---------- */
+.pa-spin {
+    width: 13px; height: 13px; flex-shrink: 0;
+    border: 2px solid rgba(255,255,255,0.45);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: paSpin 0.7s linear infinite;
+}
+@keyframes paSpin { to { rotate: 360deg; } }
+
+.pa-card.is-working {
+    opacity: 0.72;
+    transform: none !important;
+    transition: opacity 220ms ease;
+}
+.pa-card.is-working .pa-btn { pointer-events: none; }
+
+.pa-toast {
+    position: fixed;
+    top: 84px; right: 24px;
+    z-index: 4000;
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 12px 16px;
+    border-radius: 14px;
+    background: var(--surface);
+    border: 1px solid rgba(16,185,129,0.35);
+    color: var(--text-strong);
+    font-size: 0.88rem;
+    box-shadow: 0 10px 30px -10px rgba(16,185,129,0.45), 0 2px 6px rgba(15,23,42,0.10);
+    animation: paToastIn 280ms cubic-bezier(0.22,1,0.36,1) both;
+}
+.pa-toast-icon { color: #10B981; }
+@keyframes paToastIn {
+    from { opacity: 0; translate: 0 -10px; scale: 0.94; }
+    to   { opacity: 1; translate: 0 0; scale: 1; }
+}
+.pa-toast-circle { stroke-dasharray: 64; stroke-dashoffset: 64; animation: paDraw 420ms cubic-bezier(0.22,1,0.36,1) forwards; }
+.pa-toast-check  { stroke-dasharray: 20; stroke-dashoffset: 20; animation: paDraw 320ms cubic-bezier(0.22,1,0.36,1) 300ms forwards; }
+@keyframes paDraw { to { stroke-dashoffset: 0; } }
+
+/* ---------- 9. Success dialog: circle + check draw, bounce, blur ---------- */
+.lg-dialog-overlay { backdrop-filter: blur(7px) !important; -webkit-backdrop-filter: blur(7px) !important; }
+.lg-dialog-card svg circle { stroke-dasharray: 64; stroke-dashoffset: 64; animation: paDraw 460ms cubic-bezier(0.22,1,0.36,1) 60ms forwards; }
+.lg-dialog-card svg path   { stroke-dasharray: 24; stroke-dashoffset: 24; animation: paDraw 340ms cubic-bezier(0.22,1,0.36,1) 380ms forwards; }
+.lg-dialog-card svg { animation: paIconPop 520ms cubic-bezier(0.34,1.56,0.64,1) both; }
+@keyframes paIconPop {
+    0%   { scale: 0.86; }
+    62%  { scale: 1.07; }
+    100% { scale: 1; }
+}
+.lg-dialog-card button { transition: transform 200ms cubic-bezier(0.22,1,0.36,1), box-shadow 200ms ease, filter 200ms ease; }
+.lg-dialog-card button:hover { transform: translateY(-2px); filter: brightness(1.05); }
+
+@media (prefers-reduced-motion: reduce) {
+    .pa-spin, .pa-toast, .pa-toast-circle, .pa-toast-check,
+    .lg-dialog-card svg, .lg-dialog-card svg circle, .lg-dialog-card svg path { animation: none !important; }
+    .pa-toast-circle, .pa-toast-check, .lg-dialog-card svg circle, .lg-dialog-card svg path { stroke-dashoffset: 0; }
+}
+
+
+/* ---------- Styled prompt input (dialog.prompt) ---------- */
+.app-prompt-input {
+    width: 100%;
+    margin-top: 14px;
+    padding: 11px 13px;
+    font-size: 0.95rem;
+    font-family: inherit;
+    color: var(--text-strong);
+    background: var(--surface-2);
+    border: 1.5px solid var(--border);
+    border-radius: 10px;
+    outline: none;
+    transition: border-color 200ms ease, box-shadow 200ms ease, background 200ms ease;
+    box-sizing: border-box;
+}
+.app-prompt-input::placeholder { color: var(--text-faint); }
+.app-prompt-input:focus {
+    border-color: #6366F1;
+    background: var(--surface);
+    box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.18);
+}
+textarea.app-prompt-input { resize: vertical; min-height: 78px; line-height: 1.5; }

@@ -99,14 +99,14 @@ const PrintCoordinatorPage = () => {
     const accept = (job) => act(`/api/jobs/${job.id}/accept`, { method: 'POST', body: '{}' }, `${job.job_number} accepted and queued.`);
 
     const returnJob = async (job) => {
-        const reason = window.prompt(`Return ${job.job_number} for correction — reason:`, '');
+        const reason = await dialog.prompt(`Return ${job.job_number} for correction — reason:`, { title: 'Return for correction', placeholder: 'Reason…', multiline: true });
         if (reason == null) return;
         if (!reason.trim()) { await dialog.alert('A remark is required.', { title: 'Missing remark', variant: 'warning' }); return; }
         act(`/api/jobs/${job.id}/return`, { method: 'POST', body: JSON.stringify({ remarks: reason.trim() }) });
     };
 
     const reject = async (job) => {
-        const reason = window.prompt(`Reject ${job.job_number} — reason (mandatory):`, '');
+        const reason = await dialog.prompt(`Reject ${job.job_number} — reason (mandatory):`, { title: 'Reject job', placeholder: 'Reason (required)…', variant: 'warning', multiline: true });
         if (reason == null) return;
         if (!reason.trim()) { await dialog.alert('A reason is required.', { title: 'Missing reason', variant: 'warning' }); return; }
         const ok = await dialog.confirm(`Reject ${job.job_number}? This cannot be undone.`, { title: 'Reject job' });
@@ -137,7 +137,7 @@ const PrintCoordinatorPage = () => {
         act(`/api/jobs/${job.id}/dispatch`, { method: 'POST', body: JSON.stringify(dispatchForm) });
     };
     const markDelivered = async (job) => {
-        const receivedBy = window.prompt(`Confirm delivery of ${job.job_number}. Received by (name):`, '');
+        const receivedBy = await dialog.prompt(`Confirm delivery of ${job.job_number}. Received by (name):`, { title: 'Confirm delivery', placeholder: 'Received by (name)' });
         if (receivedBy == null) return;
         act(`/api/jobs/${job.id}/deliver`, { method: 'POST', body: JSON.stringify({ received_by: receivedBy.trim() }) });
     };

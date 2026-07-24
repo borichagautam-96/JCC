@@ -469,7 +469,10 @@ const VoucherHistoryPage = () => {
         const jccId = voucher.jcc_number || `JCC${String(voucher.id).padStart(4, '0')}`;
         const ok = await dialog.confirm(`Recall ${jccId}? It will be pulled back so you can edit it and resubmit under the same number (it then returns for approval).`, { title: 'Recall Claim', confirmLabel: 'Recall' });
         if (!ok) return;
-        const reason = window.prompt('Reason for recalling (optional):', '') || '';
+        const reason = (await dialog.prompt('Reason for recalling (optional):', {
+            title: 'Recall Claim',
+            placeholder: 'Add a reason (optional)…',
+        })) || '';
         try {
             const res = await fetch(`/api/jcc/vouchers/${voucher.id}/recall`, {
                 method: 'POST',

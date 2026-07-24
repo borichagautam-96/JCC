@@ -377,7 +377,7 @@ const ReturnTrackerPage = () => {
   };
 
   const handleRejectReturn = async (row) => {
-    const reason = window.prompt('Enter rejection reason') || '';
+    const reason = (await dialog.prompt('Enter rejection reason', { title: 'Reject return', placeholder: 'Rejection reason (required)…', variant: 'warning' })) || '';
     if (!reason.trim()) {
       await dialog.alert('Rejection reason is required.');
       return;

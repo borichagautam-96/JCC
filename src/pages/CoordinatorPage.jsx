@@ -18,6 +18,10 @@ const CoordinatorPage = () => {
     const [isApproving, setIsApproving] = useState(false); // Guard against double-click / concurrent requests
     const [selectedIds, setSelectedIds] = useState([]); // Bulk selection of pending claims
     const [bulkBusy, setBulkBusy] = useState(false);
+    // Presentational only — which card is mid-request, and the last success
+    // confirmation. Neither is read by any approval logic.
+    const [approvingId, setApprovingId] = useState(null);
+    const [approvedLabel, setApprovedLabel] = useState(null);
     const [jccData, setJccData] = useState({
         description: '',
         category: '',
@@ -393,16 +397,35 @@ const CoordinatorPage = () => {
 
     if (loading) {
         return (
-            <div className="flex items-center justify-center" style={{ minHeight: '80vh' }}>
-                <div className="spinner"></div>
+            <div className="container" style={{ paddingTop: 'var(--spacing-2xl)', paddingBottom: 'var(--spacing-2xl)' }}>
+                <div className="pa-skel-header" />
+                <div className="card-grid">
+                    {[0, 1, 2, 3].map((n) => (
+                        <div key={n} className="pa-skel-card" style={{ '--pa-i': n }}>
+                            <div className="pa-skel pa-skel-title" />
+                            <div className="pa-skel pa-skel-pill" />
+                            <div className="pa-skel pa-skel-row" />
+                            <div className="pa-skel pa-skel-row" />
+                            <div className="pa-skel pa-skel-row" />
+                            <div className="pa-skel pa-skel-row short" />
+                            <div className="pa-skel pa-skel-btn" />
+                            <div className="pa-skel-actions">
+                                <div className="pa-skel pa-skel-chip" />
+                                <div className="pa-skel pa-skel-chip" />
+                                <div className="pa-skel pa-skel-chip" />
+                            </div>
+                        </div>
+                    ))}
+                </div>
             </div>
         );
     }
 
+
     return (
         <div className="container" style={{ paddingTop: 'var(--spacing-2xl)', paddingBottom: 'var(--spacing-2xl)' }}>
             <div className="fade-in">
-                <div style={{
+                <div className="pa-header" style={{
                     background: '#0066CC',
                     color: 'white',
                     padding: '1.5rem 2rem',
@@ -419,6 +442,19 @@ const CoordinatorPage = () => {
                     </p>
                 </div>
 
+                {/* Success confirmation — purely presentational; the approval
+                    itself is handled entirely by handleApproveVoucher. */}
+                {approvedLabel && (
+                    <div className="pa-toast" role="status" aria-live="polite">
+                        <svg className="pa-toast-icon" viewBox="0 0 24 24" width="22" height="22" fill="none"
+                             stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                            <circle className="pa-toast-circle" cx="12" cy="12" r="10" />
+                            <path className="pa-toast-check" d="M8 12l2.5 2.5L16 9" />
+                        </svg>
+                        <span><strong>{approvedLabel}</strong> approved</span>
+                    </div>
+                )}
+
                 {/* Pending Claims Section */}
                 {vouchers.length > 0 && (
                     <>
@@ -433,7 +469,7 @@ const CoordinatorPage = () => {
                                     type="checkbox"
                                     checked={selectedIds.length > 0 && selectedIds.length === vouchers.length}
                                     onChange={toggleSelectAll}
-                                    style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                                    className="pa-check" style={{ width: '16px', height: '16px', cursor: 'pointer' }}
                                 />
                                 Select all
                             </label>
@@ -460,21 +496,21 @@ const CoordinatorPage = () => {
                         </div>
 
                         <div className="card-grid" style={{ marginBottom: '2rem' }}>
-                            {vouchers.map((voucher) => (
-                                <div key={voucher.id} className="glass-card" style={{ background: 'var(--surface)', border: selectedIds.includes(voucher.id) ? '2px solid #0066CC' : '1px solid #E0E0E0' }}>
+                            {vouchers.map((voucher, i) => (
+                                <div key={voucher.id} className={`glass-card pa-card${approvingId === voucher.id ? ' is-working' : ''}`} style={{ '--pa-i': i, background: 'var(--surface)', border: selectedIds.includes(voucher.id) ? '2px solid #0066CC' : '1px solid #E0E0E0' }}>
                                     <div style={{ marginBottom: 'var(--spacing-md)' }}>
                                         <div className="flex items-center gap-sm" style={{ marginBottom: '8px' }}>
                                             <input
                                                 type="checkbox"
                                                 checked={selectedIds.includes(voucher.id)}
                                                 onChange={() => toggleSelect(voucher.id)}
-                                                style={{ width: '16px', height: '16px', cursor: 'pointer', flexShrink: 0 }}
+                                                className="pa-check" style={{ width: '16px', height: '16px', cursor: 'pointer', flexShrink: 0 }}
                                                 title="Select for bulk action"
                                             />
                                             <h3 style={{ margin: 0, color: '#0066CC', fontSize: '1.1rem' }}>{voucher.jcc_number || `JCC${String(voucher.id).padStart(4, '0')}`}</h3>
                                         </div>
                                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                                            <span style={{ display: 'inline-flex', alignItems: 'center', padding: '3px 10px', borderRadius: '999px', fontSize: '0.7rem', fontWeight: 600, background: '#FEF3C7', color: '#92400E', border: '1px solid #FDE68A', whiteSpace: 'nowrap' }}>
+                                            <span className="pa-badge" style={{ display: 'inline-flex', alignItems: 'center', padding: '3px 10px', borderRadius: '999px', fontSize: '0.7rem', fontWeight: 600, background: '#FEF3C7', color: '#92400E', border: '1px solid #FDE68A', whiteSpace: 'nowrap' }}>
                                                 {voucher.status === 'pending_approval_1' ? 'Pending Manager' : 'Pending Final'}
                                             </span>
                                             {Number(voucher.outdoor_duty) === 1 && (
@@ -486,33 +522,33 @@ const CoordinatorPage = () => {
                                     </div>
 
                                     <div style={{ display: 'grid', gap: 'var(--spacing-sm)', marginBottom: 'var(--spacing-lg)' }}>
-                                        <div className="flex justify-between">
-                                            <span style={{ color: 'var(--text-muted)' }}>Supplier:</span>
-                                            <strong style={{ color: 'var(--text-strong)' }}>{voucher.supplier}</strong>
+                                        <div className="flex justify-between pa-row">
+                                            <span className="pa-label" style={{ color: 'var(--text-muted)' }}>Supplier:</span>
+                                            <strong className="pa-value" style={{ color: 'var(--text-strong)' }}>{voucher.supplier}</strong>
                                         </div>
-                                        <div className="flex justify-between">
-                                            <span style={{ color: 'var(--text-muted)' }}>Invoice No.:</span>
-                                            <strong style={{ color: 'var(--text-strong)' }}>{voucher.invoice_number}</strong>
+                                        <div className="flex justify-between pa-row">
+                                            <span className="pa-label" style={{ color: 'var(--text-muted)' }}>Invoice No.:</span>
+                                            <strong className="pa-value" style={{ color: 'var(--text-strong)' }}>{voucher.invoice_number}</strong>
                                         </div>
-                                        <div className="flex justify-between">
-                                            <span style={{ color: 'var(--text-muted)' }}>Amount:</span>
-                                            <strong style={{ color: '#0066CC', fontSize: '1.1rem' }}>₹{parseFloat(voucher.basic_amount || 0).toLocaleString()}</strong>
+                                        <div className="flex justify-between pa-row">
+                                            <span className="pa-label" style={{ color: 'var(--text-muted)' }}>Amount:</span>
+                                            <strong className="pa-value pa-amount" style={{ color: '#0066CC', fontSize: '1.1rem' }}>₹{parseFloat(voucher.basic_amount || 0).toLocaleString()}</strong>
                                         </div>
-                                        <div className="flex justify-between">
-                                            <span style={{ color: 'var(--text-muted)' }}>PO No.:</span>
-                                            <strong style={{ color: 'var(--text-strong)' }}>{voucher.po_number || 'N/A'}</strong>
+                                        <div className="flex justify-between pa-row">
+                                            <span className="pa-label" style={{ color: 'var(--text-muted)' }}>PO No.:</span>
+                                            <strong className="pa-value" style={{ color: 'var(--text-strong)' }}>{voucher.po_number || 'N/A'}</strong>
                                         </div>
-                                        <div className="flex justify-between">
-                                            <span style={{ color: 'var(--text-muted)' }}>Requested By:</span>
-                                            <strong style={{ color: 'var(--text-strong)' }}>{voucher.user_name}</strong>
+                                        <div className="flex justify-between pa-row">
+                                            <span className="pa-label" style={{ color: 'var(--text-muted)' }}>Requested By:</span>
+                                            <strong className="pa-value" style={{ color: 'var(--text-strong)' }}>{voucher.user_name}</strong>
                                         </div>
-                                        <div className="flex justify-between">
-                                            <span style={{ color: 'var(--text-muted)' }}>Date:</span>
-                                            <strong style={{ color: 'var(--text-strong)' }}>{new Date(voucher.created_at).toLocaleDateString()}</strong>
+                                        <div className="flex justify-between pa-row">
+                                            <span className="pa-label" style={{ color: 'var(--text-muted)' }}>Date:</span>
+                                            <strong className="pa-value" style={{ color: 'var(--text-strong)' }}>{new Date(voucher.created_at).toLocaleDateString()}</strong>
                                         </div>
                                         {voucher.description && (
                                             <div>
-                                                <span style={{ color: 'var(--text-muted)' }}>Description:</span>
+                                                <span className="pa-label" style={{ color: 'var(--text-muted)' }}>Description:</span>
                                                 <p style={{ margin: '4px 0 0 0', fontSize: '0.875rem', color: 'var(--text-strong)' }}>{voucher.description}</p>
                                             </div>
                                         )}
@@ -526,7 +562,7 @@ const CoordinatorPage = () => {
                                                     fetchPdfUrl(voucher.id);
                                                 }
                                             }}
-                                            style={{ padding: '8px', fontSize: '0.82rem', fontWeight: 600, borderRadius: '8px', border: '1px solid var(--border-strong)', background: 'var(--surface)', color: '#0066CC', cursor: 'pointer' }}
+                                            className="pa-btn pa-btn-view" style={{ padding: '8px', fontSize: '0.82rem', fontWeight: 600, borderRadius: '8px', border: '1px solid var(--border-strong)', background: 'var(--surface)', color: '#0066CC', cursor: 'pointer' }}
                                         >
                                             View Details
                                         </button>
@@ -536,18 +572,31 @@ const CoordinatorPage = () => {
                                                 disabled={isApproving || bulkBusy}
                                                 title="Approve this claim"
                                                 onClick={async () => {
-                                                    const ok = await dialog.confirm(`Approve ${voucher.jcc_number || `JCC${String(voucher.id).padStart(4, '0')}`}?`, { title: 'Approve Claim' });
-                                                    if (ok) handleApproveVoucher(voucher.id, 'Approved');
+                                                    const label = voucher.jcc_number || `JCC${String(voucher.id).padStart(4, '0')}`;
+                                                    const ok = await dialog.confirm(`Approve ${label}?`, { title: 'Approve Claim' });
+                                                    if (!ok) return;
+                                                    // Spinner tracks the real request — no artificial delay, and
+                                                    // handleApproveVoucher is called with the same arguments as before.
+                                                    setApprovingId(voucher.id);
+                                                    try {
+                                                        await handleApproveVoucher(voucher.id, 'Approved');
+                                                        setApprovedLabel(label);
+                                                        setTimeout(() => setApprovedLabel(null), 2200);
+                                                    } finally {
+                                                        setApprovingId(null);
+                                                    }
                                                 }}
-                                                style={{ flex: 1, padding: '7px 6px', fontSize: '0.8rem', fontWeight: 600, border: 'none', borderRadius: '8px', background: '#059669', color: '#fff', cursor: 'pointer', opacity: (isApproving || bulkBusy) ? 0.6 : 1 }}
+                                                className="pa-btn pa-btn-approve" style={{ flex: 1, padding: '7px 6px', fontSize: '0.8rem', fontWeight: 600, border: 'none', borderRadius: '8px', background: '#059669', color: '#fff', cursor: 'pointer', opacity: (isApproving || bulkBusy) ? 0.6 : 1 }}
                                             >
-                                                ✓ Approve
+                                                {approvingId === voucher.id
+                                                    ? <><span className="pa-spin" aria-hidden="true" />Approving…</>
+                                                    : '✓ Approve'}
                                             </button>
                                             <button
                                                 disabled={isApproving || bulkBusy}
                                                 title="Request Info — send back to the claimant with a question, without rejecting"
                                                 onClick={() => handleRequestInfo(voucher.id)}
-                                                style={{ flex: 1, padding: '7px 6px', fontSize: '0.8rem', fontWeight: 600, border: 'none', borderRadius: '8px', background: '#D97706', color: '#fff', cursor: 'pointer', opacity: (isApproving || bulkBusy) ? 0.6 : 1 }}
+                                                className="pa-btn pa-btn-info" style={{ flex: 1, padding: '7px 6px', fontSize: '0.8rem', fontWeight: 600, border: 'none', borderRadius: '8px', background: '#D97706', color: '#fff', cursor: 'pointer', opacity: (isApproving || bulkBusy) ? 0.6 : 1 }}
                                             >
                                                 ℹ Info
                                             </button>
@@ -558,7 +607,7 @@ const CoordinatorPage = () => {
                                                     setRejectNote('');
                                                     setRejectModal({ mode: 'single', id: voucher.id, label: voucher.jcc_number || `JCC${String(voucher.id).padStart(4, '0')}` });
                                                 }}
-                                                style={{ flex: 1, padding: '7px 6px', fontSize: '0.8rem', fontWeight: 600, border: 'none', borderRadius: '8px', background: '#DC2626', color: '#fff', cursor: 'pointer', opacity: (isApproving || bulkBusy) ? 0.6 : 1 }}
+                                                className="pa-btn pa-btn-reject" style={{ flex: 1, padding: '7px 6px', fontSize: '0.8rem', fontWeight: 600, border: 'none', borderRadius: '8px', background: '#DC2626', color: '#fff', cursor: 'pointer', opacity: (isApproving || bulkBusy) ? 0.6 : 1 }}
                                             >
                                                 ✕ Reject
                                             </button>
@@ -912,19 +961,19 @@ const CoordinatorPage = () => {
                                     )}
 
                                     <div style={{ display: 'grid', gap: 'var(--spacing-sm)' }}>
-                                        <div className="flex justify-between">
+                                        <div className="flex justify-between pa-row">
                                             <span className="text-muted">Invoice Number:</span>
                                             <strong>{invoice.invoice_number || 'N/A'}</strong>
                                         </div>
-                                        <div className="flex justify-between">
+                                        <div className="flex justify-between pa-row">
                                             <span className="text-muted">Amount:</span>
                                             <strong>₹{invoice.amount || '0.00'}</strong>
                                         </div>
-                                        <div className="flex justify-between">
+                                        <div className="flex justify-between pa-row">
                                             <span className="text-muted">Date:</span>
                                             <strong>{invoice.invoice_date || 'N/A'}</strong>
                                         </div>
-                                        <div className="flex justify-between">
+                                        <div className="flex justify-between pa-row">
                                             <span className="text-muted">Uploaded:</span>
                                             <strong>{new Date(invoice.created_at).toLocaleDateString()}</strong>
                                         </div>

@@ -186,16 +186,20 @@ const styles = {
 const DialogBox = ({ dialog, onClose }) => {
     const [visible, setVisible] = useState(false);
     const [exiting, setExiting] = useState(false);
+    const [inputValue, setInputValue] = useState(dialog.defaultValue || '');
     const primaryRef = useRef(null);
+    const inputRef = useRef(null);
+    const isPrompt = dialog.type === 'prompt';
 
     useEffect(() => {
         // Trigger enter animation
         requestAnimationFrame(() => {
             requestAnimationFrame(() => setVisible(true));
         });
-        // Focus primary button
-        if (primaryRef.current) primaryRef.current.focus();
-    }, []);
+        // Focus the input on a prompt, otherwise the primary button
+        if (isPrompt && inputRef.current) inputRef.current.focus();
+        else if (primaryRef.current) primaryRef.current.focus();
+    }, [isPrompt]);
 
     const handleClose = useCallback((result) => {
         setExiting(true);
@@ -207,17 +211,22 @@ const DialogBox = ({ dialog, onClose }) => {
     useEffect(() => {
         const handler = (e) => {
             if (e.key === 'Escape') {
-                handleClose(dialog.type === 'confirm' ? false : undefined);
-            } else if (e.key === 'Enter') {
-                handleClose(dialog.type === 'confirm' ? true : undefined);
+                handleClose(dialog.type === 'confirm' ? false : (isPrompt ? null : undefined));
+            } else if (e.key === 'Enter' && !e.shiftKey) {
+                if (isPrompt) { e.preventDefault(); handleClose(inputValue); }
+                else handleClose(dialog.type === 'confirm' ? true : undefined);
             }
         };
         window.addEventListener('keydown', handler);
         return () => window.removeEventListener('keydown', handler);
-    }, [handleClose, dialog.type]);
+    }, [handleClose, dialog.type, isPrompt, inputValue]);
 
     const isConfirm = dialog.type === 'confirm';
-    const visualType = isConfirm ? (dialog.variant || 'confirm') : (dialog.variant || detectAlertType(dialog.message));
+    // Prompt shares the confirm two-button layout; cancel resolves to null.
+    const twoButton = isConfirm || isPrompt;
+    const visualType = isConfirm ? (dialog.variant || 'confirm')
+        : isPrompt ? (dialog.variant || 'confirm')
+        : (dialog.variant || detectAlertType(dialog.message));
 
     const titleText = dialog.title || (isConfirm ? 'Confirm Action' :
         visualType === 'success' ? 'Success' :
@@ -259,13 +268,34 @@ const DialogBox = ({ dialog, onClose }) => {
                             <React.Fragment key={i}>{line}{i < arr.length - 1 && <br />}</React.Fragment>
                         ))}
                     </p>
+                    {isPrompt && (
+                        dialog.multiline ? (
+                            <textarea
+                                ref={inputRef}
+                                className="app-prompt-input"
+                                rows={3}
+                                placeholder={dialog.placeholder || ''}
+                                value={inputValue}
+                                onChange={(e) => setInputValue(e.target.value)}
+                            />
+                        ) : (
+                            <input
+                                ref={inputRef}
+                                type="text"
+                                className="app-prompt-input"
+                                placeholder={dialog.placeholder || ''}
+                                value={inputValue}
+                                onChange={(e) => setInputValue(e.target.value)}
+                            />
+                        )
+                    )}
                 </div>
                 <div style={styles.footer}>
-                    {isConfirm ? (
+                    {twoButton ? (
                         <>
                             <button
                                 style={{ ...styles.btnBase, ...styles.btnCancel }}
-                                onClick={() => handleClose(false)}
+                                onClick={() => handleClose(isPrompt ? null : false)}
                                 onMouseEnter={(e) => {
                                     e.target.style.background = '#E5E7EB';
                                     e.target.style.transform = 'translateY(-1px)';
@@ -280,7 +310,7 @@ const DialogBox = ({ dialog, onClose }) => {
                             <button
                                 ref={primaryRef}
                                 style={{ ...styles.btnBase, ...styles.btnPrimary(visualType) }}
-                                onClick={() => handleClose(true)}
+                                onClick={() => handleClose(isPrompt ? inputValue : true)}
                                 onMouseEnter={(e) => {
                                     e.target.style.transform = 'translateY(-2px)';
                                     e.target.style.boxShadow = `0 6px 20px ${accentColors[visualType]}50`;
@@ -290,7 +320,7 @@ const DialogBox = ({ dialog, onClose }) => {
                                     e.target.style.boxShadow = `0 4px 14px ${accentColors[visualType]}40`;
                                 }}
                             >
-                                {dialog.confirmLabel || 'Confirm'}
+                                {dialog.confirmLabel || (isPrompt ? 'OK' : 'Confirm')}
                             </button>
                         </>
                     ) : (
@@ -353,6 +383,28 @@ export const DialogProvider = ({ children }) => {
         });
     }, []);
 
+    // Styled replacement for window.prompt(). Resolves to the entered string on
+    // OK/Enter, or null on Cancel/Escape (matching window.prompt semantics).
+    const showPrompt = useCallback((message, options = {}) => {
+        return new Promise((resolve) => {
+            const id = ++idCounter.current;
+            resolverMap.current[id] = resolve;
+            const opts = typeof options === 'string' ? { defaultValue: options } : (options || {});
+            setDialogs((prev) => [...prev, {
+                id,
+                type: 'prompt',
+                message: String(message),
+                title: opts.title || undefined,
+                variant: opts.variant || 'confirm',
+                placeholder: opts.placeholder || '',
+                defaultValue: opts.defaultValue || '',
+                multiline: !!opts.multiline,
+                confirmLabel: opts.confirmLabel || undefined,
+                cancelLabel: opts.cancelLabel || undefined,
+            }]);
+        });
+    }, []);
+
     const handleClose = useCallback((id, result) => {
         const resolver = resolverMap.current[id];
         if (resolver) {
@@ -363,7 +415,7 @@ export const DialogProvider = ({ children }) => {
     }, []);
 
     return (
-        <DialogContext.Provider value={{ alert: showAlert, confirm: showConfirm }}>
+        <DialogContext.Provider value={{ alert: showAlert, confirm: showConfirm, prompt: showPrompt }}>
             {children}
             {dialogs.map((dialog) => (
                 <DialogBox
