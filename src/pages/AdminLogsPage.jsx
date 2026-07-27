@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import DatePicker from '../components/DatePicker';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import * as XLSX from 'xlsx';
 
@@ -396,10 +397,8 @@ const AdminLogsPage = () => {
 
                     <div>
                         <label className="input-label" htmlFor="activity-from-date">From Date</label>
-                        <input
+                        <DatePicker
                             id="activity-from-date"
-                            className="input-field"
-                            type="date"
                             value={filters.fromDate}
                             onChange={(e) => updateFilter('fromDate', e.target.value)}
                         />
@@ -407,10 +406,8 @@ const AdminLogsPage = () => {
 
                     <div>
                         <label className="input-label" htmlFor="activity-to-date">To Date</label>
-                        <input
+                        <DatePicker
                             id="activity-to-date"
-                            className="input-field"
-                            type="date"
                             value={filters.toDate}
                             onChange={(e) => updateFilter('toDate', e.target.value)}
                         />

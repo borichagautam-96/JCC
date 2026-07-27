@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import DatePicker from '../components/DatePicker';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import './vendor-upload-taxhacker.css';
 
@@ -773,10 +774,8 @@ const VendorUploadPage = () => {
 
                                 <div className="input-group">
                                     <label className="input-label" htmlFor="invoiceDate">Invoice Date</label>
-                                    <input
+                                    <DatePicker
                                         id="invoiceDate"
-                                        type="date"
-                                        className="input-field"
                                         value={extractedData.date}
                                         onChange={(e) => setExtractedData({ ...extractedData, date: e.target.value })}
                                     />

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import DatePicker from '../components/DatePicker';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
 import { useNavigate } from 'react-router-dom';
@@ -398,11 +399,9 @@ const ProjectManagementPage = () => {
                                     <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>
                                         Contract Date
                                     </label>
-                                    <input
-                                        type="date"
+                                    <DatePicker
                                         value={formData.contract_date}
                                         onChange={(e) => setFormData({ ...formData, contract_date: e.target.value })}
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
 
@@ -441,11 +440,9 @@ const ProjectManagementPage = () => {
                                     <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>
                                         Start Date
                                     </label>
-                                    <input
-                                        type="date"
+                                    <DatePicker
                                         value={formData.start_date}
                                         onChange={(e) => setFormData({ ...formData, start_date: e.target.value })}
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
 
@@ -454,11 +451,9 @@ const ProjectManagementPage = () => {
                                     <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>
                                         End Date
                                     </label>
-                                    <input
-                                        type="date"
+                                    <DatePicker
                                         value={formData.end_date}
                                         onChange={(e) => setFormData({ ...formData, end_date: e.target.value })}
-                                        style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px' }}
                                     />
                                 </div>
                             </div>

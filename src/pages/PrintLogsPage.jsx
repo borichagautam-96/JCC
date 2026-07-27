@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import DatePicker from '../components/DatePicker';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 
 const ACTION_META = {
@@ -117,11 +118,11 @@ const PrintLogsPage = () => {
                         </div>
                         <div className="input-group">
                             <label className="input-label">From</label>
-                            <input className="input-field" type="date" value={filters.fromDate} onChange={(e) => setFilters({ ...filters, fromDate: e.target.value })} />
+                            <DatePicker value={filters.fromDate} onChange={(e) => setFilters({ ...filters, fromDate: e.target.value })} />
                         </div>
                         <div className="input-group">
                             <label className="input-label">To</label>
-                            <input className="input-field" type="date" value={filters.toDate} onChange={(e) => setFilters({ ...filters, toDate: e.target.value })} />
+                            <DatePicker value={filters.toDate} onChange={(e) => setFilters({ ...filters, toDate: e.target.value })} />
                         </div>
                         <div style={{ display: 'flex', gap: '0.5rem' }}>
                             <button className="btn btn-primary" onClick={applyFilters}>Apply</button>

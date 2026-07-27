@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import DatePicker from '../components/DatePicker';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
@@ -312,16 +313,9 @@ const LetterDetailPage = () => {
                     <div style={{ marginBottom: '1rem' }}>
                         <label style={{ display: 'block', fontWeight: 600, marginBottom: '0.25rem' }}>Received Date</label>
                         {editing ? (
-                            <input
-                                type="date"
+                            <DatePicker
                                 value={formData.received_date || ''}
                                 onChange={(e) => setFormData({ ...formData, received_date: e.target.value })}
-                                style={{
-                                    width: '100%',
-                                    padding: '0.5rem',
-                                    border: '1px solid var(--border)',
-                                    borderRadius: '4px'
-                                }}
                             />
                         ) : (
                             <p style={{ margin: 0, color: 'var(--text-muted)' }}>

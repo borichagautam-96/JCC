@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import DatePicker from '../components/DatePicker';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
 
@@ -478,9 +479,7 @@ const ReturnTrackerPage = () => {
       <div className="glass-card" style={{ marginBottom: 0 }}>
         <h3 style={{ marginTop: 0 }}>Asset Management</h3>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '0.5rem' }}>
-          <input
-            className="input-field"
-            type="date"
+          <DatePicker
             value={returnForm.actualReturnDate}
             onChange={(e) => setReturnForm((prev) => ({ ...prev, actualReturnDate: e.target.value }))}
           />
@@ -518,8 +517,8 @@ const ReturnTrackerPage = () => {
               <option key={category} value={category}>{formatAssetCategory(category)}</option>
             ))}
           </select>
-          <input className="input-field" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} title="Taken date from" />
-          <input className="input-field" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} title="Taken date to" />
+          <DatePicker value={fromDate} onChange={(e) => setFromDate(e.target.value)} placeholder="From date" />
+          <DatePicker value={toDate} onChange={(e) => setToDate(e.target.value)} placeholder="To date" />
           <button type="button" className="btn btn-outline" onClick={exportCsv}>Export CSV</button>
         </div>
 
@@ -912,10 +911,8 @@ const ReturnTrackerPage = () => {
 
               <div className="input-group">
                 <label className="input-label" htmlFor="edit-current-expected-return">Return Due On (Current)</label>
-                <input
+                <DatePicker
                   id="edit-current-expected-return"
-                  type="date"
-                  className="input-field"
                   value={editAssetForm.currentExpectedReturnDate}
                   onChange={(e) => setEditAssetForm((prev) => ({ ...prev, currentExpectedReturnDate: e.target.value }))}
                   disabled={editingAsset.status !== 'issued'}
@@ -924,10 +921,8 @@ const ReturnTrackerPage = () => {
 
               <div className="input-group">
                 <label className="input-label" htmlFor="edit-current-assigned-on">Assigned On (Current)</label>
-                <input
+                <DatePicker
                   id="edit-current-assigned-on"
-                  type="date"
-                  className="input-field"
                   value={editAssetForm.currentAssignedOn}
                   onChange={(e) => setEditAssetForm((prev) => ({ ...prev, currentAssignedOn: e.target.value }))}
                   disabled={editingAsset.status !== 'issued'}

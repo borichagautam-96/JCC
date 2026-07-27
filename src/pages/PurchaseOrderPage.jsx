@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import DatePicker from '../components/DatePicker';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
 import { Plus, Edit2, Trash2, Search, FileText, ChevronDown, ChevronUp } from 'lucide-react';
@@ -678,9 +679,7 @@ const PurchaseOrderPage = () => {
 
                             <div className="input-group">
                                 <label className="input-label">PO Date</label>
-                                <input
-                                    type="date"
-                                    className="input-field"
+                                <DatePicker
                                     value={formData.poDate}
                                     onChange={e => setFormData({ ...formData, poDate: e.target.value })}
                                 />

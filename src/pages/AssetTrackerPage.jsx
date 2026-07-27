@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import DatePicker from '../components/DatePicker';
 import { useNavigate } from 'react-router-dom';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
@@ -565,11 +566,11 @@ const AssetTrackerPage = () => {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
             <div className="input-group">
               <label className="input-label" htmlFor="issue-date">Issue Date</label>
-              <input id="issue-date" required type="date" className={inputClass} value={issueForm.startDate} onChange={(e) => setIssueForm({ ...issueForm, startDate: e.target.value })} />
+              <DatePicker id="issue-date" required value={issueForm.startDate} onChange={(e) => setIssueForm({ ...issueForm, startDate: e.target.value })} />
             </div>
             <div className="input-group">
               <label className="input-label" htmlFor="issue-expected-return">Expected Return Date</label>
-              <input id="issue-expected-return" type="date" className={inputClass} value={issueForm.expectedReturnDate} onChange={(e) => setIssueForm({ ...issueForm, expectedReturnDate: e.target.value })} />
+              <DatePicker id="issue-expected-return" value={issueForm.expectedReturnDate} onChange={(e) => setIssueForm({ ...issueForm, expectedReturnDate: e.target.value })} />
             </div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>

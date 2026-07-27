@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
+import DatePicker from '../components/DatePicker';
 import { useLocation, useNavigate } from 'react-router-dom';
 import '../voucher-styles.css';
 import { getVendorNames } from '../utils/vendorList';
@@ -1239,15 +1240,13 @@ const VoucherRequestPage = () => {
 
                                 <div className="input-group" style={{ marginBottom: 0 }}>
                                     <label className="input-label">Claim Date *</label>
-                                    <input
-                                        type="date"
+                                    <DatePicker
                                         name="claimedDate"
-                                        className="input-field"
                                         value={formData.claimedDate}
                                         onChange={handleChange}
+                                        required
                                         min={getMinClaimDateValue()}
                                         max={getTodayDateValue()}
-                                        required
                                     />
                                 </div>
                             </div>
@@ -1393,10 +1392,8 @@ const VoucherRequestPage = () => {
 
                             <div className="input-group">
                                 <label className="input-label">Invoice Date *</label>
-                                <input
-                                    type="date"
+                                <DatePicker
                                     name="invoiceDate"
-                                    className="input-field"
                                     value={formData.invoiceDate}
                                     onChange={handleChange}
                                     min={formData.outdoorDuty ? (formData.outdoorFrom || getMinOutdoorDateValue()) : getMinInvoiceDateValue()}
@@ -1447,10 +1444,8 @@ const VoucherRequestPage = () => {
                                 <div className="voucher-grid-3" style={{ marginTop: 'var(--spacing-md)' }}>
                                     <div className="input-group">
                                         <label className="input-label">Outdoor Duty From *</label>
-                                        <input
-                                            type="date"
+                                        <DatePicker
                                             name="outdoorFrom"
-                                            className="input-field"
                                             value={formData.outdoorFrom}
                                             onChange={handleChange}
                                             min={getMinOutdoorDateValue()}
@@ -1460,10 +1455,8 @@ const VoucherRequestPage = () => {
                                     </div>
                                     <div className="input-group">
                                         <label className="input-label">Outdoor Duty To *</label>
-                                        <input
-                                            type="date"
+                                        <DatePicker
                                             name="outdoorTo"
-                                            className="input-field"
                                             value={formData.outdoorTo}
                                             onChange={handleChange}
                                             min={formData.outdoorFrom || getMinOutdoorDateValue()}
