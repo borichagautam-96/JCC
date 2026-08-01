@@ -5,6 +5,8 @@ import authRoutes from './routes/auth.js';
 import invoiceRoutes from './routes/invoices.js';
 import jccRoutes from './routes/jcc.js';
 import jobRoutes from './routes/jobs.js';
+import rateRoutes from './routes/rates.js';
+import annexureRoutes from './routes/annexures.js';
 import locationRoutes from './routes/locations.js';
 import dashboardRoutes from './routes/dashboard.js';
 import usersRoutes from './routes/users.js';
@@ -74,6 +76,9 @@ app.use('/api/auth', authRoutes);
 app.use('/api/invoices', invoiceRoutes);
 app.use('/api/jcc', jccRoutes);
 app.use('/api/jobs', jobRoutes);
+app.use('/api/rates', rateRoutes);
+// Mounted at the API root: it owns both /api/annexures and /api/jobs/:id/cost.
+app.use('/api', annexureRoutes);
 app.use('/api/locations', locationRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/users', usersRoutes);

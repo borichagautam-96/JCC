@@ -4,6 +4,7 @@ import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
 import { Plus, Edit2, Trash2, Search, FileText, ChevronDown, ChevronUp } from 'lucide-react';
 import { getVendorNames } from '../utils/vendorList';
+import { dateSortValue, formatDate } from '../utils/datetime';
 
 const PurchaseOrderPage = () => {
     const { getToken, user } = useAuth();
@@ -182,9 +183,9 @@ const PurchaseOrderPage = () => {
                 case 'amount_asc':
                     return next.sort((a, b) => (a.total_budget || 0) - (b.total_budget || 0));
                 case 'date_asc':
-                    return next.sort((a, b) => new Date(a.po_date || 0) - new Date(b.po_date || 0));
+                    return next.sort((a, b) => dateSortValue(a.po_date) - dateSortValue(b.po_date));
                 case 'date_desc':
-                    return next.sort((a, b) => new Date(b.po_date || 0) - new Date(a.po_date || 0));
+                    return next.sort((a, b) => dateSortValue(b.po_date) - dateSortValue(a.po_date));
                 case 'po_asc':
                     return next.sort((a, b) => String(a.po_number || '').localeCompare(String(b.po_number || '')));
                 case 'po_desc':
@@ -435,7 +436,7 @@ const PurchaseOrderPage = () => {
                                         </div>
                                         <div className="flex justify-between" style={{ fontSize: '0.95rem' }}>
                                             <span className="text-muted">PO Date:</span>
-                                            <span>{po.po_date ? new Date(po.po_date).toLocaleDateString() : '-'}</span>
+                                            <span>{formatDate(po.po_date)}</span>
                                         </div>
                                     </div>
 
@@ -553,7 +554,7 @@ const PurchaseOrderPage = () => {
                                 <div><strong>Vendor:</strong> {selectedPo.vendor_name || 'No Vendor Specified'}</div>
                                 <div><strong>Status:</strong> {selectedPo.status || '-'}</div>
                                 <div><strong>PO Amount:</strong> ₹{parseFloat(selectedPo.total_budget || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
-                                <div><strong>PO Date:</strong> {selectedPo.po_date ? new Date(selectedPo.po_date).toLocaleDateString() : '-'}</div>
+                                <div><strong>PO Date:</strong> {formatDate(selectedPo.po_date)}</div>
                                 <div><strong>Buyer Name:</strong> {selectedPo.buyer_name || '-'}</div>
                                 <div><strong>Buyer Email:</strong> {selectedPo.buyer_email || '-'}</div>
                                 <div><strong>Supplier Code:</strong> {selectedPo.supplier_code || '-'}</div>

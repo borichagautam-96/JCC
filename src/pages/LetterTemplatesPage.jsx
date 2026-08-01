@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
+import { formatDate } from '../utils/datetime';
 
 const LetterTemplatesPage = () => {
     const [templates, setTemplates] = useState([]);
@@ -263,7 +264,7 @@ const LetterTemplatesPage = () => {
                                 marginBottom: '1rem'
                             }}>
                                 Created by {template.created_by_name || 'Unknown'} on{' '}
-                                {new Date(template.created_at).toLocaleDateString()}
+                                {formatDate(template.created_at)}
                             </div>
 
                             <div style={{ display: 'flex', gap: '0.5rem' }}>

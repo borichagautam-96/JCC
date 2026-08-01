@@ -35,6 +35,8 @@ import AdminLogsPage from './pages/AdminLogsPage';
 import FeedbackPage from './pages/FeedbackPage';
 import AdminFeedbackPage from './pages/AdminFeedbackPage';
 import SOPPage from './pages/SOPPage';
+import ApprovalLinkPage from './pages/ApprovalLinkPage';
+import PrintingCostPage from './pages/PrintingCostPage';
 
 import AppShell from './components/AppShell';
 
@@ -42,7 +44,7 @@ const SHOW_ADMIN_LOGS = import.meta.env.VITE_SHOW_ADMIN_LOGS === 'true';
 const ENABLE_ASSET_MODULE = import.meta.env.VITE_ENABLE_ASSET_MODULE === 'true';
 const ENABLE_FEEDBACK_MODULE = import.meta.env.VITE_ENABLE_FEEDBACK === 'true';
 
-const ProtectedRoute = ({ children, allowedRoles }) => {
+const ProtectedRoute = ({ children, allowedRoles, requireFlag, requireAnyFlag, allowAdmin = false }) => {
     const { user, loading } = useAuth();
     const location = useLocation();
 
@@ -71,6 +73,23 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
 
     if (allowedRoles && !allowedRoles.includes(user.role)) {
         return <Navigate to="/" />;
+    }
+
+    // Printing-module screens are gated on the module flag, not the JCC role.
+    // Hiding a sidebar link is not access control — without this, any signed-in
+    // user could reach /print-coordinator by typing the URL.
+    // `allowAdmin` is for screens the API already serves to an admin — the rate master
+    // and cost annexures. Without it the flag check locks an admin out of a page the
+    // server would happily return, which is a dead end rather than a policy.
+    // Operational queues (Coordinator, Operator) deliberately do NOT set it: those
+    // belong to whoever holds the module flag, admin or not.
+    // requireAnyFlag: the screen belongs to more than one printing role — costing is
+    // read and corrected by coordinators and operators alike.
+    const anyFlagOk = !requireAnyFlag || requireAnyFlag.some((f) => Number(user?.[f]) === 1);
+    const flagOk = ((!requireFlag || Number(user?.[requireFlag]) === 1) && anyFlagOk)
+        || (allowAdmin && user.role === 'admin');
+    if (!flagOk) {
+        return <Navigate to="/hub" replace />;
     }
 
     return children;
@@ -167,6 +186,11 @@ const AppContent = () => {
                             path="/login"
                             element={user ? <Navigate to={Number(user?.profile_completed ?? 0) === 1 ? "/hub" : "/complete-profile"} replace /> : <LoginPage />}
                         />
+
+                        {/* One-click approval from an email. Public on purpose: the signed
+                            token in the URL is the credential, and the approver is usually
+                            coming straight from their mail client with no portal session. */}
+                        <Route path="/approve/:token" element={<ApprovalLinkPage />} />
 
                         <Route
                             path="/complete-profile"
@@ -267,13 +291,13 @@ const AppContent = () => {
                             }
                         />
 
-                        {/* Printing coordinator/operator access is via module flags, not the
-                            JCC role — so these are open to any authenticated user and the
-                            backend + sidebar enforce who actually sees data. */}
+                        {/* Printing screens are gated on the module flags (is_printer_coordinator /
+                            is_printer_operator), not the JCC role. The guard is here as well as on
+                            the server: hiding a sidebar link never stopped anyone typing the URL. */}
                         <Route
                             path="/print-coordinator"
                             element={
-                                <ProtectedRoute>
+                                <ProtectedRoute requireFlag="is_printer_coordinator">
                                     <PrintCoordinatorPage />
                                 </ProtectedRoute>
                             }
@@ -282,8 +306,17 @@ const AppContent = () => {
                         <Route
                             path="/print-operator"
                             element={
-                                <ProtectedRoute>
+                                <ProtectedRoute requireFlag="is_printer_operator">
                                     <PrintOperatorPage />
+                                </ProtectedRoute>
+                            }
+                        />
+
+                        <Route
+                            path="/print-cost"
+                            element={
+                                <ProtectedRoute requireAnyFlag={['is_printer_coordinator', 'is_printer_operator']} allowAdmin>
+                                    <PrintingCostPage />
                                 </ProtectedRoute>
                             }
                         />
@@ -291,7 +324,7 @@ const AppContent = () => {
                         <Route
                             path="/print-reports"
                             element={
-                                <ProtectedRoute>
+                                <ProtectedRoute requireFlag="is_printer_coordinator">
                                     <PrintReportsPage />
                                 </ProtectedRoute>
                             }
@@ -300,7 +333,7 @@ const AppContent = () => {
                         <Route
                             path="/print-logs"
                             element={
-                                <ProtectedRoute>
+                                <ProtectedRoute requireFlag="is_printer_coordinator">
                                     <PrintLogsPage />
                                 </ProtectedRoute>
                             }

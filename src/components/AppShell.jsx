@@ -25,6 +25,7 @@ const pageTitleMap = {
   '/job-history': 'My Printing Jobs',
   '/print-coordinator': 'Printing Coordinator',
   '/print-operator': 'Printer Operator',
+  '/print-cost': 'Printing Cost',
   '/print-reports': 'Printing Reports',
   '/print-logs': 'Printing Activity Log',
   '/track-claims': 'Track Claims',

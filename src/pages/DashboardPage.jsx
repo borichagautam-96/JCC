@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { formatDate, formatDateTime } from '../utils/datetime';
 
 const DashboardPage = () => {
     const DEFAULT_ASSIGNED_INVOICES_LIMIT = 5;
@@ -302,13 +303,6 @@ const DashboardPage = () => {
         }
     };
 
-    const formatDateTime = (dateValue) => {
-        if (!dateValue) return '-';
-        const parsedDate = new Date(dateValue);
-        if (Number.isNaN(parsedDate.getTime())) return '-';
-        return parsedDate.toLocaleString();
-    };
-
     const safeVendorDues = Array.isArray(dashboardData?.vendorDues) ? dashboardData.vendorDues : [];
 
     const filteredVendorDues = safeVendorDues.filter((vendor) => {
@@ -433,21 +427,21 @@ const DashboardPage = () => {
                 <div className="card-grid mb-xl" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
                     <div className="metric-card">
                         <h3 className="metric-label">Total Dues</h3>
-                        <p className="metric-value" style={{ color: '#2563eb' }}>
+                        <p className="metric-value" style={{ color: 'var(--stat-blue)' }}>
                             ₹{dashboardData.totalDues.toLocaleString()}
                         </p>
                     </div>
 
                     <div className="metric-card">
                         <h3 className="metric-label">Pending Invoices</h3>
-                        <p className="metric-value" style={{ color: '#d97706' }}>
+                        <p className="metric-value" style={{ color: 'var(--stat-amber)' }}>
                             {dashboardData.pendingInvoices}
                         </p>
                     </div>
 
                     <div className="metric-card">
                         <h3 className="metric-label">Approved Invoices</h3>
-                        <p className="metric-value" style={{ color: '#059669' }}>
+                        <p className="metric-value" style={{ color: 'var(--stat-emerald)' }}>
                             {dashboardData.approvedInvoices}
                         </p>
                     </div>
@@ -481,7 +475,7 @@ const DashboardPage = () => {
                                             <td>{invoice.po_number || '-'}</td>
                                             <td>{invoice.vendor_name}</td>
                                             <td>₹{invoice.amount?.toLocaleString()}</td>
-                                            <td>{new Date(invoice.invoice_date).toLocaleDateString()}</td>
+                                            <td>{formatDate(invoice.invoice_date)}</td>
                                             <td>{invoice.assigned_by_name || invoice.uploader_name || '-'}</td>
                                             {isAdmin && <td>{invoice.assigned_to_name || invoice.assigned_to || '-'}</td>}
                                             <td style={{ width: '240px', minWidth: '240px', verticalAlign: 'middle', textAlign: 'center', paddingRight: '1.25rem' }}>
@@ -575,7 +569,7 @@ const DashboardPage = () => {
                                             </td>
                                             <td>{getApprovalOwner(vendor)}</td>
                                             <td>{getApprovalTime(vendor)}</td>
-                                            <td className="text-muted">{new Date(vendor.last_updated).toLocaleDateString()}</td>
+                                            <td className="text-muted">{formatDate(vendor.last_updated)}</td>
                                         </tr>
                                     ))
                                 )}
@@ -704,7 +698,7 @@ const DashboardPage = () => {
                             </div>
 
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
-                                <div><strong>Date:</strong> {selectedTrackedInvoice.invoice_date ? new Date(selectedTrackedInvoice.invoice_date).toLocaleDateString() : '-'}</div>
+                                <div><strong>Date:</strong> {formatDate(selectedTrackedInvoice.invoice_date)}</div>
                                 <div><strong>Vendor:</strong> {selectedTrackedInvoice.vendor_name || '-'}</div>
                                 <div>
                                     <strong>Invoice No:</strong> {selectedTrackedInvoice.invoice_number || '-'}

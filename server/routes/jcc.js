@@ -16,6 +16,7 @@ const __dirname = path.dirname(__filename);
 
 import { extractInvoiceData } from '../utils/ocrProcessor.js';
 import { extractPdfWithOpenDataLoader } from '../services/pdfExtractor.js';
+import { formatStoredDateDMY } from '../utils/datetime.js';
 
 const router = express.Router();
 
@@ -67,10 +68,13 @@ const generateApprovalToken = (voucherId, level, approverId) =>
     { expiresIn: APPROVAL_TOKEN_TTL }
   );
 
+// Points at the in-app approval screen. That route is public (the token carries the
+// authority) and renders the claim inside the portal instead of a bare API page.
+// /api/jcc/approve-via-link/:token still works for links already sitting in inboxes.
 const approvalLink = (voucherId, level, approverId) => {
   const base = (process.env.APP_BASE_URL || '').trim().replace(/\/$/, '');
   if (!base) return '';
-  return `${base}/api/jcc/approve-via-link/${generateApprovalToken(voucherId, level, approverId)}`;
+  return `${base}/approve/${generateApprovalToken(voucherId, level, approverId)}`;
 };
 
 const setPaymentTimestamps = (status) => {
@@ -868,11 +872,7 @@ const createVoucherPdfArtifact = async (voucherId) => {
 
   const creatorFromUserManagement = db.prepare('SELECT name, ps_number FROM users WHERE id = ?').get(voucher.user_id);
 
-  const formatDate = (dateStr) => {
-    if (!dateStr) return '-';
-    const date = new Date(dateStr);
-    return `${String(date.getDate()).padStart(2, '0')}-${String(date.getMonth() + 1).padStart(2, '0')}-${date.getFullYear()}`;
-  };
+  const formatDate = (dateStr) => formatStoredDateDMY(dateStr);
 
   let supplierCode = '';
   let supplierAddress = '';
@@ -4115,6 +4115,44 @@ const checkApprovable = (payload, voucher) => {
 };
 
 // GET — show a confirmation page (does NOT approve; protects against link scanners)
+// Details for the in-app approval screen reached from an email link. The signed
+// token is the credential here — the approver may not be logged in, which is the
+// entire point of one-click approval from a mail client.
+router.get('/approval-link/:token', (req, res) => {
+  const { token } = req.params;
+  const { payload, voucher, error } = resolveApprovalToken(token);
+  if (error) return res.status(400).json({ ok: false, reason: 'invalid', error });
+
+  const jccId = voucher.jcc_number || `JCC${String(voucher.id).padStart(4, '0')}`;
+  const notActionable = checkApprovable(payload, voucher);
+  const approver = db.prepare('SELECT name FROM users WHERE id = ?').get(payload.approverId);
+
+  return res.json({
+    ok: !notActionable,
+    reason: notActionable ? 'not_actionable' : null,
+    error: notActionable || null,
+    jccId,
+    level: payload.level,
+    levelLabel: payload.level === 1 ? 'Level 1 (Manager) Approval' : 'Final Approval',
+    approverName: approver?.name || null,
+    voucher: {
+      id: voucher.id,
+      supplier: voucher.supplier,
+      invoiceNumber: voucher.invoice_number,
+      invoiceDate: voucher.invoice_date,
+      claimedBy: voucher.claimed_by,
+      department: voucher.department,
+      poNumber: voucher.po_number,
+      basicAmount: voucher.basic_amount,
+      grossAmount: voucher.gross_amount,
+      natureOfExpenses: voucher.nature_of_expenses,
+      description: voucher.description,
+      status: voucher.status,
+      claimedDate: voucher.claimed_date,
+    },
+  });
+});
+
 router.get('/approve-via-link/:token', (req, res) => {
   const { token } = req.params;
   const { payload, voucher, error } = resolveApprovalToken(token);
@@ -4145,13 +4183,22 @@ router.get('/approve-via-link/:token', (req, res) => {
 // POST — perform the approval
 router.post('/approve-via-link/:token', (req, res) => {
   const { token } = req.params;
+  // Old emails POST a plain <form> and need HTML back; the in-app screen asks for
+  // JSON. One handler, two renderings — so links already in inboxes keep working.
+  const wantsJson = (req.get('accept') || '').includes('application/json');
   const { payload, voucher, error } = resolveApprovalToken(token);
-  if (error) return res.status(400).send(htmlPage('Approval', `<h2 style="margin-top:0;color:#B91C1C;">Link error</h2><p style="color:#334155;">${error}</p>`, '#B91C1C'));
+  if (error) {
+    return wantsJson
+      ? res.status(400).json({ ok: false, reason: 'invalid', error })
+      : res.status(400).send(htmlPage('Approval', `<h2 style="margin-top:0;color:#B91C1C;">Link error</h2><p style="color:#334155;">${error}</p>`, '#B91C1C'));
+  }
 
   const notActionable = checkApprovable(payload, voucher);
   const jccId = voucher.jcc_number || `JCC${String(voucher.id).padStart(4, '0')}`;
   if (notActionable) {
-    return res.status(200).send(htmlPage('Approval', `<h2 style="margin-top:0;color:#B45309;">Already handled</h2><p style="color:#334155;">${notActionable}</p>`, '#B45309'));
+    return wantsJson
+      ? res.status(409).json({ ok: false, reason: 'not_actionable', error: notActionable, jccId })
+      : res.status(200).send(htmlPage('Approval', `<h2 style="margin-top:0;color:#B45309;">Already handled</h2><p style="color:#334155;">${notActionable}</p>`, '#B45309'));
   }
 
   try {
@@ -4194,13 +4241,21 @@ router.post('/approve-via-link/:token', (req, res) => {
       }
     }
 
+    const outcome = payload.level === 1
+      ? 'approved at Level 1 and sent for Final Approval'
+      : 'fully approved';
+    if (wantsJson) {
+      return res.json({ ok: true, jccId, level: payload.level, outcome, message: `${jccId} has been ${outcome}.` });
+    }
     const successBody = `<h2 style="margin-top:0;color:#059669;">✓ Approved</h2>
-      <p style="color:#334155;"><strong>${jccId}</strong> has been ${payload.level === 1 ? 'approved at Level 1 and sent for Final Approval' : 'fully approved'}.</p>
+      <p style="color:#334155;"><strong>${jccId}</strong> has been ${outcome}.</p>
       <p style="color:#64748B;font-size:13px;">You can close this page.</p>`;
     return res.status(200).send(htmlPage(`Approved ${jccId}`, successBody, '#059669'));
   } catch (err) {
     console.error('Error approving via link:', err);
-    return res.status(500).send(htmlPage('Approval', `<h2 style="margin-top:0;color:#B91C1C;">Something went wrong</h2><p style="color:#334155;">Could not approve right now. Please try from the portal.</p>`, '#B91C1C'));
+    return wantsJson
+      ? res.status(500).json({ ok: false, reason: 'server_error', error: 'Could not approve right now. Please try from the portal.' })
+      : res.status(500).send(htmlPage('Approval', `<h2 style="margin-top:0;color:#B91C1C;">Something went wrong</h2><p style="color:#334155;">Could not approve right now. Please try from the portal.</p>`, '#B91C1C'));
   }
 });
 

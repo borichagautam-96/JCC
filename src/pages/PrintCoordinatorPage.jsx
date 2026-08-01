@@ -1,19 +1,19 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
+import { formatDateTime, msSince } from '../utils/datetime';
+import SubmissionDiff from '../components/SubmissionDiff';
 
 const TABS = [
     { key: 'pending', label: 'Pending Verification' },
     { key: 'queue', label: 'Print Queue' },
+    { key: 'proof', label: 'Proof & Rework' },
     { key: 'ready', label: 'Ready for Collection' },
+    { key: 'awaiting', label: 'Awaiting Receipt' },
     { key: 'dispatched', label: 'In Transit' },
 ];
 
-const formatDate = (v) => {
-    if (!v) return '-';
-    const d = new Date(v);
-    return Number.isNaN(d.getTime()) ? '-' : d.toLocaleString();
-};
+const formatDate = (v) => formatDateTime(v);
 
 // Audit action code → friendly label + dot colour for the activity timeline.
 const ACTION_META = {
@@ -30,7 +30,21 @@ const ACTION_META = {
     READY_FOR_COLLECTION: { label: 'Ready for collection', color: '#16A34A' },
     DISPATCH_PRINT_JOB: { label: 'Dispatched (courier)', color: '#7C3AED' },
     DELIVER_PRINT_JOB: { label: 'Delivered', color: '#15803D' },
+    HANDOVER_PRINT_JOB: { label: 'Handed over — awaiting confirmation', color: '#D97706' },
+    CONFIRM_PRINT_RECEIPT: { label: 'Receipt confirmed by requestor', color: '#15803D' },
     COMPLETE_PRINT_JOB: { label: 'Collected & closed', color: '#15803D' },
+    CLONE_PRINT_REQUEST: { label: 'Cloned from another request', color: 'var(--text-muted)' },
+    RECALL_PRINT_JOB: { label: 'Recalled for correction', color: '#D97706' },
+    RELEASE_PROOF: { label: 'Proof copy released', color: '#2563EB' },
+    PROOF_APPROVED: { label: 'Proof approved', color: '#15803D' },
+    REWORK_REQUESTED: { label: 'Corrections reported', color: '#EA580C' },
+    REQUEST_REWORK: { label: 'Rework requested by requestor', color: '#D97706' },
+    CREATE_REWORK: { label: 'Rework created', color: '#D97706' },
+    ASSIGN_REWORK: { label: 'Rework assigned to operator', color: '#4F46E5' },
+    START_REWORK: { label: 'Rework printing started', color: '#7C3AED' },
+    COMPLETE_REWORK: { label: 'Rework completed', color: '#15803D' },
+    CANCEL_REWORK: { label: 'Rework cancelled', color: '#DC2626' },
+    REPLACE_DOCUMENT_PDF: { label: 'Document PDF replaced', color: '#D97706' },
 };
 const actionMeta = (a) => ACTION_META[a] || { label: a, color: 'var(--text-muted)' };
 
@@ -41,6 +55,10 @@ const PrintCoordinatorPage = () => {
     const [pending, setPending] = useState([]);
     const [queue, setQueue] = useState([]);
     const [ready, setReady] = useState([]);
+    const [awaiting, setAwaiting] = useState([]);
+    const [proof, setProof] = useState([]);
+    const [versions, setVersions] = useState({});      // jobId -> version rows
+    const [changeLog, setChangeLog] = useState({});   // jobId -> submissions[]
     const [dispatched, setDispatched] = useState([]);
     const [operators, setOperators] = useState([]);
     const [assignChoice, setAssignChoice] = useState({}); // jobId -> operatorId
@@ -58,16 +76,20 @@ const PrintCoordinatorPage = () => {
 
     const fetchAll = useCallback(async () => {
         try {
-            const [p, q, r, d, o] = await Promise.all([
+            const [p, q, r, w, d, o, pr] = await Promise.all([
                 fetch('/api/jobs/pending', { headers: authHeaders() }),
                 fetch('/api/jobs/queue', { headers: authHeaders() }),
                 fetch('/api/jobs/ready', { headers: authHeaders() }),
+                fetch('/api/jobs/awaiting-receipt', { headers: authHeaders() }),
                 fetch('/api/jobs/dispatched', { headers: authHeaders() }),
                 fetch('/api/jobs/operators', { headers: authHeaders() }),
+                fetch('/api/jobs/proof-review', { headers: authHeaders() }),
             ]);
+            if (pr.ok) setProof(await pr.json());
             if (p.ok) setPending(await p.json());
             if (q.ok) setQueue(await q.json());
             if (r.ok) setReady(await r.json());
+            if (w.ok) setAwaiting(await w.json());
             if (d.ok) setDispatched(await d.json());
             if (o.ok) setOperators(await o.json());
         } catch (e) {
@@ -121,7 +143,10 @@ const PrintCoordinatorPage = () => {
     };
 
     const collect = async (job) => {
-        const ok = await dialog.confirm(`Confirm ${job.job_number} was handed over to ${job.requestor_name}? It becomes read-only.`, { title: 'Confirm handover' });
+        const ok = await dialog.confirm(
+            `Confirm you handed ${job.job_number} to ${job.requestor_name}? It moves to Awaiting Receipt until they confirm they got it.`,
+            { title: 'Confirm handover' }
+        );
         if (!ok) return;
         act(`/api/jobs/${job.id}/collect`, { method: 'POST', body: '{}' });
     };
@@ -305,19 +330,112 @@ const PrintCoordinatorPage = () => {
                 <span style={{ marginLeft: '0.4rem', fontSize: '0.68rem', fontWeight: 700, color: '#B91C1C', background: '#FEE2E2', borderRadius: '6px', padding: '1px 5px' }}>🔥 RUSH</span>
             )}
             <div style={{ fontSize: '0.72rem', color: 'var(--text-faint)', fontWeight: 400 }}>{job.request_id}</div>
+            {job.submission_seq > 1 && (
+                <div style={{ fontSize: '0.7rem', color: 'var(--stat-amber)', fontWeight: 600 }}>
+                    ↻ Resubmitted (v{job.submission_seq})
+                </div>
+            )}
             {job.location_name && (
                 <div style={{ fontSize: '0.72rem', color: '#0369A1', fontWeight: 600 }}>📍 {job.location_name}</div>
             )}
         </td>
     );
 
+    // ── Proof review + rework ────────────────────────────────────────────────
+    const EMPTY_REWORK = {
+        file: null, modified_pages: '', additional_pages: '0',
+        insert_mode: 'end', insert_page: '', change_description: '',
+        coordinator_remarks: '', operator_id: '',
+    };
+
+    // Loads the submission history so the latest diff can be shown against the row.
+    // Clicking again collapses it, so the list stays scannable.
+    const toggleChanges = async (jobId) => {
+        if (changeLog[jobId]) {
+            setChangeLog((prev) => { const next = { ...prev }; delete next[jobId]; return next; });
+            return;
+        }
+        try {
+            const res = await fetch(`/api/jobs/${jobId}/submissions`, { headers: authHeaders() });
+            if (!res.ok) return;
+            const data = await res.json();
+            setChangeLog((prev) => ({ ...prev, [jobId]: data.submissions || [] }));
+        } catch (e) {
+            console.warn('change log load failed', e);
+        }
+    };
+
+    const loadVersions = async (jobId) => {
+        try {
+            const res = await fetch(`/api/jobs/${jobId}/versions`, { headers: authHeaders() });
+            if (!res.ok) return;
+            const rows = await res.json();
+            setVersions((prev) => ({ ...prev, [jobId]: rows }));
+        } catch (e) { console.warn('version load failed', e); }
+    };
+
+    const releaseProof = async (job) => {
+        const ok = await dialog.confirm(
+            `Give ${job.job_number} to ${job.requestor_name} as a proof copy? It moves to Proof & Rework until they report back.`,
+            { title: 'Send for proof review', confirmLabel: 'Send for review' }
+        );
+        if (!ok) return;
+        act(`/api/jobs/${job.id}/release-proof`, { method: 'POST', body: '{}' });
+    };
+
+    const proofVerdict = async (job, approved) => {
+        if (approved) {
+            const ok = await dialog.confirm(
+                `Mark ${job.job_number} approved? It moves to Ready for Collection.`,
+                { title: 'Proof approved' }
+            );
+            if (!ok) return;
+        }
+        act(`/api/jobs/${job.id}/proof-verdict`, { method: 'POST', body: JSON.stringify({ approved }) });
+    };
+
+    const cancelRework = async (job) => {
+        const reason = await dialog.prompt(`Cancel ${job.open_rework_id}? Give a reason for the record:`,
+            { title: 'Cancel rework', placeholder: 'e.g. wrong PDF attached', multiline: true });
+        if (reason == null) return;
+        if (!reason.trim()) { await dialog.alert('A reason is required.', { title: 'Missing reason', variant: 'warning' }); return; }
+        act(`/api/jobs/${job.id}/reworks/${job.open_rework_row_id}/cancel`,
+            { method: 'POST', body: JSON.stringify({ reason: reason.trim() }) });
+    };
+
+    const openVersionPdf = async (jobId, v) => {
+        const url = v.rework_row_id
+            ? `/api/jobs/${jobId}/reworks/${v.rework_row_id}/file`
+            : `/api/jobs/${jobId}/documents/${v.document_id}/file`;
+        try {
+            const res = await fetch(url, { headers: authHeaders() });
+            if (!res.ok) return;
+            const blob = await res.blob();
+            const objectUrl = window.URL.createObjectURL(blob);
+            window.open(objectUrl, '_blank', 'noopener');
+            setTimeout(() => window.URL.revokeObjectURL(objectUrl), 60000);
+        } catch (e) { console.warn('open version failed', e); }
+    };
+
     // Search across the active tab; rush toggle; SLA aging colour on timestamps.
     const q = search.trim().toLowerCase();
     const filterList = (list) => (!q ? list : list.filter((j) => [(j.job_number || ''), (j.request_id || ''), (j.requestor_name || '')].some((v) => v.toLowerCase().includes(q))));
     const toggleRush = (job) => act(`/api/jobs/${job.id}/priority`, { method: 'POST', body: JSON.stringify({ rush: Number(job.priority) === 1 ? 0 : 1 }) });
+    // How long a handover has sat unconfirmed — the coordinator's cue to chase.
+    const waitingLabel = (dateStr) => {
+        const elapsed = msSince(dateStr);
+        if (elapsed === null) return '-';
+        const hrs = Math.floor(elapsed / 3.6e6);
+        if (hrs < 1) return 'just now';
+        if (hrs < 24) return `${hrs}h`;
+        const days = Math.floor(hrs / 24);
+        return `${days} day${days === 1 ? '' : 's'}`;
+    };
+
     const agingCell = (dateStr) => {
-        if (!dateStr) return { color: 'var(--text-muted)' };
-        const hrs = (Date.now() - new Date(dateStr).getTime()) / 3.6e6;
+        const elapsed = msSince(dateStr);
+        if (elapsed === null) return { color: 'var(--text-muted)' };
+        const hrs = elapsed / 3.6e6;
         if (hrs >= 48) return { color: '#B91C1C', fontWeight: 600 }; // > 2 days
         if (hrs >= 24) return { color: '#B45309', fontWeight: 600 }; // > 1 day
         return { color: 'var(--text-muted)' };
@@ -341,7 +459,7 @@ const PrintCoordinatorPage = () => {
                 {/* Tabs */}
                 <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
                     {TABS.map((t) => {
-                        const counts = { pending: pending.length, queue: queue.length, ready: ready.length, dispatched: dispatched.length };
+                        const counts = { pending: pending.length, queue: queue.length, proof: proof.length, ready: ready.length, awaiting: awaiting.length, dispatched: dispatched.length };
                         const count = counts[t.key] || 0;
                         return (
                             <button
@@ -392,9 +510,28 @@ const PrintCoordinatorPage = () => {
                                                     <button className="btn btn-sm btn-outline" disabled={busy} onClick={() => returnJob(job)}>Return</button>
                                                     <button className="btn btn-sm btn-outline" style={{ color: '#DC2626', borderColor: '#FCA5A5' }} disabled={busy} onClick={() => reject(job)}>Reject</button>
                                                     {rushBtn(job)}
+                                                    {job.submission_seq > 1 && (
+                                                        <button className="btn btn-sm btn-outline"
+                                                                style={{ color: 'var(--stat-amber)', borderColor: 'var(--stat-amber)' }}
+                                                                onClick={() => toggleChanges(job.id)}
+                                                                title="This was resubmitted after an edit \u2014 see what changed">
+                                                            {changeLog[job.id] ? 'Hide changes' : 'What changed?'}
+                                                        </button>
+                                                    )}
                                                 </div>
                                             </td>
                                         </tr>
+                                        {changeLog[job.id] && (
+                                            <tr>
+                                                <td colSpan="7" style={{ background: 'var(--surface-2)' }}>
+                                                    <div style={{ padding: '0.6rem 0.2rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                                                        {[...changeLog[job.id]].reverse().map((sub) => (
+                                                            <SubmissionDiff key={sub.seq} submission={sub} />
+                                                        ))}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        )}
                                         {docsRow(job.id, 7)}
                                         </React.Fragment>
                                     ))}
@@ -477,9 +614,139 @@ const PrintCoordinatorPage = () => {
                                             <td style={{ textAlign: 'center' }}>
                                                 <div style={{ display: 'flex', gap: '0.35rem', justifyContent: 'center', flexWrap: 'wrap' }}>
                                                     <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => collect(job)}>Confirm Handover</button>
+                                                    <button className="btn btn-sm btn-outline" disabled={busy} onClick={() => releaseProof(job)}
+                                                            title="Give the requestor a proof copy to check before final handover">Send for proof review</button>
                                                     <button className="btn btn-sm btn-outline" disabled={busy} onClick={() => openDispatch(job)}>Dispatch</button>
                                                 </div>
                                             </td>
+                                        </tr>
+                                        {docsRow(job.id, 6)}
+                                        </React.Fragment>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                )}
+
+                {/* Proof review + rework — the correction loop */}
+                {tab === 'proof' && (
+                    <div className="glass-card">
+                        <p className="text-muted" style={{ margin: '0 0 0.85rem', fontSize: '0.85rem' }}>
+                            Jobs whose proof copy is with the requestor. Record their verdict here; when they
+                            send a revised PDF it appears below for you to assign to an operator.
+                        </p>
+                        <div className="table-container">
+                            <table className="table">
+                                <thead>
+                                    <tr><th>Job No</th><th>Requestor</th><th>Ver</th><th>State</th><th>Proof Released</th><th style={{ textAlign: 'center' }}>Action</th></tr>
+                                </thead>
+                                <tbody>
+                                    {filterList(proof).length === 0 ? (
+                                        <tr><td colSpan="6" className="text-center" style={{ color: 'var(--text-muted)', padding: '2rem' }}>Nothing under proof review.</td></tr>
+                                    ) : filterList(proof).map((job) => (
+                                        <React.Fragment key={job.id}>
+                                        <tr>
+                                            {jobCell(job)}
+                                            <td>{job.requestor_name}</td>
+                                            <td><span className="status-pill" style={{ background: 'var(--surface-3)', color: 'var(--text-strong)' }}>V{job.current_version || 1}</span></td>
+                                            <td>
+                                                {job.status === 'proof_review' && <span className="status-pill status-pill-pending">Awaiting verdict</span>}
+                                                {job.status === 'rework_requested' && (job.open_rework_id
+                                                    ? <span className="status-pill status-pill-pending">
+                                                          {job.open_rework_id} {job.open_rework_operator_id ? 'queued' : '\u2014 needs operator'}
+                                                      </span>
+                                                    : <span className="status-pill status-pill-pending">Awaiting revised PDF</span>)}
+                                                {job.status === 'rework_printing' && <span className="status-pill status-pill-pending">Reprinting</span>}
+                                            </td>
+                                            <td className="text-muted">{formatDate(job.proof_released_at)}</td>
+                                            <td style={{ textAlign: 'center' }}>
+                                                <div style={{ display: 'flex', gap: '0.35rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+                                                    {job.status === 'proof_review' && (
+                                                        <>
+                                                            <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => proofVerdict(job, true)}>Proof approved</button>
+                                                            <button className="btn btn-sm btn-outline" disabled={busy} onClick={() => proofVerdict(job, false)}>Corrections required</button>
+                                                        </>
+                                                    )}
+                                                    {job.open_rework_id && job.open_rework_status === 'pending' && !job.open_rework_operator_id && (
+                                                        <>
+                                                            <select
+                                                                className="input-field"
+                                                                style={{ height: '30px', fontSize: '0.78rem', minWidth: '150px', padding: '0 0.4rem' }}
+                                                                value={assignChoice[`rw-${job.id}`] || ''}
+                                                                onChange={(e) => setAssignChoice({ ...assignChoice, [`rw-${job.id}`]: e.target.value })}
+                                                            >
+                                                                <option value="">Assign operator…</option>
+                                                                {operators.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                                                            </select>
+                                                            <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => assignRework(job)}>Assign</button>
+                                                        </>
+                                                    )}
+                                                    {job.open_rework_id && job.open_rework_status === 'pending' && (
+                                                        <button className="btn btn-sm btn-outline" disabled={busy} onClick={() => cancelRework(job)}>Cancel rework</button>
+                                                    )}
+                                                    <button className="btn btn-sm btn-outline" onClick={() => loadVersions(job.id)}>Versions</button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                        {versions[job.id] && (
+                                            <tr>
+                                                <td colSpan="6" style={{ background: 'var(--surface-2)' }}>
+                                                    <div style={{ padding: '0.6rem 0.2rem' }}>
+                                                        <strong style={{ fontSize: '0.82rem', color: 'var(--text-strong)' }}>Version history</strong>
+                                                        <table className="table" style={{ marginTop: '0.5rem' }}>
+                                                            <thead>
+                                                                <tr><th>Ver</th><th>Uploaded By</th><th>Date</th><th>Modified Pages</th><th>Addl</th><th>PDF</th></tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                {versions[job.id].map((v) => (
+                                                                    <tr key={v.version_no}>
+                                                                        <td style={{ fontWeight: 700 }}>V{v.version_no}</td>
+                                                                        <td>{v.uploaded_by} <span className="text-muted" style={{ fontSize: '0.75rem' }}>({v.uploaded_by_role})</span></td>
+                                                                        <td className="text-muted">{formatDate(v.uploaded_at)}</td>
+                                                                        <td>{v.modified_pages || '—'}</td>
+                                                                        <td>{v.additional_pages ? `+${v.additional_pages}` : '0'}</td>
+                                                                        <td><button className="btn btn-sm btn-outline" onClick={() => openVersionPdf(job.id, v)}>Open</button></td>
+                                                                    </tr>
+                                                                ))}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        )}
+                                        </React.Fragment>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                )}
+
+                {/* Handed over, waiting on the requestor to confirm they got the materials */}
+                {tab === 'awaiting' && (
+                    <div className="glass-card">
+                        <p className="text-muted" style={{ margin: '0 0 0.85rem', fontSize: '0.85rem' }}>
+                            Handed over but not yet confirmed by the requestor. These stay open until they confirm —
+                            chase anything sitting here more than a day.
+                        </p>
+                        <div className="table-container">
+                            <table className="table">
+                                <thead>
+                                    <tr><th>Job No</th><th>Requestor</th><th>Handed Over By</th><th>Docs</th><th>Waiting Since</th><th style={{ textAlign: 'center' }}>Waiting</th></tr>
+                                </thead>
+                                <tbody>
+                                    {filterList(awaiting).length === 0 ? (
+                                        <tr><td colSpan="6" className="text-center" style={{ color: 'var(--text-muted)', padding: '2rem' }}>Nothing awaiting confirmation.</td></tr>
+                                    ) : filterList(awaiting).map((job) => (
+                                        <React.Fragment key={job.id}>
+                                        <tr>
+                                            {jobCell(job)}
+                                            <td>{job.requestor_name}</td>
+                                            <td>{job.handed_over_by || '-'}</td>
+                                            {docsCell(job)}
+                                            <td className="text-muted">{formatDate(job.handed_over_at)}</td>
+                                            <td style={{ textAlign: 'center' }} className="text-muted">{waitingLabel(job.handed_over_at)}</td>
                                         </tr>
                                         {docsRow(job.id, 6)}
                                         </React.Fragment>

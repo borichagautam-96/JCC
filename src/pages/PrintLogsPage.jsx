@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import DatePicker from '../components/DatePicker';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
+import { formatDateTime } from '../utils/datetime';
 
 const ACTION_META = {
     CREATE_PRINT_REQUEST: { label: 'Request created', color: 'var(--text-muted)' },
@@ -16,16 +17,26 @@ const ACTION_META = {
     READY_FOR_COLLECTION: { label: 'Ready for collection', color: '#16A34A' },
     DISPATCH_PRINT_JOB: { label: 'Dispatched (courier)', color: '#7C3AED' },
     DELIVER_PRINT_JOB: { label: 'Delivered', color: '#15803D' },
+    HANDOVER_PRINT_JOB: { label: 'Handed over — awaiting confirmation', color: '#D97706' },
+    CONFIRM_PRINT_RECEIPT: { label: 'Receipt confirmed by requestor', color: '#15803D' },
     COMPLETE_PRINT_JOB: { label: 'Collected & closed', color: '#15803D' },
+    CLONE_PRINT_REQUEST: { label: 'Cloned from another request', color: 'var(--text-muted)' },
+    RECALL_PRINT_JOB: { label: 'Recalled for correction', color: '#D97706' },
+    RELEASE_PROOF: { label: 'Proof copy released', color: '#2563EB' },
+    PROOF_APPROVED: { label: 'Proof approved', color: '#15803D' },
+    REWORK_REQUESTED: { label: 'Corrections reported', color: '#EA580C' },
+    REQUEST_REWORK: { label: 'Rework requested by requestor', color: '#D97706' },
+    CREATE_REWORK: { label: 'Rework created', color: '#D97706' },
+    ASSIGN_REWORK: { label: 'Rework assigned to operator', color: '#4F46E5' },
+    START_REWORK: { label: 'Rework printing started', color: '#7C3AED' },
+    COMPLETE_REWORK: { label: 'Rework completed', color: '#15803D' },
+    CANCEL_REWORK: { label: 'Rework cancelled', color: '#DC2626' },
+    REPLACE_DOCUMENT_PDF: { label: 'Document PDF replaced', color: '#D97706' },
 };
 const meta = (a) => ACTION_META[a] || { label: a, color: 'var(--text-muted)' };
 
 const PAGE_SIZE = 25; // jobs per page
-const formatDate = (v) => {
-    if (!v) return '-';
-    const d = new Date(v);
-    return Number.isNaN(d.getTime()) ? v : d.toLocaleString();
-};
+const formatDate = (v) => formatDateTime(v);
 
 const PrintLogsPage = () => {
     const { getToken } = useAuth();

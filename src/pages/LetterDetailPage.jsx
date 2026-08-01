@@ -3,6 +3,7 @@ import DatePicker from '../components/DatePicker';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
+import { formatDate } from '../utils/datetime';
 
 const LetterDetailPage = () => {
     const { id } = useParams();
@@ -319,7 +320,7 @@ const LetterDetailPage = () => {
                             />
                         ) : (
                             <p style={{ margin: 0, color: 'var(--text-muted)' }}>
-                                {letter.received_date ? new Date(letter.received_date).toLocaleDateString() : '-'}
+                                {formatDate(letter.received_date)}
                             </p>
                         )}
                     </div>

@@ -2,28 +2,7 @@ import React from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import LogoutButton from './LogoutButton';
-import {
-    LayoutDashboard,
-    Upload,
-    FileText,
-    PlusSquare,
-    History,
-    Laptop,
-    RefreshCcw,
-    BellRing,
-    CheckSquare,
-    Users,
-    ReceiptText,
-    Building2,
-    MessageSquareText,
-    Activity,
-    LogOut,
-    BookOpen,
-    Printer,
-    Home,
-    BarChart3,
-    MapPin,
-} from 'lucide-react';
+import { LayoutDashboard, Upload, FileText, PlusSquare, History, Laptop, RefreshCcw, BellRing, CheckSquare, Users, ReceiptText, Building2, MessageSquareText, Activity, LogOut, BookOpen, Printer, Home, BarChart3, MapPin, Receipt } from 'lucide-react';
 
 const SHOW_ADMIN_LOGS = import.meta.env.VITE_SHOW_ADMIN_LOGS === 'true';
 const ENABLE_ASSET_MODULE = import.meta.env.VITE_ENABLE_ASSET_MODULE === 'true';
@@ -39,8 +18,17 @@ const Navbar = ({ isOpen, onOpenTeam }) => {
     // Which module are we in? Printing paths get the printing sidebar; everything
     // else gets the JCC sidebar. This keeps the two sections visually separate.
     const isPrinting = location.pathname.startsWith('/job-') || location.pathname.startsWith('/print-');
-    const isOperator = Number(user?.is_printer_operator) === 1 || user?.role === 'admin';
-    const isPrintCoordinator = Number(user?.is_printer_coordinator) === 1 || user?.role === 'admin';
+    // Printing capability comes from the module flags only. A JCC role — admin
+    // included — does not imply it; an admin who needs these screens grants
+    // themselves the flag in User Management.
+    const isOperator = Number(user?.is_printer_operator) === 1;
+    const isPrintCoordinator = Number(user?.is_printer_coordinator) === 1;
+    // Rates and cost annexures are finance-adjacent rather than an operational queue,
+    // and the API (canViewRates) already answers an admin. Mirror that here so the
+    // link isn't hidden from someone the server would serve. Deliberately narrower
+    // than the coordinator queues, which stay on the module flag alone.
+    // Operators reach it as well: they correct cost annexures against the card.
+    const canViewRates = isPrintCoordinator || isOperator || user?.role === 'admin';
     const canRequestPrint = ['initiator', 'user', 'admin'].includes(user?.role);
 
     const navClass = (active) =>
@@ -96,6 +84,15 @@ const Navbar = ({ isOpen, onOpenTeam }) => {
                                     <span>New Printing Job</span>
                                 </Link>
                             </>
+                        )}
+                        {/* Sits directly under New Printing Job as requested, but gated on the
+                            coordinator flag: rate cards and cross-department spend are not for
+                            every requestor. */}
+                        {canViewRates && (
+                            <Link to="/print-cost" className={navClass(isActive('/print-cost'))}>
+                                <Receipt size={18} />
+                                <span>Printing Cost</span>
+                            </Link>
                         )}
                         {isPrintCoordinator && (
                             <Link to="/print-coordinator" className={navClass(isActive('/print-coordinator'))}>

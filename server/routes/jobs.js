@@ -2,6 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import db from '../database.js';
 import { authenticateToken, authorizeRoles } from '../middleware/auth.js';
@@ -13,7 +14,15 @@ import {
   notifyPrintJobAssigned,
   notifyPrintJobReady,
   notifyPrintJobCompleted,
+  notifyPrintJobAwaitingReceipt,
+  notifyPrintJobReceiptConfirmed,
+  notifyPrintProofReleased,
+  notifyPrintReworkAssigned,
+  notifyPrintReworkCompleted,
+  notifyPrintReworkRequested,
 } from '../utils/emailService.js';
+import { parsePageList, describePageList } from '../utils/pageRanges.js';
+import { diffSubmissions, summariseDiff, rollUps, HEADER_FIELDS } from '../utils/jobDiff.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,7 +32,13 @@ const router = express.Router();
 // Roles allowed to raise a printing request (same set that creates JCCs).
 const REQUESTOR_ROLES = ['initiator', 'user', 'admin'];
 // Editable states — the requestor may add/remove documents and resubmit only here.
-const EDITABLE_STATES = ['draft', 'returned'];
+const EDITABLE_STATES = ['draft', 'returned', 'recalled'];
+
+// States the requestor may pull a job back from: submitted for verification, or
+// accepted into the queue. Once an operator is assigned the paper is moving, and
+// a silent document swap would leave them printing a file that no longer matches
+// the instructions they were given.
+const RECALLABLE_STATES = ['submitted', 'accepted'];
 
 // ── PDF storage for job documents ───────────────────────────────────────────
 const uploadDir = path.join(__dirname, '../../uploads/print-jobs');
@@ -37,9 +52,15 @@ const storage = multer.diskStorage({
     cb(null, 'job-' + uniqueSuffix + path.extname(file.originalname));
   },
 });
+// No size cap on printing uploads, by request. Production drawings and full manuals
+// routinely run past any figure that looks generous on paper. The PDF-only filter
+// stays, and nginx's client_max_body_size has been lifted to match — capping either
+// layer alone just moves where the upload fails.
+//
+// Worth knowing: nothing now bounds a single upload except free disk. There is no
+// disk-space guard in this application.
 const upload = multer({
   storage,
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB — print PDFs can be large
   fileFilter: (req, file, cb) => {
     const isPdf = /pdf/.test(path.extname(file.originalname).toLowerCase()) && /pdf/.test(file.mimetype);
     if (isPdf) return cb(null, true);
@@ -57,6 +78,18 @@ const nextSequential = (column, prefix) => {
     .get();
   const last = row?.v ? parseInt(String(row.v).slice(prefix.length), 10) : 0;
   return `${prefix}${String((Number.isFinite(last) ? last : 0) + 1).padStart(4, '0')}`;
+};
+
+// RWKxxxx — same gap-safe scheme, but the sequence lives in print_job_reworks.
+const nextReworkId = () => {
+  const row = db
+    .prepare(
+      `SELECT rework_id AS v FROM print_job_reworks WHERE rework_id GLOB 'RWK[0-9]*'
+       ORDER BY CAST(substr(rework_id, 4) AS INTEGER) DESC LIMIT 1`
+    )
+    .get();
+  const last = row?.v ? parseInt(String(row.v).slice(3), 10) : 0;
+  return `RWK${String((Number.isFinite(last) ? last : 0) + 1).padStart(4, '0')}`;
 };
 
 // ── Access control ───────────────────────────────────────────────────────────
@@ -359,8 +392,9 @@ router.post('/:id/documents', authenticateToken, upload.single('pdf'), (req, res
         `INSERT INTO print_job_documents (
            job_id, document_name, quantity, pdf_path, num_pages, print_side, paper_size,
            paper_gsm, color_mode, cover_page, soft_lamination, separators, separator_thickness,
-           hole_punch, binding_type, file_colour, remarks
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           hole_punch, binding_type, binding_variant, extra_services, file_colour,
+           remarks, pdf_sha256
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         job.id,
@@ -378,8 +412,16 @@ router.post('/:id/documents', authenticateToken, upload.single('pdf'), (req, res
         cleanStr(b.separator_thickness),
         toBit(b.hole_punch),
         cleanStr(b.binding_type),
+        cleanStr(b.binding_variant),
+        // Sent as a JSON string by the form; store only if it parses to a list.
+        (() => {
+          const raw = cleanStr(b.extra_services);
+          if (!raw) return null;
+          try { return Array.isArray(JSON.parse(raw)) ? raw : null; } catch { return null; }
+        })(),
         cleanStr(b.file_colour),
-        cleanStr(b.remarks)
+        cleanStr(b.remarks),
+        sha256OfFile(path.join(uploadDir, req.file.filename))
       );
 
     db.prepare("UPDATE print_jobs SET updated_at = datetime('now') WHERE id = ?").run(job.id);
@@ -392,6 +434,59 @@ router.post('/:id/documents', authenticateToken, upload.single('pdf'), (req, res
 });
 
 // Delete a document (and its PDF file).
+// Swap a document's PDF while keeping the row, its name and its specs.
+//
+// This is what a correction cycle actually needs. Without it the only way to fix a
+// wrong file was Delete + Add, which appends a second document — so a recalled job
+// came back to the coordinator carrying both the old and the corrected file.
+//
+// The superseded file is left on disk: submission snapshots record each document's
+// path, so an earlier submission stays retrievable.
+router.put('/:id/documents/:docId/file', authenticateToken, upload.single('pdf'), async (req, res) => {
+  const cleanupUpload = () => { if (req.file) fs.unlink(req.file.path, () => {}); };
+  try {
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
+    if (!job) { cleanupUpload(); return res.status(404).json({ error: 'Request not found' }); }
+    if (!canEditJob(req, job)) { cleanupUpload(); return res.status(403).json({ error: 'You can only edit your own request' }); }
+    if (!EDITABLE_STATES.includes(job.status)) {
+      cleanupUpload();
+      return res.status(400).json({ error: `A ${job.status} request can no longer be edited` });
+    }
+    const doc = db.prepare('SELECT * FROM print_job_documents WHERE id = ? AND job_id = ?').get(req.params.docId, job.id);
+    if (!doc) { cleanupUpload(); return res.status(404).json({ error: 'Document not found' }); }
+    if (!req.file) return res.status(400).json({ error: 'Attach the replacement PDF' });
+
+    const absPath = path.join(uploadDir, req.file.filename);
+    const numPages = await readPdfPageCount(absPath);
+    const hash = sha256OfFile(absPath);
+
+    if (hash && doc.pdf_sha256 && hash === doc.pdf_sha256) {
+      cleanupUpload();
+      return res.status(400).json({ error: 'That is the same file that is already attached.' });
+    }
+
+    db.prepare(
+      `UPDATE print_job_documents
+          SET pdf_path = ?, pdf_sha256 = ?, num_pages = COALESCE(?, num_pages)
+        WHERE id = ?`
+    ).run(req.file.filename, hash, numPages, doc.id);
+    db.prepare("UPDATE print_jobs SET updated_at = datetime('now') WHERE id = ?").run(job.id);
+
+    writeAudit(req, 'REPLACE_DOCUMENT_PDF', job.id,
+      `PDF replaced on "${doc.document_name}"${numPages ? ` (${numPages} pages)` : ''}`);
+
+    res.json({
+      id: doc.id,
+      num_pages: numPages ?? doc.num_pages,
+      message: `PDF replaced on "${doc.document_name}".`,
+    });
+  } catch (error) {
+    cleanupUpload();
+    console.error('Error replacing document PDF:', error);
+    res.status(500).json({ error: 'Failed to replace the PDF' });
+  }
+});
+
 router.delete('/:id/documents/:docId', authenticateToken, (req, res) => {
   try {
     const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
@@ -457,22 +552,37 @@ router.post('/:id/submit', authenticateToken, (req, res) => {
 
     // Keep the same JOB number across return→resubmit; only assign the first time.
     const jobNumber = job.job_number || nextSequential('job_number', 'JOB');
+
+    // Snapshot BEFORE the status changes — the state being submitted *from* is what
+    // says whether this is a first submission, a resubmit after the requestor
+    // recalled it, or a resubmit after the coordinator returned it.
+    const snapshot = recordSubmission(req, { ...job, job_number: jobNumber }, docs);
+
     db.prepare(
       `UPDATE print_jobs SET
          job_number = ?, status = 'submitted',
          submitted_at = datetime('now'),
          return_reason = NULL,
+         recall_reason = NULL,
          updated_at = datetime('now')
        WHERE id = ?`
     ).run(jobNumber, job.id);
 
-    writeAudit(req, 'SUBMIT_PRINT_JOB', job.id, `${jobNumber} submitted for coordinator verification`);
+    const changeNote = snapshot.seq > 1
+      ? ` (submission ${snapshot.seq}${snapshot.changeCount === null ? '' : `, ${snapshot.changeCount} change${snapshot.changeCount === 1 ? '' : 's'}`})`
+      : '';
+    writeAudit(req, 'SUBMIT_PRINT_JOB', job.id, `${jobNumber} submitted for coordinator verification${changeNote}`);
     notifyCoordinators(
       'New Printing Job Submitted',
       `${jobNumber} from ${req.user.name} is awaiting your verification.`
     );
     fireEmail(notifyPrintJobSubmitted(buildEmailJob({ ...job, job_number: jobNumber }), coordinatorContacts().map((c) => c.email)));
-    res.json({ job_number: jobNumber, message: `${jobNumber} submitted for coordinator verification.` });
+    res.json({
+      job_number: jobNumber,
+      submission_seq: snapshot.seq,
+      change_count: snapshot.changeCount,
+      message: `${jobNumber} submitted for coordinator verification.`,
+    });
   } catch (error) {
     console.error('Error submitting print job:', error);
     res.status(500).json({ error: 'Failed to submit request' });
@@ -487,9 +597,11 @@ router.get('/mine', authenticateToken, (req, res) => {
     const jobs = db
       .prepare(
         `SELECT j.*, l.name AS location_name,
-                (SELECT COUNT(*) FROM print_job_documents d WHERE d.job_id = j.id) AS document_count
+                (SELECT COUNT(*) FROM print_job_documents d WHERE d.job_id = j.id) AS document_count,
+                ca.annexure_no, ca.status AS annexure_status, ca.grand_total_paise AS annexure_total_paise
          FROM print_jobs j
          LEFT JOIN locations l ON j.location_id = l.id
+         LEFT JOIN cost_annexures ca ON ca.job_id = j.id AND ca.status != 'superseded'
          WHERE j.created_by = ?
          ORDER BY j.created_at DESC`
       )
@@ -519,10 +631,15 @@ router.get('/mine', authenticateToken, (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 // Printing roles are module-scoped flags, INDEPENDENT of the global JCC role.
-// Checked fresh from the DB so a flag change takes effect without re-login. Admin
-// always has oversight.
+// Checked fresh from the DB so a flag change takes effect without re-login.
+//
+// The flag is the single source of truth. A JCC role — admin included — does NOT
+// confer coordinator capability: `is_printer_coordinator` exists precisely to say
+// who runs the print room, and letting `role === 'admin'` bypass it made the flag
+// meaningless for exactly the accounts with the most reach. An admin who needs the
+// coordinator workspace ticks their own flag in User Management; admins keep
+// read-only oversight through canViewJob below, which is a separate concern.
 const isCoordinator = (req) => {
-  if (req.user.role === 'admin') return true;
   const row = db.prepare('SELECT is_printer_coordinator FROM users WHERE id = ?').get(req.user.id);
   return !!(row && row.is_printer_coordinator);
 };
@@ -565,7 +682,8 @@ router.get('/pending', authenticateToken, (req, res) => {
     const jobs = db
       .prepare(
         `SELECT j.*, u.name AS requestor_name, l.name AS location_name,
-                (SELECT COUNT(*) FROM print_job_documents d WHERE d.job_id = j.id) AS document_count
+                (SELECT COUNT(*) FROM print_job_documents d WHERE d.job_id = j.id) AS document_count,
+                (SELECT MAX(seq) FROM print_job_submissions s WHERE s.job_id = j.id) AS submission_seq
          FROM print_jobs j
          JOIN users u ON j.created_by = u.id
          LEFT JOIN locations l ON j.location_id = l.id
@@ -625,6 +743,32 @@ router.get('/ready', authenticateToken, (req, res) => {
   } catch (error) {
     console.error('Error fetching ready jobs:', error);
     res.status(500).json({ error: 'Failed to fetch ready jobs' });
+  }
+});
+
+// ── Handed over, waiting on the requestor to confirm receipt (coordinator) ──
+// Oldest first: the top of this list is what needs chasing.
+router.get('/awaiting-receipt', authenticateToken, (req, res) => {
+  try {
+    if (!isCoordinator(req)) return res.status(403).json({ error: 'Coordinators only' });
+    const loc = scopeLocation(req);
+    const jobs = db
+      .prepare(
+        `SELECT j.*, u.name AS requestor_name, u.email AS requestor_email,
+                op.name AS operator_name, l.name AS location_name,
+                (SELECT COUNT(*) FROM print_job_documents d WHERE d.job_id = j.id) AS document_count
+         FROM print_jobs j
+         JOIN users u ON j.created_by = u.id
+         LEFT JOIN users op ON j.assigned_operator_id = op.id
+         LEFT JOIN locations l ON j.location_id = l.id
+         WHERE j.status = 'awaiting_receipt' AND ${locScopeSql()}
+         ORDER BY j.handed_over_at ASC`
+      )
+      .all(loc, loc);
+    res.json(jobs);
+  } catch (error) {
+    console.error('Error fetching jobs awaiting receipt:', error);
+    res.status(500).json({ error: 'Failed to fetch jobs awaiting receipt' });
   }
 });
 
@@ -755,7 +899,8 @@ router.get('/assigned', authenticateToken, (req, res) => {
          FROM print_jobs j
          JOIN users u ON j.created_by = u.id
          LEFT JOIN locations l ON j.location_id = l.id
-         WHERE (j.assigned_operator_id = ? AND j.status IN ('assigned','printing','paused','printing_completed','ready_for_collection'))
+         WHERE (j.assigned_operator_id = ? AND j.status IN ('assigned','printing','paused','printing_completed',
+                                                             'ready_for_collection','rework_requested','rework_printing'))
             OR (j.status = 'accepted' AND j.assigned_operator_id IS NULL)
          ORDER BY (CASE WHEN j.assigned_operator_id = ? THEN 0 ELSE 1 END), j.priority DESC, j.submitted_at ASC`
       )
@@ -1013,21 +1158,703 @@ router.post('/:id/ready', authenticateToken, (req, res) => {
   }
 });
 
-// ── Phase 10: coordinator verifies handover → completed (read-only) ─────────
+// ═══════════════════════════════════════════════════════════════════════════
+// REWORK — proof review and revised-PDF versions
+//
+// The requestor reviews a printed proof offline and reports corrections out of
+// band; the coordinator is the only role that writes any of it. Each round
+// stores a complete revised PDF as a new version, never editing the original.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Total pages in an uploaded PDF, or null if it can't be read. Needed so page
+// numbers can be validated against the document the operator will actually print.
+const readPdfPageCount = async (absPath) => {
+  try {
+    const pdfParse = (await import('pdf-parse')).default;
+    const parsed = await pdfParse(fs.readFileSync(absPath));
+    return Number.isFinite(parsed?.numpages) ? parsed.numpages : null;
+  } catch (e) {
+    console.warn('[jobs] could not read PDF page count:', e.message);
+    return null;
+  }
+};
+
+const sha256OfFile = (absPath) => {
+  try {
+    return crypto.createHash('sha256').update(fs.readFileSync(absPath)).digest('hex');
+  } catch (_) {
+    return null;
+  }
+};
+
+const reworkLabel = (rw) => rw.rework_id || `Rework #${rw.id}`;
+
+// A rework replaces printed output, so it only makes sense once something has been
+// printed. Drafts and queued jobs are edited normally instead.
+const REWORKABLE_STATUSES = ['printing_completed', 'proof_review', 'rework_requested', 'ready_for_collection'];
+
+// Field rules shared by the coordinator's form and the requestor's request, so the
+// two entry points can never drift apart on what counts as a valid rework.
+const validateReworkFields = (b, numPages) => {
+  const parsed = parsePageList(b.modified_pages, { maxPage: numPages });
+  if (!parsed.ok) return { error: parsed.error };
+
+  const additional = b.additional_pages === undefined || b.additional_pages === '' ? 0 : Number(b.additional_pages);
+  if (!Number.isInteger(additional) || additional < 0 || additional > 500) {
+    return { error: 'Additional pages must be a whole number between 0 and 500' };
+  }
+  const insertPosition = cleanStr(b.insert_position);
+  if (additional > 0 && !insertPosition) {
+    return { error: `Tell the operator where the ${additional} new page${additional === 1 ? '' : 's'} go` };
+  }
+  const description = cleanStr(b.change_description);
+  if (description.length < 10) {
+    return { error: 'Describe the change in at least a few words — the operator relies on this' };
+  }
+  return {
+    rawPages: String(b.modified_pages).trim(),
+    normalised: parsed.normalised,
+    pages: parsed.pages,
+    count: parsed.count,
+    additional,
+    insertPosition,
+    description,
+  };
+};
+
+// ── Jobs sitting in the proof/rework loop (coordinator's working list) ──
+router.get('/proof-review', authenticateToken, (req, res) => {
+  try {
+    if (!isCoordinator(req)) return res.status(403).json({ error: 'Coordinators only' });
+    const loc = scopeLocation(req);
+    const jobs = db.prepare(
+      `SELECT j.*, u.name AS requestor_name, op.name AS operator_name, l.name AS location_name,
+              (SELECT COUNT(*) FROM print_job_documents d WHERE d.job_id = j.id) AS document_count,
+              (SELECT r.rework_id FROM print_job_reworks r
+                WHERE r.job_id = j.id AND r.status IN ('pending','in_progress')) AS open_rework_id,
+              (SELECT r.id FROM print_job_reworks r
+                WHERE r.job_id = j.id AND r.status IN ('pending','in_progress')) AS open_rework_row_id,
+              (SELECT r.status FROM print_job_reworks r
+                WHERE r.job_id = j.id AND r.status IN ('pending','in_progress')) AS open_rework_status,
+              (SELECT r.assigned_operator_id FROM print_job_reworks r
+                WHERE r.job_id = j.id AND r.status IN ('pending','in_progress')) AS open_rework_operator_id,
+              (SELECT r.created_by FROM print_job_reworks r
+                WHERE r.job_id = j.id AND r.status IN ('pending','in_progress')) AS open_rework_created_by
+         FROM print_jobs j
+         JOIN users u ON j.created_by = u.id
+         LEFT JOIN users op ON j.assigned_operator_id = op.id
+         LEFT JOIN locations l ON j.location_id = l.id
+        WHERE j.status IN ('proof_review','rework_requested','rework_printing') AND ${locScopeSql()}
+        ORDER BY j.proof_released_at ASC`
+    ).all(loc, loc);
+    res.json(jobs);
+  } catch (error) {
+    console.error('Error fetching proof-review jobs:', error);
+    res.status(500).json({ error: 'Failed to fetch proof review jobs' });
+  }
+});
+
+// ── Release a printed proof to the requestor for offline review ──
+router.post('/:id/release-proof', authenticateToken, (req, res) => {
+  try {
+    if (!isCoordinator(req)) return res.status(403).json({ error: 'Coordinators only' });
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (!['printing_completed', 'ready_for_collection'].includes(job.status)) {
+      return res.status(400).json({ error: `Only a printed job can go out for proof review (this one is ${job.status})` });
+    }
+    db.prepare(
+      `UPDATE print_jobs SET status='proof_review', proof_released_at=datetime('now'),
+         updated_at=datetime('now') WHERE id=?`
+    ).run(job.id);
+    writeAudit(req, 'RELEASE_PROOF', job.id, `${jobLabel(job)} proof copy (V${job.current_version || 1}) released for review`);
+    notifyUser(job.created_by, 'Proof copy ready for your review',
+      `${jobLabel(job)} — review the printed copy and send any corrections to the printing coordinator.`, 'info');
+    fireEmail(notifyPrintProofReleased(
+      buildEmailJob(job, { versionNo: job.current_version || 1 }),
+      getUserContact(job.created_by).email
+    ));
+    res.json({ message: `${jobLabel(job)} released for proof review.` });
+  } catch (error) {
+    console.error('Error releasing proof:', error);
+    res.status(500).json({ error: 'Failed to release proof' });
+  }
+});
+
+// ── Record the requestor's verdict on the proof ──
+router.post('/:id/proof-verdict', authenticateToken, (req, res) => {
+  try {
+    if (!isCoordinator(req)) return res.status(403).json({ error: 'Coordinators only' });
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (job.status !== 'proof_review') {
+      return res.status(400).json({ error: `Only a job under proof review has a verdict (this one is ${job.status})` });
+    }
+    const approved = req.body?.approved === true || req.body?.approved === 'true';
+    const notes = cleanStr(req.body?.notes);
+
+    if (approved) {
+      db.prepare(`UPDATE print_jobs SET status='ready_for_collection', ready_at=COALESCE(ready_at, datetime('now')),
+                    updated_at=datetime('now') WHERE id=?`).run(job.id);
+      writeAudit(req, 'PROOF_APPROVED', job.id, `${jobLabel(job)} proof approved — no corrections${notes ? ` — ${notes}` : ''}`);
+      notifyUser(job.created_by, 'Proof approved', `${jobLabel(job)} is approved and ready for collection.`, 'success');
+      return res.json({ status: 'ready_for_collection', message: `${jobLabel(job)} approved and ready for collection.` });
+    }
+
+    db.prepare(`UPDATE print_jobs SET status='rework_requested', updated_at=datetime('now') WHERE id=?`).run(job.id);
+    writeAudit(req, 'REWORK_REQUESTED', job.id, `${jobLabel(job)} corrections reported by requestor${notes ? ` — ${notes}` : ''}`);
+    notifyCoordinators('Corrections reported', `${jobLabel(job)} needs a rework — log the revised PDF.`);
+    res.json({ status: 'rework_requested', message: `${jobLabel(job)} marked for rework. The requestor sends the revised PDF.` });
+  } catch (error) {
+    console.error('Error recording proof verdict:', error);
+    res.status(500).json({ error: 'Failed to record verdict' });
+  }
+});
+
+// A rework can only be raised by the person who submitted the job — see
+// POST /:id/reworks/request below. The coordinator no longer creates reworks:
+// they own scheduling (assign an operator) and cancelling, not authoring the
+// correction, because only the requestor knows what changed in their document.
+
+
+// ── Submission snapshots ────────────────────────────────────────────────────
+// Called on every submit, before the status changes. Stores the request exactly as
+// it stands, so a later resubmit can be compared against it and the verifier can be
+// told what moved rather than re-reading the form.
+const SUBMISSION_TRIGGERS = { recalled: 'after_recall', returned: 'after_return' };
+
+const recordSubmission = (req, job, docs) => {
+  try {
+    const seq = (db.prepare('SELECT MAX(seq) AS s FROM print_job_submissions WHERE job_id = ?').get(job.id)?.s || 0) + 1;
+    const triggerKind = SUBMISSION_TRIGGERS[job.status] || 'initial';
+    const triggerReason = job.status === 'recalled' ? job.recall_reason
+      : job.status === 'returned' ? job.return_reason
+      : null;
+
+    const header = {};
+    for (const [field] of HEADER_FIELDS) header[field] = job[field] ?? null;
+
+    const documents = docs.map((d) => ({
+      document_name: d.document_name, quantity: d.quantity, num_pages: d.num_pages,
+      print_side: d.print_side, paper_size: d.paper_size, paper_gsm: d.paper_gsm,
+      color_mode: d.color_mode, cover_page: d.cover_page, soft_lamination: d.soft_lamination,
+      separators: d.separators, separator_thickness: d.separator_thickness,
+      hole_punch: d.hole_punch, binding_type: d.binding_type,
+      binding_variant: d.binding_variant, extra_services: d.extra_services,
+      file_colour: d.file_colour,
+      remarks: d.remarks, pdf_sha256: d.pdf_sha256 || null, pdf_path: d.pdf_path || null,
+    }));
+
+    const totals = rollUps(documents);
+
+    // Compare against the previous submission so the change count can go straight
+    // into the audit line and the response.
+    let changeCount = null;
+    if (seq > 1) {
+      const prev = db.prepare('SELECT header_json, documents_json FROM print_job_submissions WHERE job_id = ? ORDER BY seq DESC LIMIT 1').get(job.id);
+      if (prev) {
+        const diff = diffSubmissions(
+          { header: JSON.parse(prev.header_json), documents: JSON.parse(prev.documents_json) },
+          { header, documents },
+        );
+        changeCount = diff.changeCount;
+      }
+    }
+
+    db.prepare(
+      `INSERT INTO print_job_submissions
+         (job_id, seq, submitted_by, trigger_kind, trigger_reason, header_json, documents_json, books, copies, pages)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`
+    ).run(job.id, seq, req.user.id, triggerKind, triggerReason || null,
+          JSON.stringify(header), JSON.stringify(documents), totals.books, totals.copies, totals.pages);
+
+    return { seq, changeCount };
+  } catch (e) {
+    // A snapshot is a record, not a gate: never block a submission over it.
+    console.error('[jobs] recordSubmission failed:', e.message);
+    return { seq: 0, changeCount: null };
+  }
+};
+
+// ── Submission history with the diff between consecutive submissions ──
+router.get('/:id/submissions', authenticateToken, (req, res) => {
+  try {
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (!canViewJob(req, job)) return res.status(403).json({ error: 'Not authorized' });
+
+    const rows = db.prepare(
+      `SELECT s.*, u.name AS submitted_by_name
+         FROM print_job_submissions s
+         JOIN users u ON u.id = s.submitted_by
+        WHERE s.job_id = ?
+        ORDER BY s.seq`
+    ).all(job.id);
+
+    const parsed = rows.map((r) => ({
+      seq: r.seq,
+      submittedBy: r.submitted_by_name,
+      submittedAt: r.submitted_at,
+      triggerKind: r.trigger_kind,
+      triggerReason: r.trigger_reason,
+      totals: { books: r.books, copies: r.copies, pages: r.pages },
+      header: JSON.parse(r.header_json),
+      documents: JSON.parse(r.documents_json),
+    }));
+
+    // Attach each submission's diff against the one before it.
+    const submissions = parsed.map((cur, i) => ({
+      ...cur,
+      diff: i === 0 ? null : diffSubmissions(parsed[i - 1], cur),
+      summary: i === 0 ? 'Initial submission' : summariseDiff(diffSubmissions(parsed[i - 1], cur)),
+    }));
+
+    res.json({ jobNumber: job.job_number, submissions });
+  } catch (error) {
+    console.error('Error fetching submissions:', error);
+    res.status(500).json({ error: 'Failed to fetch submission history' });
+  }
+});
+
+// ── Compare any two submissions ──
+router.get('/:id/submissions/:a/diff/:b', authenticateToken, (req, res) => {
+  try {
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (!canViewJob(req, job)) return res.status(403).json({ error: 'Not authorized' });
+
+    const get = (seq) => db.prepare('SELECT header_json, documents_json, seq FROM print_job_submissions WHERE job_id = ? AND seq = ?').get(job.id, seq);
+    const from = get(Number(req.params.a));
+    const to = get(Number(req.params.b));
+    if (!from || !to) return res.status(404).json({ error: 'One of those submissions does not exist' });
+
+    const shape = (r) => ({ header: JSON.parse(r.header_json), documents: JSON.parse(r.documents_json) });
+    const diff = diffSubmissions(shape(from), shape(to));
+    res.json({ from: from.seq, to: to.seq, diff, summary: summariseDiff(diff) });
+  } catch (error) {
+    console.error('Error diffing submissions:', error);
+    res.status(500).json({ error: 'Failed to compare submissions' });
+  }
+});
+
+// ── Requestor pulls their own job back to fix it, before anything is printed ──
+// Keeps the same REQ/JOB number and every document; the job simply returns to an
+// editable state and goes back through verification when resubmitted.
+router.post('/:id/recall', authenticateToken, (req, res) => {
+  try {
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Request not found' });
+    if (job.created_by !== req.user.id) {
+      return res.status(403).json({ error: 'You can only recall your own request' });
+    }
+    if (!RECALLABLE_STATES.includes(job.status)) {
+      const printed = ['printing_completed', 'proof_review', 'rework_requested', 'ready_for_collection', 'completed'].includes(job.status);
+      return res.status(400).json({
+        error: printed
+          ? `${jobLabel(job)} has already been printed — use Request rework to send a corrected document instead.`
+          : `${jobLabel(job)} is already with the operator and cannot be recalled. Ask the printing coordinator.`,
+      });
+    }
+    if (job.assigned_operator_id) {
+      return res.status(400).json({ error: `${jobLabel(job)} is already assigned to an operator. Ask the printing coordinator.` });
+    }
+
+    const reason = cleanStr(req.body?.reason);
+    db.prepare(
+      `UPDATE print_jobs SET status='recalled', recalled_at=datetime('now'), recall_reason=?,
+         updated_at=datetime('now')
+       WHERE id=?`
+    ).run(reason || null, job.id);
+
+    writeAudit(req, 'RECALL_PRINT_JOB', job.id,
+      `${jobLabel(job)} recalled by ${req.user.name} for correction${reason ? ` — ${reason}` : ''}`);
+    notifyCoordinators('Request recalled',
+      `${jobLabel(job)} was pulled back by ${req.user.name} for correction. It will return once resubmitted.`);
+
+    res.json({ message: `${jobLabel(job)} recalled. Edit it and submit again — it keeps the same number.` });
+  } catch (error) {
+    console.error('Error recalling job:', error);
+    res.status(500).json({ error: 'Failed to recall the request' });
+  }
+});
+
+// ── Requestor raises a rework from their own screen ──
+// Same evidence as the coordinator's form minus the operator: the requestor knows
+// what changed, not who is free at the press. The rework lands unassigned and the
+// coordinator assigns it, so nothing reaches the press without being seen.
+router.post('/:id/reworks/request', authenticateToken, upload.single('pdf'), async (req, res) => {
+  const cleanupUpload = () => { if (req.file) fs.unlink(req.file.path, () => {}); };
+  try {
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
+    if (!job) { cleanupUpload(); return res.status(404).json({ error: 'Job not found' }); }
+    if (job.created_by !== req.user.id) {
+      cleanupUpload();
+      return res.status(403).json({ error: 'Only the person who raised this job can request a rework on it' });
+    }
+    // A rework replaces printed output, so there has to be printed output first.
+    if (!REWORKABLE_STATUSES.includes(job.status)) {
+      cleanupUpload();
+      return res.status(400).json({ error: `${jobLabel(job)} has nothing printed to rework yet (it is ${job.status})` });
+    }
+    if (!req.file) return res.status(400).json({ error: 'Attach the complete revised PDF' });
+
+    const open = db.prepare(
+      `SELECT rework_id FROM print_job_reworks WHERE job_id = ? AND status IN ('pending','in_progress')`
+    ).get(job.id);
+    if (open) {
+      cleanupUpload();
+      return res.status(409).json({ error: `${open.rework_id} is already open on this job. Wait for it to finish.` });
+    }
+
+    const absPath = path.join(uploadDir, req.file.filename);
+    const numPages = await readPdfPageCount(absPath);
+    const check = validateReworkFields(req.body || {}, numPages);
+    if (check.error) { cleanupUpload(); return res.status(400).json({ error: check.error }); }
+
+    const versionNo = (db.prepare('SELECT MAX(version_no) AS v FROM print_job_reworks WHERE job_id = ?').get(job.id)?.v || 1) + 1;
+    const reworkId = nextReworkId();
+
+    db.prepare(
+      `INSERT INTO print_job_reworks (
+         rework_id, job_id, version_no, pdf_path, pdf_original_name, pdf_size_bytes,
+         pdf_sha256, num_pages, modified_pages, modified_pages_norm, modified_page_count,
+         additional_pages, insert_position, change_description,
+         created_by, assigned_operator_id, status
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NULL, 'pending')`
+    ).run(
+      reworkId, job.id, versionNo,
+      req.file.filename, req.file.originalname, req.file.size,
+      sha256OfFile(absPath), numPages,
+      check.rawPages, check.normalised, check.count,
+      check.additional, check.insertPosition || null, check.description,
+      req.user.id
+    );
+
+    db.prepare(
+      `UPDATE print_jobs SET status='rework_requested', current_version=?, rework_count=rework_count+1,
+         last_rework_at=datetime('now'), updated_at=datetime('now')
+       WHERE id=?`
+    ).run(versionNo, job.id);
+
+    const pageSummary = describePageList(check.normalised, check.count);
+    writeAudit(req, 'REQUEST_REWORK', job.id,
+      `${reworkId} requested as V${versionNo} by ${req.user.name} — ${pageSummary}` +
+      `${check.additional ? `, +${check.additional} ${check.insertPosition}` : ''}`);
+
+    notifyCoordinators('Rework requested',
+      `${jobLabel(job)} — ${req.user.name} sent a revised PDF (V${versionNo}). Assign an operator.`);
+    fireEmail(notifyPrintReworkRequested(
+      buildEmailJob(job, {
+        reworkId, versionNo, modifiedPages: check.normalised.replace(/,/g, ', '),
+        additionalPages: check.additional, insertPosition: check.insertPosition,
+        changeDescription: check.description,
+      }),
+      coordinatorContacts().map((c) => c.email)
+    ));
+
+    res.status(201).json({
+      rework_id: reworkId,
+      version_no: versionNo,
+      modified_pages: { normalised: check.normalised, expanded: check.pages, count: check.count },
+      message: `Rework ${reworkId} requested as V${versionNo}. The printing coordinator will assign it.`,
+    });
+  } catch (error) {
+    cleanupUpload();
+    console.error('Error requesting rework:', error);
+    res.status(500).json({ error: 'Failed to request rework' });
+  }
+});
+
+// ── Coordinator assigns (or re-assigns) an operator to a rework ──
+router.post('/:id/reworks/:rid/assign', authenticateToken, (req, res) => {
+  try {
+    if (!isCoordinator(req)) return res.status(403).json({ error: 'Coordinators only' });
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    const rw = db.prepare('SELECT * FROM print_job_reworks WHERE id = ? AND job_id = ?').get(req.params.rid, job.id);
+    if (!rw) return res.status(404).json({ error: 'Rework not found' });
+    if (rw.status !== 'pending') {
+      return res.status(400).json({ error: `Only an unstarted rework can be assigned (this one is ${rw.status})` });
+    }
+    const operatorId = req.body?.operator_id ? Number(req.body.operator_id) : null;
+    if (!operatorId || !isOperatorUser(operatorId)) {
+      return res.status(400).json({ error: 'Pick an active printer operator' });
+    }
+
+    db.prepare(
+      `UPDATE print_job_reworks SET assigned_operator_id=?, assigned_at=datetime('now') WHERE id=?`
+    ).run(operatorId, rw.id);
+    db.prepare(
+      `UPDATE print_jobs SET assigned_operator_id=?, updated_at=datetime('now') WHERE id=?`
+    ).run(operatorId, job.id);
+
+    const operator = getUserContact(operatorId);
+    writeAudit(req, 'ASSIGN_REWORK', job.id, `${reworkLabel(rw)} assigned to ${operator.name || 'operator'}`);
+    notifyUser(operatorId, `Rework ${rw.rework_id} assigned to you`,
+      `${jobLabel(job)} V${rw.version_no} — reprint ${describePageList(rw.modified_pages_norm, rw.modified_page_count)}.`, 'info');
+    fireEmail(notifyPrintReworkAssigned(
+      buildEmailJob(job, {
+        reworkId: rw.rework_id, versionNo: rw.version_no,
+        modifiedPages: (rw.modified_pages_norm || '').replace(/,/g, ', '),
+        additionalPages: rw.additional_pages, insertPosition: rw.insert_position,
+        changeDescription: rw.change_description, operatorName: operator.name,
+      }),
+      operator.email
+    ));
+    res.json({ message: `${reworkLabel(rw)} assigned to ${operator.name || 'the operator'}.` });
+  } catch (error) {
+    console.error('Error assigning rework:', error);
+    res.status(500).json({ error: 'Failed to assign rework' });
+  }
+});
+
+// ── All reworks for a job ──
+router.get('/:id/reworks', authenticateToken, (req, res) => {
+  try {
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (!canViewJob(req, job)) return res.status(403).json({ error: 'Not authorized' });
+    const rows = db.prepare(
+      `SELECT r.*, c.name AS created_by_name, o.name AS operator_name
+         FROM print_job_reworks r
+         JOIN users c ON c.id = r.created_by
+         LEFT JOIN users o ON o.id = r.assigned_operator_id
+        WHERE r.job_id = ?
+        ORDER BY r.version_no DESC`
+    ).all(job.id);
+    res.json(rows);
+  } catch (error) {
+    console.error('Error fetching reworks:', error);
+    res.status(500).json({ error: 'Failed to fetch reworks' });
+  }
+});
+
+// ── Unified version history: V1 (original submission) + every rework ──
+router.get('/:id/versions', authenticateToken, (req, res) => {
+  try {
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (!canViewJob(req, job)) return res.status(403).json({ error: 'Not authorized' });
+
+    const requestor = getUserContact(job.created_by);
+    const originals = db.prepare('SELECT id, document_name, num_pages FROM print_job_documents WHERE job_id = ?').all(job.id);
+    const versions = [{
+      version_no: 1,
+      kind: 'Original submission',
+      uploaded_by: requestor.name,
+      uploaded_by_role: 'Requestor',
+      uploaded_at: job.submitted_at || job.created_at,
+      num_pages: originals.reduce((sum, d) => sum + (d.num_pages || 0), 0) || null,
+      modified_pages: null,
+      additional_pages: 0,
+      document_id: originals[0]?.id ?? null,
+      rework_id: null,
+      status: 'completed',
+    }];
+
+    db.prepare(
+      `SELECT r.*, c.name AS created_by_name FROM print_job_reworks r
+         JOIN users c ON c.id = r.created_by
+        WHERE r.job_id = ? AND r.status != 'cancelled'
+        ORDER BY r.version_no`
+    ).all(job.id).forEach((r) => {
+      versions.push({
+        version_no: r.version_no,
+        kind: `Rework ${r.version_no - 1}`,
+        uploaded_by: r.created_by_name,
+        uploaded_by_role: 'Coordinator',
+        uploaded_at: r.created_at,
+        num_pages: r.num_pages,
+        modified_pages: r.modified_pages_norm,
+        additional_pages: r.additional_pages,
+        insert_position: r.insert_position,
+        change_description: r.change_description,
+        document_id: null,
+        rework_id: r.rework_id,
+        rework_row_id: r.id,
+        status: r.status,
+      });
+    });
+
+    res.json(versions);
+  } catch (error) {
+    console.error('Error building version history:', error);
+    res.status(500).json({ error: 'Failed to build version history' });
+  }
+});
+
+// ── Download the PDF for one rework version ──
+router.get('/:id/reworks/:rid/file', authenticateToken, (req, res) => {
+  try {
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (!canViewJob(req, job)) return res.status(403).json({ error: 'Not authorized' });
+    const rw = db.prepare('SELECT * FROM print_job_reworks WHERE id = ? AND job_id = ?').get(req.params.rid, job.id);
+    if (!rw || !rw.pdf_path) return res.status(404).json({ error: 'File not found' });
+    const filePath = path.join(uploadDir, rw.pdf_path);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File missing on disk' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.sendFile(filePath);
+  } catch (error) {
+    console.error('Error downloading rework PDF:', error);
+    res.status(500).json({ error: 'Failed to download file' });
+  }
+});
+
+// ── Operator starts a rework ──
+router.post('/:id/reworks/:rid/start', authenticateToken, (req, res) => {
+  try {
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    const rw = db.prepare('SELECT * FROM print_job_reworks WHERE id = ? AND job_id = ?').get(req.params.rid, job.id);
+    if (!rw) return res.status(404).json({ error: 'Rework not found' });
+    if (rw.assigned_operator_id !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only the assigned operator can do this' });
+    }
+    if (rw.status !== 'pending') return res.status(400).json({ error: `This rework is already ${rw.status}` });
+
+    db.prepare(`UPDATE print_job_reworks SET status='in_progress', started_at=datetime('now') WHERE id=?`).run(rw.id);
+    db.prepare(`UPDATE print_jobs SET status='rework_printing', updated_at=datetime('now') WHERE id=?`).run(job.id);
+    writeAudit(req, 'START_REWORK', job.id, `${reworkLabel(rw)} started by ${req.user.name}`);
+    res.json({ message: `${reworkLabel(rw)} started.` });
+  } catch (error) {
+    console.error('Error starting rework:', error);
+    res.status(500).json({ error: 'Failed to start rework' });
+  }
+});
+
+// ── Operator completes a rework → back to proof review ──
+router.post('/:id/reworks/:rid/complete', authenticateToken, (req, res) => {
+  try {
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    const rw = db.prepare('SELECT * FROM print_job_reworks WHERE id = ? AND job_id = ?').get(req.params.rid, job.id);
+    if (!rw) return res.status(404).json({ error: 'Rework not found' });
+    if (rw.assigned_operator_id !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only the assigned operator can do this' });
+    }
+    if (rw.status !== 'in_progress') return res.status(400).json({ error: `Only a started rework can be completed (this one is ${rw.status})` });
+
+    db.prepare(`UPDATE print_job_reworks SET status='completed', completed_at=datetime('now') WHERE id=?`).run(rw.id);
+    db.prepare(`UPDATE print_jobs SET status='printing_completed', printing_completed_at=datetime('now'),
+                  updated_at=datetime('now') WHERE id=?`).run(job.id);
+    writeAudit(req, 'COMPLETE_REWORK', job.id, `${reworkLabel(rw)} completed by ${req.user.name}`);
+    notifyCoordinators('Rework finished', `${reworkLabel(rw)} on ${jobLabel(job)} is printed — release the new proof.`);
+    fireEmail(notifyPrintReworkCompleted(
+      buildEmailJob(job, { reworkId: rw.rework_id, versionNo: rw.version_no, operatorName: req.user.name }),
+      coordinatorContacts().map((c) => c.email)
+    ));
+    res.json({ message: `${reworkLabel(rw)} completed.` });
+  } catch (error) {
+    console.error('Error completing rework:', error);
+    res.status(500).json({ error: 'Failed to complete rework' });
+  }
+});
+
+// ── Cancel a rework that has not started ──
+router.post('/:id/reworks/:rid/cancel', authenticateToken, (req, res) => {
+  try {
+    if (!isCoordinator(req)) return res.status(403).json({ error: 'Coordinators only' });
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    const rw = db.prepare('SELECT * FROM print_job_reworks WHERE id = ? AND job_id = ?').get(req.params.rid, job.id);
+    if (!rw) return res.status(404).json({ error: 'Rework not found' });
+    if (rw.status !== 'pending') return res.status(400).json({ error: `Only an unstarted rework can be cancelled (this one is ${rw.status})` });
+    const reason = cleanStr(req.body?.reason);
+    if (!reason) return res.status(400).json({ error: 'Give a reason so the history explains itself' });
+
+    // The version number stays burnt — reusing it would make two different PDFs
+    // share a version in the audit trail.
+    db.prepare(`UPDATE print_job_reworks SET status='cancelled', cancel_reason=? WHERE id=?`).run(reason, rw.id);
+    db.prepare(`UPDATE print_jobs SET status='rework_requested', updated_at=datetime('now') WHERE id=?`).run(job.id);
+    writeAudit(req, 'CANCEL_REWORK', job.id, `${reworkLabel(rw)} cancelled — ${reason}`);
+    res.json({ message: `${reworkLabel(rw)} cancelled.` });
+  } catch (error) {
+    console.error('Error cancelling rework:', error);
+    res.status(500).json({ error: 'Failed to cancel rework' });
+  }
+});
+
+// ── This operator's open reworks across all jobs ──
+router.get('/reworks/assigned', authenticateToken, (req, res) => {
+  try {
+    const rows = db.prepare(
+      `SELECT r.*, j.job_number, j.request_id, j.project_name, c.name AS created_by_name
+         FROM print_job_reworks r
+         JOIN print_jobs j ON j.id = r.job_id
+         JOIN users c ON c.id = r.created_by
+        WHERE r.assigned_operator_id = ? AND r.status IN ('pending','in_progress')
+        ORDER BY r.created_at ASC`
+    ).all(req.user.id);
+    res.json(rows);
+  } catch (error) {
+    console.error('Error fetching assigned reworks:', error);
+    res.status(500).json({ error: 'Failed to fetch assigned reworks' });
+  }
+});
+
+// ── Phase 10: coordinator hands over → awaits the requestor's confirmation ──
+// The coordinator can only record that they *gave* the materials; whether they
+// were received is the requestor's to state, so this stops at 'awaiting_receipt'
+// and POST /:id/confirm-receipt below is what closes the job.
 router.post('/:id/collect', authenticateToken, (req, res) => {
   try {
     if (!isCoordinator(req)) return res.status(403).json({ error: 'Coordinators only' });
     const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
     if (!job) return res.status(404).json({ error: 'Job not found' });
-    if (job.status !== 'ready_for_collection') return res.status(400).json({ error: `Only a ready job can be closed (job is ${job.status})` });
-    db.prepare(`UPDATE print_jobs SET status='completed', completed_at=datetime('now'), updated_at=datetime('now') WHERE id=?`).run(job.id);
-    writeAudit(req, 'COMPLETE_PRINT_JOB', job.id, `${jobLabel(job)} collected and closed`);
-    notifyUser(job.created_by, 'Printing Job Completed', `${jobLabel(job)} has been collected and closed.`, 'success');
-    fireEmail(notifyPrintJobCompleted(buildEmailJob(job), getUserContact(job.created_by).email));
-    res.json({ message: `${jobLabel(job)} completed.` });
+    if (job.status !== 'ready_for_collection') return res.status(400).json({ error: `Only a ready job can be handed over (job is ${job.status})` });
+    db.prepare(
+      `UPDATE print_jobs SET status='awaiting_receipt', handed_over_by=?, handed_over_at=datetime('now'),
+         updated_at=datetime('now')
+       WHERE id=?`
+    ).run(req.user.name, job.id);
+    writeAudit(req, 'HANDOVER_PRINT_JOB', job.id, `${jobLabel(job)} handed over — awaiting requestor confirmation`);
+    notifyUser(
+      job.created_by,
+      'Confirm you received your printing job',
+      `${jobLabel(job)} has been handed over. Please confirm receipt in Job History.`,
+      'info'
+    );
+    fireEmail(notifyPrintJobAwaitingReceipt(
+      buildEmailJob(job, { handedOverBy: req.user.name }),
+      getUserContact(job.created_by).email
+    ));
+    res.json({ message: `${jobLabel(job)} handed over — waiting for the requestor to confirm receipt.` });
   } catch (error) {
-    console.error('Error completing job:', error);
-    res.status(500).json({ error: 'Failed to complete job' });
+    console.error('Error handing over job:', error);
+    res.status(500).json({ error: 'Failed to hand over job' });
+  }
+});
+
+// ── The requestor confirms the materials actually reached them → completed ──
+router.post('/:id/confirm-receipt', authenticateToken, (req, res) => {
+  try {
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    // Deliberately NOT open to coordinators or admins: the whole point is that
+    // the person who received the materials is the one who says so.
+    if (job.created_by !== req.user.id) {
+      return res.status(403).json({ error: 'Only the requestor who raised this job can confirm receipt' });
+    }
+    if (job.status !== 'awaiting_receipt') {
+      return res.status(400).json({ error: `Only a handed-over job can be confirmed (job is ${job.status})` });
+    }
+    const remarks = cleanStr(req.body?.remarks);
+    db.prepare(
+      `UPDATE print_jobs SET status='completed', received_by=?, received_by_user_id=?,
+         received_at=datetime('now'), completed_at=datetime('now'), updated_at=datetime('now')
+       WHERE id=?`
+    ).run(req.user.name, req.user.id, job.id);
+    writeAudit(req, 'CONFIRM_PRINT_RECEIPT', job.id, `${jobLabel(job)} receipt confirmed by ${req.user.name}${remarks ? ` — ${remarks}` : ''}`);
+    notifyCoordinators('Printing Receipt Confirmed', `${jobLabel(job)} — ${req.user.name} confirmed receipt.`);
+    fireEmail(notifyPrintJobReceiptConfirmed(
+      buildEmailJob(job, { receivedBy: req.user.name }),
+      coordinatorContacts().map((c) => c.email)
+    ));
+    res.json({ message: `Receipt confirmed for ${jobLabel(job)}. Thank you.` });
+  } catch (error) {
+    console.error('Error confirming receipt:', error);
+    res.status(500).json({ error: 'Failed to confirm receipt' });
   }
 });
 
@@ -1124,10 +1951,45 @@ router.get('/:id', authenticateToken, (req, res) => {
     const documents = db
       .prepare('SELECT * FROM print_job_documents WHERE job_id = ? ORDER BY id ASC')
       .all(job.id);
+
+    // Which PDF is the current one for each document.
+    //
+    // print_job_documents.pdf_path is the ORIGINAL file and stays that way for
+    // history. Once a rework exists, that file is superseded — serving it to an
+    // operator means they print the version that was already rejected. Every caller
+    // gets told the current version and where to fetch it, so nobody has to know the
+    // rule.
+    const latestRework = db.prepare(
+      `SELECT id, document_id, version_no, rework_id, modified_pages_norm, additional_pages, insert_position
+         FROM print_job_reworks
+        WHERE job_id = ? AND status != 'cancelled'
+        ORDER BY version_no DESC`
+    ).all(job.id);
+
+    const withCurrent = documents.map((d) => {
+      // A rework naming this document wins; one with no document_id applies to a
+      // single-document job.
+      const rw = latestRework.find((r) => r.document_id === d.id)
+        || (documents.length === 1 ? latestRework.find((r) => r.document_id == null) : null);
+      return {
+        ...d,
+        current_version: rw ? rw.version_no : 1,
+        current_rework_row_id: rw ? rw.id : null,
+        current_rework_id: rw ? rw.rework_id : null,
+        current_file_url: rw
+          ? `/api/jobs/${job.id}/reworks/${rw.id}/file`
+          : `/api/jobs/${job.id}/documents/${d.id}/file`,
+        superseded: !!rw,
+        rework_pages: rw ? rw.modified_pages_norm : null,
+        rework_additional: rw ? rw.additional_pages : null,
+        rework_insert_position: rw ? rw.insert_position : null,
+      };
+    });
+
     const location_name = job.location_id
       ? (db.prepare('SELECT name FROM locations WHERE id = ?').get(job.location_id)?.name || null)
       : null;
-    res.json({ ...job, location_name, documents });
+    res.json({ ...job, location_name, documents: withCurrent });
   } catch (error) {
     console.error('Error fetching print job:', error);
     res.status(500).json({ error: 'Failed to fetch job' });

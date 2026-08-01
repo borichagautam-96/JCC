@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
+import { formatDateTime } from '../utils/datetime';
 
 const NotificationBell = () => {
     const [notifications, setNotifications] = useState([]);
@@ -268,8 +269,10 @@ const NotificationBell = () => {
                                                 color: 'var(--text-faint)',
                                                 fontWeight: 500
                                             }}>
-                                                {new Date(notification.created_at).toLocaleString(undefined, {
-                                                    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                                                {formatDateTime(notification.created_at, {
+                                                    dateStyle: undefined,
+                                                    timeStyle: undefined,
+                                                    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
                                                 })}
                                             </p>
                                         </div>

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import DatePicker from '../components/DatePicker';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import * as XLSX from 'xlsx';
+import { parseServerDate } from '../utils/datetime';
 
 const DEFAULT_FILTERS = {
     userName: '',
@@ -171,23 +172,14 @@ const AdminLogsPage = () => {
     };
 
     const formatDateTime = (value) => {
-        if (!value) return '-';
-        const date = new Date(value);
-        if (Number.isNaN(date.getTime())) return String(value);
+        const date = parseServerDate(value);
+        if (!date) return value ? String(value) : '-';
 
-        if (timezone === 'utc') {
+        if (timezone === 'utc' || timezone === 'ist') {
             return new Intl.DateTimeFormat('en-IN', {
                 dateStyle: 'medium',
                 timeStyle: 'medium',
-                timeZone: 'UTC',
-            }).format(date);
-        }
-
-        if (timezone === 'ist') {
-            return new Intl.DateTimeFormat('en-IN', {
-                dateStyle: 'medium',
-                timeStyle: 'medium',
-                timeZone: 'Asia/Kolkata',
+                timeZone: timezone === 'utc' ? 'UTC' : 'Asia/Kolkata',
             }).format(date);
         }
 

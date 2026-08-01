@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
+import { formatDateTime } from '../utils/datetime';
 
 const ReminderHistoryPage = () => {
     const { getToken } = useAuth();
@@ -68,13 +69,6 @@ const ReminderHistoryPage = () => {
                 .some((value) => value.includes(query));
         });
     }, [rows, search, typeFilter]);
-
-    const formatDateTime = (value) => {
-        if (!value) return '-';
-        const date = new Date(value);
-        if (Number.isNaN(date.getTime())) return String(value);
-        return date.toLocaleString();
-    };
 
     const renderTableRows = () => {
         if (loading) {

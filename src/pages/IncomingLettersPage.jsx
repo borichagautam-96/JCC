@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
 import { useNavigate } from 'react-router-dom';
+import { formatDate } from '../utils/datetime';
 
 const IncomingLettersPage = () => {
     const [letters, setLetters] = useState([]);
@@ -273,7 +274,7 @@ const IncomingLettersPage = () => {
                                     <td style={{ padding: '1rem' }}>{letter.subject || '-'}</td>
                                     <td style={{ padding: '1rem' }}>{letter.sender_name || '-'}</td>
                                     <td style={{ padding: '1rem', color: 'var(--text-muted)' }}>
-                                        {letter.received_date ? new Date(letter.received_date).toLocaleDateString() : '-'}
+                                        {formatDate(letter.received_date)}
                                     </td>
                                     <td style={{ padding: '1rem' }}>{getStatusBadge(letter.status)}</td>
                                     <td style={{ padding: '1rem' }}>

@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import db from '../database.js';
+import { formatStoredDateLong } from './datetime.js';
 
 // ─── SMTP Configuration (On-prem Exchange relay, no auth) ─────────────────────
 const EMAIL_CONFIG = {
@@ -51,12 +52,7 @@ const logEmailEvent = ({ recipient, subject, templateName, entityType, entityId,
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 // Format date as "Thursday, October 16, 2025"
-const formatInvoiceDate = (dateStr) => {
-    if (!dateStr) return '-';
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return dateStr;
-    return d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-};
+const formatInvoiceDate = (dateStr) => formatStoredDateLong(dateStr, dateStr || '-');
 
 // Shared details table matching the L&T email format
 const detailsTable = (voucher) => `
@@ -388,11 +384,92 @@ const emailTemplates = {
             ${printPortalLink()}
         `)
     }),
+    printProofReleased: (pj) => ({
+        subject: `Proof copy ready for review — ${pj.jobNumber}${pj.versionNo ? ` V${pj.versionNo}` : ''}`,
+        html: emailWrapper(`
+            <p>Dear <strong>${pj.requestorName || 'Requestor'}</strong>,</p>
+            <p>A proof copy of <strong>${pj.jobNumber}</strong>${pj.versionNo ? ` (version ${pj.versionNo})` : ''}
+               is ready for you to review.</p>
+            <p>Check the printed pages, and if anything needs correcting send the printing
+               coordinator a <strong>complete revised PDF</strong> along with the page numbers you
+               changed and how many pages you added. The coordinator records the rework — you do not
+               need to edit anything in the portal.</p>
+            ${printDetailsTable(pj)}
+            ${printPortalLink()}
+        `)
+    }),
+    printReworkAssigned: (pj) => ({
+        subject: `Rework ${pj.reworkId} assigned — ${pj.jobNumber} V${pj.versionNo}`,
+        html: emailWrapper(`
+            <p>Dear <strong>${pj.operatorName || 'Operator'}</strong>,</p>
+            <p><strong>${pj.reworkId}</strong> has been assigned to you for
+               <strong>${pj.jobNumber}</strong> (version ${pj.versionNo}).</p>
+            <table style="border-collapse:collapse;font-size:14px;margin:12px 0;width:100%;border:2px solid #444;">
+                <tbody>
+                    ${printRow('Pages to reprint', `<strong>${pj.modifiedPages || '-'}</strong>`, false)}
+                    ${printRow('Additional pages', pj.additionalPages ? `+${pj.additionalPages}` : 'None', true)}
+                    ${printRow('Insert position', pj.insertPosition || '—', false)}
+                </tbody>
+            </table>
+            <p><em>${pj.changeDescription || ''}</em></p>
+            <p>Print from the <strong>V${pj.versionNo}</strong> PDF in the portal — earlier versions
+               are superseded.</p>
+            ${printPortalLink()}
+        `)
+    }),
+    printReworkRequested: (pj) => ({
+        subject: 'Rework requested \u2014 ' + pj.jobNumber + ' V' + pj.versionNo,
+        html: emailWrapper(`
+            <p><strong>${pj.requestorName || 'The requestor'}</strong> has sent a revised PDF for
+               <strong>${pj.jobNumber}</strong>, logged as <strong>${pj.reworkId}</strong> (version ${pj.versionNo}).</p>
+            <table style="border-collapse:collapse;font-size:14px;margin:12px 0;width:100%;border:2px solid #444;">
+                <tbody>
+                    ${printRow('Pages changed', `<strong>${pj.modifiedPages || '-'}</strong>`, false)}
+                    ${printRow('Additional pages', pj.additionalPages ? `+${pj.additionalPages}` : 'None', true)}
+                    ${printRow('Insert position', pj.insertPosition || '\u2014', false)}
+                </tbody>
+            </table>
+            <p><em>${pj.changeDescription || ''}</em></p>
+            <p>It is waiting for you to <strong>assign a printer operator</strong> in Proof &amp; Rework.</p>
+            ${printPortalLink()}
+        `)
+    }),
+    printReworkCompleted: (pj) => ({
+        subject: `Rework ${pj.reworkId} completed — ${pj.jobNumber} V${pj.versionNo}`,
+        html: emailWrapper(`
+            <p><strong>${pj.reworkId}</strong> on <strong>${pj.jobNumber}</strong> has been printed by
+               ${pj.operatorName || 'the operator'}.</p>
+            <p>Release the new proof copy to the requestor for review.</p>
+            ${printDetailsTable(pj)}
+            ${printPortalLink()}
+        `)
+    }),
+    printJobAwaitingReceipt: (pj) => ({
+        subject: `Please confirm you received Printing Job ${pj.jobNumber}`,
+        html: emailWrapper(`
+            <p>Dear <strong>${pj.requestorName || 'Requestor'}</strong>,</p>
+            <p><strong>${pj.handedOverBy || 'The printing coordinator'}</strong> has handed over
+               <strong>${pj.jobNumber}</strong> for collection.</p>
+            <p>Please open the portal and click <strong>Confirm receipt</strong> once you have the
+               materials in hand. The job stays open until you do — if you have not received it,
+               leave it unconfirmed and contact the coordinator.</p>
+            ${printDetailsTable(pj)}
+            ${printPortalLink()}
+        `)
+    }),
     printJobCompleted: (pj) => ({
         subject: `Printing Job ${pj.jobNumber} completed`,
         html: emailWrapper(`
             <p>Dear <strong>${pj.requestorName || 'Requestor'}</strong>,</p>
             <p><strong>${pj.jobNumber}</strong> has been collected and closed. Thank you.</p>
+            ${printDetailsTable(pj)}
+        `)
+    }),
+    printJobReceiptConfirmed: (pj) => ({
+        subject: `Printing Job ${pj.jobNumber} — receipt confirmed`,
+        html: emailWrapper(`
+            <p><strong>${pj.receivedBy || 'The requestor'}</strong> has confirmed receipt of
+               <strong>${pj.jobNumber}</strong>. The job is now closed.</p>
             ${printDetailsTable(pj)}
         `)
     }),
@@ -574,6 +651,12 @@ export const notifyPrintJobRejected = (pj, requestorEmail) => sendToMany(request
 export const notifyPrintJobAssigned = (pj, operatorEmail) => sendToMany(operatorEmail, emailTemplates.printJobAssignedOperator, pj, 'printJobAssignedOperator');
 export const notifyPrintJobReady = (pj, recipients) => sendToMany(recipients, emailTemplates.printJobReady, pj, 'printJobReady');
 export const notifyPrintJobCompleted = (pj, requestorEmail) => sendToMany(requestorEmail, emailTemplates.printJobCompleted, pj, 'printJobCompleted');
+export const notifyPrintJobAwaitingReceipt = (pj, requestorEmail) => sendToMany(requestorEmail, emailTemplates.printJobAwaitingReceipt, pj, 'printJobAwaitingReceipt');
+export const notifyPrintJobReceiptConfirmed = (pj, recipients) => sendToMany(recipients, emailTemplates.printJobReceiptConfirmed, pj, 'printJobReceiptConfirmed');
+export const notifyPrintProofReleased = (pj, requestorEmail) => sendToMany(requestorEmail, emailTemplates.printProofReleased, pj, 'printProofReleased');
+export const notifyPrintReworkAssigned = (pj, operatorEmail) => sendToMany(operatorEmail, emailTemplates.printReworkAssigned, pj, 'printReworkAssigned');
+export const notifyPrintReworkCompleted = (pj, recipients) => sendToMany(recipients, emailTemplates.printReworkCompleted, pj, 'printReworkCompleted');
+export const notifyPrintReworkRequested = (pj, recipients) => sendToMany(recipients, emailTemplates.printReworkRequested, pj, 'printReworkRequested');
 
 export default {
     sendEmail,
@@ -590,5 +673,11 @@ export default {
     notifyPrintJobAssigned,
     notifyPrintJobReady,
     notifyPrintJobCompleted,
+    notifyPrintJobAwaitingReceipt,
+    notifyPrintJobReceiptConfirmed,
+    notifyPrintProofReleased,
+    notifyPrintReworkAssigned,
+    notifyPrintReworkCompleted,
+    notifyPrintReworkRequested,
     emailTemplates
 };

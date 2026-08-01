@@ -5,6 +5,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
 import '../voucher-styles.css';
+import { daysSince, formatDate, formatDateTime } from '../utils/datetime';
 
 const VoucherHistoryPage = () => {
     const navigate = useNavigate();
@@ -28,13 +29,6 @@ const VoucherHistoryPage = () => {
         remarks: '',
     });
     const [apiSyncWarning, setApiSyncWarning] = useState('');
-
-    const formatDateTime = (value) => {
-        if (!value) return '-';
-        const parsed = new Date(value);
-        if (Number.isNaN(parsed.getTime())) return String(value);
-        return parsed.toLocaleString();
-    };
 
     const parseApiResponse = async (response, fallbackErrorMessage) => {
         const contentType = response.headers.get('content-type') || '';
@@ -455,12 +449,8 @@ const VoucherHistoryPage = () => {
             ? (voucher.approver1_date || voucher.created_at)
             : voucher.created_at;
         if (!since) return false;
-        let s = String(since).trim();
-        if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) s = s.replace(' ', 'T') + 'Z';
-        else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(s)) s = s + 'Z';
-        const d = new Date(s);
-        if (Number.isNaN(d.getTime())) return false;
-        return Math.floor((Date.now() - d) / 86400000) >= REMIND_MIN_DAYS;
+        const elapsedDays = daysSince(since);
+        return elapsedDays !== null && elapsedDays >= REMIND_MIN_DAYS;
     };
 
     // Recall your own claim to fix a mistake — keeps the same JCC number and goes
@@ -649,7 +639,7 @@ const VoucherHistoryPage = () => {
                                         </td>
                                         <td className="px-4 py-3 text-sm text-slate-700">{voucher.user_name}</td>
                                         <td className="px-4 py-3 text-sm text-slate-500">
-                                            {new Date(voucher.created_at).toLocaleDateString()}
+                                            {formatDate(voucher.created_at)}
                                         </td>
                                         <td className="px-4 py-3">
                                             <div className="flex items-center gap-2">
@@ -885,7 +875,7 @@ const VoucherHistoryPage = () => {
                                                         {log.reference_no ? ` | Ref: ${log.reference_no}` : ''}
                                                         {log.remarks ? ` | ${log.remarks}` : ''}
                                                     </div>
-                                                    <div className="voucher-modal-muted">{new Date(log.created_at).toLocaleString()}</div>
+                                                    <div className="voucher-modal-muted">{formatDateTime(log.created_at)}</div>
                                                 </div>
                                                 <div style={{ color: 'var(--text-body)', fontSize: '0.875rem' }}>by {log.action_by_name || 'system'}</div>
                                             </div>

@@ -3,6 +3,8 @@ import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { seedRateCard } from './seeds/rateCard202608.js';
+import { importRateWorkbook } from './utils/rateImport.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1130,6 +1132,67 @@ const initDatabase = () => {
     try { db.exec(`ALTER TABLE print_jobs ADD COLUMN ${col}`); } catch (_) { /* exists */ }
   });
 
+  // Receipt confirmation. Handover used to close a job on the coordinator's
+  // click alone, so 'completed' recorded who *gave* the materials and nothing
+  // about who got them. Handover now parks the job at 'awaiting_receipt' and
+  // only the requestor's own confirmation completes it, stamping these.
+  const printJobReceiptColumns = [
+    'handed_over_at DATETIME',
+    'handed_over_by TEXT',
+    'received_at DATETIME',
+    'received_by_user_id INTEGER',
+  ];
+  printJobReceiptColumns.forEach((col) => {
+    try { db.exec(`ALTER TABLE print_jobs ADD COLUMN ${col}`); } catch (_) { /* exists */ }
+  });
+
+  // Rework / proof-review cycle. current_version and rework_count are derivable
+  // from print_job_reworks, but the coordinator's job lists render on a 30s poll
+  // and would need a correlated subquery per row; both are written in the same
+  // statement batch as the rework insert so they cannot drift.
+  // Content hash of each document's PDF. Lets a resubmit distinguish "same file,
+  // different specs" from "file replaced", and rescues a rename from looking like a
+  // deletion plus an addition. Null on rows uploaded before this existed.
+  try { db.exec('ALTER TABLE print_job_documents ADD COLUMN pdf_sha256 TEXT'); } catch (_) { /* exists */ }
+  // Some bindings are priced by a variant rather than by paper size — a box file is
+  // charged on its spine thickness (1 inc, 1.5, 2, 2.5, 3). Without this the rate
+  // master cannot be matched and the line reads as unpriced.
+  try { db.exec('ALTER TABLE print_job_documents ADD COLUMN binding_variant TEXT'); } catch (_) { /* exists */ }
+  // Optional extras the rate master prices but that have no dedicated field — pouch
+  // lamination, board stock, scanning, packing. JSON array of
+  // { code, size, gsm, colour, variant, quantity }; the dimensions are stored rather
+  // than a rate-line id so a superseded card never strands a saved document.
+  try { db.exec('ALTER TABLE print_job_documents ADD COLUMN extra_services TEXT'); } catch (_) { /* exists */ }
+
+  // A cost line records the dimensions it was priced at. The requestor's spec is an
+  // estimate — the operator at the machine decides the real A3/A4/colour split — so a
+  // line has to carry its own size/GSM/colour to be re-priced when corrected.
+  for (const col of ['paper_size TEXT', 'paper_gsm TEXT', 'colour_mode TEXT', 'variant TEXT']) {
+    try { db.exec(`ALTER TABLE job_cost_lines ADD COLUMN ${col}`); } catch (_) { /* exists */ }
+  }
+
+  // Which annexure version a line belongs to. NULL means "not yet issued" — the
+  // working set an operator can correct before a coordinator issues the first
+  // annexure. Without this, every version of a job's annexure shared one row set,
+  // so correcting a reissued draft would silently rewrite the superseded version's
+  // frozen line-by-line breakdown too, even though its totals stayed frozen.
+  try { db.exec('ALTER TABLE job_cost_lines ADD COLUMN annexure_id INTEGER'); } catch (_) { /* exists */ }
+
+  const printJobRecallColumns = ['recalled_at DATETIME', 'recall_reason TEXT'];
+  printJobRecallColumns.forEach((col) => {
+    try { db.exec(`ALTER TABLE print_jobs ADD COLUMN ${col}`); } catch (_) { /* exists */ }
+  });
+
+  const printJobReworkColumns = [
+    'current_version INTEGER DEFAULT 1',
+    'rework_count INTEGER DEFAULT 0',
+    'proof_released_at DATETIME',
+    'last_rework_at DATETIME',
+  ];
+  printJobReworkColumns.forEach((col) => {
+    try { db.exec(`ALTER TABLE print_jobs ADD COLUMN ${col}`); } catch (_) { /* exists */ }
+  });
+
   db.run(`
     CREATE TABLE IF NOT EXISTS print_jobs (
       id                    INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1200,6 +1263,257 @@ const initDatabase = () => {
       FOREIGN KEY (job_id) REFERENCES print_jobs(id) ON DELETE CASCADE
     )
   `);
+
+  // ── Printing rate master ───────────────────────────────────────────────────
+  // Rates are a matrix, not a list of named services: the printed card prices
+  // (service x paper size x GSM x colour x variant). Modelling each cell as its own
+  // service would mean a new service every time a paper weight is added.
+  //
+  // Money is stored as integers. rate_milli is the rate x 1000 (the card carries
+  // three decimals, e.g. 1.150 -> 1150) and amounts elsewhere are paise, so no
+  // floating point ever enters a total that has to reconcile by hand.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS service_items (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      code          TEXT UNIQUE NOT NULL,      -- PRINT | BIND_SPIRAL | SCAN …
+      label         TEXT NOT NULL,
+      domain        TEXT NOT NULL DEFAULT 'printing',
+      uom           TEXT NOT NULL,             -- page | copy | sheet | piece | box | job
+      pricing_kind  TEXT NOT NULL DEFAULT 'per_unit',
+      cost_group    TEXT NOT NULL,             -- printing | binding | finishing | misc
+      active        INTEGER NOT NULL DEFAULT 1,
+      created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS rate_versions (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      code           TEXT UNIQUE NOT NULL,     -- RC-2026-08
+      label          TEXT,
+      location_id    INTEGER,                  -- NULL = global card
+      effective_from DATE NOT NULL,
+      effective_to   DATE,
+      status         TEXT NOT NULL DEFAULT 'draft',   -- draft | approved | superseded
+      source_note    TEXT,                     -- provenance, e.g. which sheet it came from
+      approved_by    INTEGER,
+      approved_at    DATETIME,
+      created_by     INTEGER,
+      created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (location_id) REFERENCES locations(id),
+      FOREIGN KEY (approved_by) REFERENCES users(id)
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS rate_lines (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      version_id       INTEGER NOT NULL,
+      service_code     TEXT NOT NULL,
+      paper_size       TEXT,                   -- NULL = applies to any
+      paper_gsm        TEXT,
+      colour_mode      TEXT,                   -- BW | COLOUR | NULL
+      variant          TEXT,                   -- VIP | BLUE | 5PLY … free dimension
+      rate_milli       INTEGER NOT NULL,
+      min_charge_paise INTEGER,
+      needs_review     INTEGER NOT NULL DEFAULT 0,  -- transcribed but unconfirmed
+      note             TEXT,
+      FOREIGN KEY (version_id)   REFERENCES rate_versions(id) ON DELETE CASCADE,
+      FOREIGN KEY (service_code) REFERENCES service_items(code),
+      UNIQUE (version_id, service_code, paper_size, paper_gsm, colour_mode, variant)
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_rate_lines_lookup
+          ON rate_lines(version_id, service_code, paper_size, paper_gsm, colour_mode)`);
+  // Only one approved card per scope per effective date.
+  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_rate_version_live
+          ON rate_versions(COALESCE(location_id, 0), effective_from) WHERE status = 'approved'`);
+
+  // ── Job cost lines and the Cost Annexure ───────────────────────────────────
+  // A cost line copies the rate it was priced at, rather than pointing to it. Editing
+  // a rate card must never change a figure on an issued annexure, so the snapshot is
+  // the record. Amounts are paise, rates are millirupees; no floats.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS job_cost_lines (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id           INTEGER NOT NULL,
+      document_id      INTEGER,            -- which document this priced, if any
+      rework_id        INTEGER,            -- set when the line is rework, not original
+      service_code     TEXT NOT NULL,
+      label            TEXT NOT NULL,
+      cost_group       TEXT NOT NULL,      -- printing | binding | finishing | misc
+      quantity         INTEGER NOT NULL,
+      uom              TEXT NOT NULL,
+      rate_version_id  INTEGER,            -- which card was in force
+      rate_milli       INTEGER NOT NULL,   -- snapshot, not a reference
+      amount_paise     INTEGER NOT NULL,
+      min_charge_applied INTEGER NOT NULL DEFAULT 0,
+      is_manual        INTEGER NOT NULL DEFAULT 0,
+      manual_reason    TEXT,
+      detail           TEXT,               -- e.g. "A4 / 80 / BW · 250pp x 5"
+      accrued_by       INTEGER,
+      accrued_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (job_id)          REFERENCES print_jobs(id) ON DELETE CASCADE,
+      FOREIGN KEY (document_id)     REFERENCES print_job_documents(id),
+      FOREIGN KEY (rework_id)       REFERENCES print_job_reworks(id),
+      FOREIGN KEY (rate_version_id) REFERENCES rate_versions(id)
+    )
+  `);
+  // A line whose rate is not on the card yet still belongs on the annexure — it is
+  // listed as "Rate Not Configured" and excluded from the totals, so an unpriced
+  // service never blocks the job and never silently costs zero either.
+  try { db.exec("ALTER TABLE job_cost_lines ADD COLUMN rate_status TEXT NOT NULL DEFAULT 'priced'"); } catch (_) { /* exists */ }
+
+  db.run('CREATE INDEX IF NOT EXISTS idx_cost_lines_job ON job_cost_lines(job_id, cost_group)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_cost_lines_accrued ON job_cost_lines(accrued_at)');
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS cost_annexures (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      annexure_no       TEXT UNIQUE NOT NULL,     -- PCA-2026-0001
+      job_id            INTEGER NOT NULL,
+      version           INTEGER NOT NULL DEFAULT 1,
+      supersedes_id     INTEGER,
+      status            TEXT NOT NULL DEFAULT 'draft',  -- draft | under_review | approved | superseded
+      rate_version_id   INTEGER,
+      printing_paise    INTEGER NOT NULL DEFAULT 0,
+      binding_paise     INTEGER NOT NULL DEFAULT 0,
+      finishing_paise   INTEGER NOT NULL DEFAULT 0,
+      misc_paise        INTEGER NOT NULL DEFAULT 0,
+      rework_paise      INTEGER NOT NULL DEFAULT 0,
+      basic_paise       INTEGER NOT NULL DEFAULT 0,
+      grand_total_paise INTEGER NOT NULL DEFAULT 0,
+      line_count        INTEGER NOT NULL DEFAULT 0,
+      payload_sha256    TEXT,                     -- set at approval; proves the figures
+      reissue_reason    TEXT,
+      issued_by         INTEGER,
+      issued_at         DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (job_id)          REFERENCES print_jobs(id) ON DELETE CASCADE,
+      FOREIGN KEY (supersedes_id)   REFERENCES cost_annexures(id),
+      FOREIGN KEY (rate_version_id) REFERENCES rate_versions(id),
+      FOREIGN KEY (issued_by)       REFERENCES users(id),
+      UNIQUE (job_id, version)
+    )
+  `);
+  db.run('CREATE INDEX IF NOT EXISTS idx_annexure_job ON cost_annexures(job_id, version)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_annexure_status ON cost_annexures(status, issued_at)');
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS annexure_approvals (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      annexure_id  INTEGER NOT NULL,
+      role         TEXT NOT NULL,          -- prepared | reviewed | approved | returned
+      user_id      INTEGER NOT NULL,
+      employee_id  TEXT,
+      designation  TEXT,
+      department   TEXT,
+      remarks      TEXT,
+      ip_address   TEXT,
+      acted_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (annexure_id) REFERENCES cost_annexures(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id)     REFERENCES users(id)
+    )
+  `);
+  db.run('CREATE INDEX IF NOT EXISTS idx_annexure_approvals ON annexure_approvals(annexure_id, acted_at)');
+
+  // Gap-free document numbering, independent of rowid so a cancelled document does
+  // not leave a hole in the series.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS doc_sequences (
+      name       TEXT PRIMARY KEY,
+      next_value INTEGER NOT NULL DEFAULT 1
+    )
+  `);
+
+  // An approved annexure is frozen. Belt and braces alongside the route guard,
+  // because this is a financial record.
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS trg_annexure_immutable
+    BEFORE UPDATE OF grand_total_paise, basic_paise, line_count, rate_version_id
+    ON cost_annexures
+    WHEN OLD.status = 'approved'
+    BEGIN SELECT RAISE(ABORT, 'An approved annexure cannot be modified'); END
+  `);
+
+  // ── Submission history ─────────────────────────────────────────────────────
+  // One row per submit. Lets any two submissions be compared, so a resubmit after
+  // a recall (or after the coordinator returns a job) can show exactly what the
+  // requestor changed instead of leaving the verifier to re-read the whole form.
+  //
+  // The header and document lists are stored as JSON on purpose: a snapshot is a
+  // historical record and must not be re-interpreted by a future column list.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS print_job_submissions (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id         INTEGER NOT NULL,
+      seq            INTEGER NOT NULL,          -- 1, 2, 3 … per job
+      submitted_by   INTEGER NOT NULL,
+      submitted_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+      trigger_kind   TEXT,                      -- initial | after_recall | after_return
+      trigger_reason TEXT,                      -- recall reason / coordinator remark
+      header_json    TEXT NOT NULL,
+      documents_json TEXT NOT NULL,
+      books          INTEGER,
+      copies         INTEGER,
+      pages          INTEGER,
+      FOREIGN KEY (job_id)       REFERENCES print_jobs(id) ON DELETE CASCADE,
+      FOREIGN KEY (submitted_by) REFERENCES users(id),
+      UNIQUE (job_id, seq)
+    )
+  `);
+  db.run('CREATE INDEX IF NOT EXISTS idx_job_submissions ON print_job_submissions(job_id, seq)');
+
+  // ── Rework versions ────────────────────────────────────────────────────────
+  // Append-only ledger of revised PDFs. A rework never edits the original job or
+  // its documents: each correction round inserts a new row carrying its own PDF,
+  // so the full history survives and V1 (the original submission) stays intact in
+  // print_job_documents. Version 1 is therefore NOT a row here — the version list
+  // is a union of the original document and these rows.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS print_job_reworks (
+      id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+      rework_id            TEXT UNIQUE NOT NULL,     -- RWK0001
+      job_id               INTEGER NOT NULL,
+      document_id          INTEGER,                  -- NULL = single-document job
+      version_no           INTEGER NOT NULL,         -- 2, 3, 4 …
+
+      pdf_path             TEXT NOT NULL,
+      pdf_original_name    TEXT,
+      pdf_size_bytes       INTEGER,
+      pdf_sha256           TEXT,
+      num_pages            INTEGER,
+
+      modified_pages       TEXT NOT NULL,            -- exactly as typed
+      modified_pages_norm  TEXT,                     -- canonical, e.g. 5,8,30-36
+      modified_page_count  INTEGER,
+      additional_pages     INTEGER NOT NULL DEFAULT 0,
+      insert_position      TEXT,
+      change_description   TEXT NOT NULL,
+      coordinator_remarks  TEXT,
+
+      created_by           INTEGER NOT NULL,
+      assigned_operator_id INTEGER,
+      status               TEXT NOT NULL DEFAULT 'pending',
+      cancel_reason        TEXT,
+
+      created_at           DATETIME DEFAULT CURRENT_TIMESTAMP,
+      assigned_at          DATETIME,
+      started_at           DATETIME,
+      completed_at         DATETIME,
+
+      FOREIGN KEY (job_id)               REFERENCES print_jobs(id) ON DELETE CASCADE,
+      FOREIGN KEY (document_id)          REFERENCES print_job_documents(id),
+      FOREIGN KEY (created_by)           REFERENCES users(id),
+      FOREIGN KEY (assigned_operator_id) REFERENCES users(id),
+      UNIQUE (job_id, version_no)
+    )
+  `);
+  db.run('CREATE INDEX IF NOT EXISTS idx_reworks_job ON print_job_reworks(job_id, version_no)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_reworks_operator ON print_job_reworks(assigned_operator_id, status)');
+  // At most one open rework per job — two in flight would race for the same
+  // version number and leave the history ambiguous.
+  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_reworks_one_open
+          ON print_job_reworks(job_id) WHERE status IN ('pending','in_progress')`);
 
   // Saved JCC drafts — one row per unfinished claim form (raw form JSON).
   // Kept separate from voucher_requests so half-filled claims never enter the
@@ -1779,6 +2093,32 @@ const initDatabase = () => {
       }
     } catch (err) {
       console.error('Error seeding admin user:', err);
+    }
+
+    // Draft printing rate card. Idempotent, and it refuses to touch an approved
+    // version, so re-seeding on every boot is safe.
+    try {
+      // The authoritative rate master is the annexure workbook. Import it when the
+      // file is present; the photo transcription is only a fallback for environments
+      // that do not ship the spreadsheet.
+      const wbPath = path.join(__dirname, '..', 'PRINTING ANEXERE_2022 RATE CHANGE1.xlsx');
+      if (fs.existsSync(wbPath)) {
+        const r = importRateWorkbook(rawDb, wbPath, {
+          code: 'RC-2022',
+          label: 'Printing & Binding Services — 2022 rate change',
+          effectiveFrom: '2022-01-01',
+          sourceNote: 'Imported from PRINTING ANEXERE_2022 RATE CHANGE1.xlsx',
+        });
+        if (r.skipped) console.log(`✓ Rate card RC-2022: ${r.skipped}`);
+        else console.log(`✓ Rate card RC-2022 imported — ${r.services} services, ${r.lines} rates`);
+        r.warnings?.forEach((w) => console.warn('  [rates]', w));
+      } else {
+        const result = seedRateCard(rawDb);
+        if (result.skipped) console.log('✓ Rate card RC-2026-08 already approved, seed skipped');
+        else console.log(`✓ Rate card RC-2026-08 seeded as draft — ${result.lines} lines`);
+      }
+    } catch (err) {
+      console.error('Error seeding rate card:', err.message);
     }
   } catch (error) {
     console.error('Error creating letter management tables:', error);

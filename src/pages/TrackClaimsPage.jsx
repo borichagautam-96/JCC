@@ -3,41 +3,22 @@ import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
 import { useNavigate } from 'react-router-dom';
 import '../voucher-styles.css';
+import { daysSince, parseServerDate } from '../utils/datetime';
 
 // ── date/duration helpers ──
 const DAY_MS = 86400000;
 
-// SQLite stores timestamps as "YYYY-MM-DD HH:MM:SS" in UTC. A plain new Date()
-// mis-reads them as local time (wrong displayed time + off-by-one day counts,
-// and Invalid Date on Safari). Normalize to an explicit UTC instant.
-const parseDbDate = (v) => {
-    if (!v) return null;
-    if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v;
-    let s = String(v).trim();
-    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) {
-        s = s.replace(' ', 'T') + 'Z';          // space-separated UTC → ISO UTC
-    } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(s)) {
-        s = s + 'Z';                             // ISO without offset → assume UTC
-    }
-    const d = new Date(s);
-    return Number.isNaN(d.getTime()) ? null : d;
-};
-
 const compactDate = (v) => {
-    const d = parseDbDate(v);
+    const d = parseServerDate(v);
     if (!d) return '';
-    return d.toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 };
 const daysBetween = (from, to) => {
-    const a = parseDbDate(from), b = parseDbDate(to);
+    const a = parseServerDate(from), b = parseServerDate(to);
     if (!a || !b) return null;
     return Math.max(0, Math.floor((b - a) / DAY_MS));
 };
-const elapsedDays = (from) => {
-    const a = parseDbDate(from);
-    if (!a) return 0;
-    return Math.max(0, Math.floor((Date.now() - a) / DAY_MS));
-};
+const elapsedDays = (from) => Math.max(0, daysSince(from) ?? 0);
 const overdueColor = (days) => (days >= 4 ? '#DC2626' : days >= 2 ? '#D97706' : '#64748B');
 const durLabel = (d) => (d === null ? '' : d === 0 ? 'same day' : `${d} day${d === 1 ? '' : 's'}`);
 
@@ -184,7 +165,7 @@ const TrackClaimsPage = () => {
     };
 
     // Split into in-progress (oldest first) and completed (most recent approvals first)
-    const ts = (v) => (parseDbDate(v)?.getTime() ?? 0);
+    const ts = (v) => (parseServerDate(v)?.getTime() ?? 0);
     const active = claims
         .filter(v => ACTIVE_STATUSES.includes(v.status))
         .sort((a, b) => ts(a.created_at) - ts(b.created_at));

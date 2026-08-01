@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
+import { formatDateTime } from '../utils/datetime';
 
 const STATUS_OPTIONS = [
   { value: 'new', label: 'New' },
@@ -26,13 +27,6 @@ const TYPE_OPTIONS = [
   { value: 'performance', label: 'Performance' },
   { value: 'other', label: 'Other' },
 ];
-
-const formatDateTime = (value) => {
-  if (!value) return '-';
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return String(value);
-  return parsed.toLocaleString();
-};
 
 const AdminFeedbackPage = () => {
   const { getToken } = useAuth();

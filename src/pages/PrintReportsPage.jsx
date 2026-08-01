@@ -3,16 +3,21 @@ import { useAuth, getDeviceId } from '../contexts/AuthContext';
 
 // Status → label + accent, ordered along the workflow.
 const STATUS_META = [
-    { key: 'submitted', label: 'Pending Verification', color: '#2563EB' },
-    { key: 'returned', label: 'Returned', color: '#EA580C' },
-    { key: 'rejected', label: 'Rejected', color: '#DC2626' },
-    { key: 'accepted', label: 'In Queue', color: '#0D9488' },
-    { key: 'assigned', label: 'Assigned', color: '#4F46E5' },
-    { key: 'printing', label: 'Printing', color: '#7C3AED' },
-    { key: 'paused', label: 'Paused', color: '#D97706' },
-    { key: 'printing_completed', label: 'Printed', color: '#0891B2' },
-    { key: 'ready_for_collection', label: 'Ready', color: '#16A34A' },
-    { key: 'completed', label: 'Completed', color: '#15803D' },
+    { key: 'submitted', label: 'Pending Verification', color: 'var(--stat-blue)' },
+    { key: 'returned', label: 'Returned', color: 'var(--stat-orange)' },
+    { key: 'rejected', label: 'Rejected', color: 'var(--stat-red)' },
+    { key: 'accepted', label: 'In Queue', color: 'var(--stat-teal)' },
+    { key: 'assigned', label: 'Assigned', color: 'var(--stat-indigo)' },
+    { key: 'printing', label: 'Printing', color: 'var(--stat-purple)' },
+    { key: 'paused', label: 'Paused', color: 'var(--stat-amber)' },
+    { key: 'printing_completed', label: 'Printed', color: 'var(--stat-sky)' },
+    { key: 'ready_for_collection', label: 'Ready', color: 'var(--stat-green)' },
+    { key: 'awaiting_receipt', label: 'Awaiting Receipt', color: 'var(--stat-amber)' },
+    { key: 'proof_review', label: 'Proof Review', color: 'var(--stat-blue)' },
+    { key: 'rework_requested', label: 'Rework Pending', color: 'var(--stat-orange)' },
+    { key: 'rework_printing', label: 'Rework Printing', color: 'var(--stat-purple)' },
+    { key: 'completed', label: 'Completed', color: 'var(--stat-green-strong)' },
+    { key: 'recalled', label: 'Recalled', color: 'var(--text-muted)' },
     { key: 'draft', label: 'Draft', color: 'var(--text-muted)' },
     { key: 'cancelled', label: 'Cancelled', color: 'var(--text-faint)' },
 ];
@@ -51,15 +56,15 @@ const PrintReportsPage = () => {
     const maxStatus = Math.max(1, ...STATUS_META.map((s) => byStatus[s.key] || 0));
     const isCoordinatorView = stats?.scope === 'all';
 
-    const activeInPipeline = ['submitted', 'accepted', 'assigned', 'printing', 'paused', 'printing_completed', 'ready_for_collection']
+    const activeInPipeline = ['submitted', 'accepted', 'assigned', 'printing', 'paused', 'printing_completed', 'ready_for_collection', 'awaiting_receipt', 'proof_review', 'rework_requested', 'rework_printing']
         .reduce((sum, k) => sum + (byStatus[k] || 0), 0);
 
     const summaryCards = [
-        { label: 'Total Jobs', value: total, color: '#1E3A5F' },
-        { label: 'In Pipeline', value: activeInPipeline, color: '#7C3AED' },
-        { label: 'Pending Verification', value: byStatus.submitted || 0, color: '#2563EB' },
-        { label: 'In Queue', value: byStatus.accepted || 0, color: '#0D9488' },
-        { label: 'Completed', value: byStatus.completed || 0, color: '#15803D' },
+        { label: 'Total Jobs', value: total, color: 'var(--stat-navy)' },
+        { label: 'In Pipeline', value: activeInPipeline, color: 'var(--stat-purple)' },
+        { label: 'Pending Verification', value: byStatus.submitted || 0, color: 'var(--stat-blue)' },
+        { label: 'In Queue', value: byStatus.accepted || 0, color: 'var(--stat-teal)' },
+        { label: 'Completed', value: byStatus.completed || 0, color: 'var(--stat-green-strong)' },
     ];
 
     return (
@@ -113,19 +118,19 @@ const PrintReportsPage = () => {
                         <div className="card-grid mb-xl" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: 'var(--spacing-xl)' }}>
                             <div className="metric-card">
                                 <h3 className="metric-label">Avg. time to verify</h3>
-                                <p className="metric-value" style={{ color: '#2563EB' }}>
+                                <p className="metric-value" style={{ color: 'var(--stat-blue)' }}>
                                     {stats?.turnaround?.avg_verify_hrs != null ? `${stats.turnaround.avg_verify_hrs} h` : '—'}
                                 </p>
                             </div>
                             <div className="metric-card">
                                 <h3 className="metric-label">Avg. total turnaround</h3>
-                                <p className="metric-value" style={{ color: '#15803D' }}>
+                                <p className="metric-value" style={{ color: 'var(--stat-green-strong)' }}>
                                     {stats?.turnaround?.avg_total_hrs != null ? `${stats.turnaround.avg_total_hrs} h` : '—'}
                                 </p>
                             </div>
                             <div className="metric-card">
                                 <h3 className="metric-label">Jobs completed</h3>
-                                <p className="metric-value" style={{ color: '#15803D' }}>{stats?.turnaround?.completed_count ?? 0}</p>
+                                <p className="metric-value" style={{ color: 'var(--stat-green-strong)' }}>{stats?.turnaround?.completed_count ?? 0}</p>
                             </div>
                         </div>
 
@@ -139,7 +144,7 @@ const PrintReportsPage = () => {
                                     </thead>
                                     <tbody>
                                         {(stats?.operators || []).length === 0 ? (
-                                            <tr><td colSpan="3" className="text-center" style={{ color: '#999', padding: '1.5rem' }}>No operators configured.</td></tr>
+                                            <tr><td colSpan="3" className="text-center" style={{ color: 'var(--text-muted)', padding: '1.5rem' }}>No operators configured.</td></tr>
                                         ) : stats.operators.map((o) => (
                                             <tr key={o.id}>
                                                 <td style={{ fontWeight: 600 }}>{o.name}</td>
@@ -162,7 +167,7 @@ const PrintReportsPage = () => {
                                     </thead>
                                     <tbody>
                                         {(stats?.locationStats || []).length === 0 ? (
-                                            <tr><td colSpan="2" className="text-center" style={{ color: '#999', padding: '1.5rem' }}>No data yet.</td></tr>
+                                            <tr><td colSpan="2" className="text-center" style={{ color: 'var(--text-muted)', padding: '1.5rem' }}>No data yet.</td></tr>
                                         ) : stats.locationStats.map((l) => (
                                             <tr key={l.location}>
                                                 <td style={{ fontWeight: 600 }}>{l.location}</td>
@@ -184,7 +189,7 @@ const PrintReportsPage = () => {
                                     </thead>
                                     <tbody>
                                         {(stats?.departmentStats || []).length === 0 ? (
-                                            <tr><td colSpan="2" className="text-center" style={{ color: '#999', padding: '1.5rem' }}>No data yet.</td></tr>
+                                            <tr><td colSpan="2" className="text-center" style={{ color: 'var(--text-muted)', padding: '1.5rem' }}>No data yet.</td></tr>
                                         ) : stats.departmentStats.map((d) => (
                                             <tr key={d.department}>
                                                 <td style={{ fontWeight: 600 }}>{d.department}</td>

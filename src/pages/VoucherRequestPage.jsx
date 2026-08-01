@@ -5,6 +5,7 @@ import DatePicker from '../components/DatePicker';
 import { useLocation, useNavigate } from 'react-router-dom';
 import '../voucher-styles.css';
 import { getVendorNames } from '../utils/vendorList';
+import { formatDateTimeShort, toDateInputValue } from '../utils/datetime';
 
 // Animated PDF-extraction step sequence (visual only — overlays the real extract call).
 const EXTRACT_STEPS = [
@@ -28,8 +29,6 @@ const INVOICE_DATE_LOOKBACK_DAYS = 15;
 // Outdoor/field-duty exception: allows an invoice older than 15 days (bounded).
 const OUTDOOR_DUTY_LOOKBACK_DAYS = 45;
 const OUTDOOR_REMARK_MIN_LENGTH = 10;
-
-const toDateInputValue = (date) => new Date(date).toISOString().split('T')[0];
 
 const getTodayDateValue = () => toDateInputValue(new Date());
 
@@ -1166,7 +1165,7 @@ const VoucherRequestPage = () => {
                             <option value="">📄 Resume a draft ({drafts.length})</option>
                             {drafts.map(d => (
                                 <option key={d.id} value={d.id}>
-                                    {(d.title || 'Untitled')} — {new Date(d.updated_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+                                    {(d.title || 'Untitled')} — {formatDateTimeShort(d.updated_at)}
                                 </option>
                             ))}
                         </select>
@@ -1422,7 +1421,10 @@ const VoucherRequestPage = () => {
                         </div>
 
                         {/* Outdoor / field-duty exception — allows an invoice older than 15 days */}
-                        <div style={{ marginTop: 'var(--spacing-lg)', padding: '14px 16px', border: '1px solid var(--border)', borderRadius: '10px', background: formData.outdoorDuty ? '#FFFBEB' : '#F8FAFC' }}>
+                        <div
+                            className={`voucher-notice${formData.outdoorDuty ? ' voucher-notice-active' : ''}`}
+                            style={{ marginTop: 'var(--spacing-lg)' }}
+                        >
                             <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', margin: 0 }}>
                                 <input
                                     type="checkbox"

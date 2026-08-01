@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
+import { formatDate } from '../utils/datetime';
 
 const CoordinatorPage = () => {
     const [invoices, setInvoices] = useState([]);
@@ -544,7 +545,7 @@ const CoordinatorPage = () => {
                                         </div>
                                         <div className="flex justify-between pa-row">
                                             <span className="pa-label" style={{ color: 'var(--text-muted)' }}>Date:</span>
-                                            <strong className="pa-value" style={{ color: 'var(--text-strong)' }}>{new Date(voucher.created_at).toLocaleDateString()}</strong>
+                                            <strong className="pa-value" style={{ color: 'var(--text-strong)' }}>{formatDate(voucher.created_at)}</strong>
                                         </div>
                                         {voucher.description && (
                                             <div>
@@ -655,7 +656,7 @@ const CoordinatorPage = () => {
                                                     { label: 'Amount', value: `₹${parseFloat(selectedVoucher.basic_amount || 0).toLocaleString()}`, highlight: true },
                                                     { label: 'PO No.', value: selectedVoucher.po_number || 'N/A' },
                                                     { label: 'Requested By', value: selectedVoucher.user_name || '—' },
-                                                    { label: 'Date', value: new Date(selectedVoucher.created_at).toLocaleDateString() },
+                                                    { label: 'Date', value: formatDate(selectedVoucher.created_at) },
                                                     ...(selectedVoucher.description ? [{ label: 'Description', value: selectedVoucher.description }] : []),
                                                 ].map((row, i, arr) => (
                                                     <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '1rem', padding: '11px 0', borderBottom: i < arr.length - 1 ? '1px solid #EEF2F7' : 'none' }}>
@@ -669,7 +670,7 @@ const CoordinatorPage = () => {
                                                 <div style={{ marginTop: '0.85rem', padding: '12px 14px', background: '#FFFBEB', borderRadius: '10px', border: '1px solid #FCD34D' }}>
                                                     <div style={{ color: '#92400E', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.35rem' }}>⚠ Backdated – Outdoor / Field Duty</div>
                                                     <div style={{ color: 'var(--text-body)', fontSize: '0.82rem', marginBottom: '0.2rem' }}>
-                                                        Duty period: <strong>{selectedVoucher.outdoor_from ? new Date(selectedVoucher.outdoor_from).toLocaleDateString() : '-'} → {selectedVoucher.outdoor_to ? new Date(selectedVoucher.outdoor_to).toLocaleDateString() : '-'}</strong>
+                                                        Duty period: <strong>{formatDate(selectedVoucher.outdoor_from)} → {formatDate(selectedVoucher.outdoor_to)}</strong>
                                                     </div>
                                                     {selectedVoucher.outdoor_remark && (
                                                         <div style={{ color: 'var(--text-body)', fontSize: '0.82rem' }}><span style={{ color: '#92400E' }}>Reason: </span>{selectedVoucher.outdoor_remark}</div>
@@ -975,7 +976,7 @@ const CoordinatorPage = () => {
                                         </div>
                                         <div className="flex justify-between pa-row">
                                             <span className="text-muted">Uploaded:</span>
-                                            <strong>{new Date(invoice.created_at).toLocaleDateString()}</strong>
+                                            <strong>{formatDate(invoice.created_at)}</strong>
                                         </div>
                                     </div>
                                 </div>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
+import { formatDateTime, parseServerDate } from '../utils/datetime';
 
 const REMINDER_ROLE_OPTIONS = [
     { value: 'admin', label: 'Admin' },
@@ -35,7 +36,13 @@ const UserManagementPage = () => {
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
     const [managers, setManagers] = useState([]);
-    const [activeTab, setActiveTab] = useState('users'); // 'users' or 'audit'
+    const [activeTab, setActiveTab] = useState('users'); // 'users', 'audit', or 'teams'
+    // Bulk manager assignment — pick one manager, tick a team, assign them all at once
+    // instead of editing every user's Manager field individually.
+    const [teamManagerId, setTeamManagerId] = useState('');
+    const [teamSelected, setTeamSelected] = useState(() => new Set());
+    const [teamShowUnassignedOnly, setTeamShowUnassignedOnly] = useState(true);
+    const [teamBusy, setTeamBusy] = useState(false);
     const [auditLogs, setAuditLogs] = useState([]);
     const [auditLoading, setAuditLoading] = useState(false);
     const [showAddPw, setShowAddPw] = useState(false);
@@ -240,10 +247,79 @@ const UserManagementPage = () => {
                 throw new Error(data?.error || `Failed to load managers (${response.status})`);
             }
 
-            const managerUsers = data.filter(u => u.role === 'manager' || u.role === 'admin');
+            // 'admin' is a system permission, not an org-chart position — an admin
+            // account should not show up as a candidate for "who is this person's
+            // manager" just because they hold that role.
+            const managerUsers = data.filter(u => u.role === 'manager');
             setManagers(managerUsers);
         } catch (error) {
             console.error('Error fetching managers:', error);
+        }
+    };
+
+    const toggleTeamUser = (id) => {
+        setTeamSelected(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
+        });
+    };
+
+    const teamSelectableUsers = users.filter(u =>
+        String(u.id) !== String(teamManagerId) && (!teamShowUnassignedOnly || !u.manager_id)
+    );
+
+    const selectAllTeamVisible = () => {
+        setTeamSelected(prev => {
+            const allSelected = teamSelectableUsers.every(u => prev.has(u.id));
+            return allSelected ? new Set() : new Set(teamSelectableUsers.map(u => u.id));
+        });
+    };
+
+    const assignTeam = async () => {
+        if (!teamManagerId || teamSelected.size === 0) return;
+        setTeamBusy(true);
+        setError('');
+        setSuccess('');
+        try {
+            const response = await fetch('/api/users/bulk-assign-manager', {
+                method: 'POST',
+                headers: authHeaders(),
+                body: JSON.stringify({ manager_id: Number(teamManagerId), user_ids: [...teamSelected] }),
+            });
+            const data = await parseJsonSafe(response);
+            if (!response.ok) throw new Error(data?.error || 'Failed to assign manager');
+            setSuccess(data.message);
+            setTeamSelected(new Set());
+            await Promise.all([fetchUsers(), fetchManagers()]);
+        } catch (error) {
+            setError(error.message);
+        } finally {
+            setTeamBusy(false);
+        }
+    };
+
+    // Reassign or unassign a single already-assigned user, straight from the
+    // "Current assignments" list — no need to bulk-select just to move one person.
+    const [reassigningUserId, setReassigningUserId] = useState(null);
+    const changeUserManager = async (userId, newManagerId) => {
+        setReassigningUserId(userId);
+        setError('');
+        setSuccess('');
+        try {
+            const response = await fetch('/api/users/bulk-assign-manager', {
+                method: 'POST',
+                headers: authHeaders(),
+                body: JSON.stringify({ manager_id: newManagerId ? Number(newManagerId) : null, user_ids: [userId] }),
+            });
+            const data = await parseJsonSafe(response);
+            if (!response.ok) throw new Error(data?.error || 'Failed to update manager');
+            setSuccess(data.message);
+            await fetchUsers();
+        } catch (error) {
+            setError(error.message);
+        } finally {
+            setReassigningUserId(null);
         }
     };
 
@@ -541,8 +617,8 @@ const UserManagementPage = () => {
 
     const getSessionStatusBadge = (user) => {
         if (user.active_session) {
-            const expires = new Date(user.active_session.expires_at);
-            if (expires > new Date()) {
+            const expires = parseServerDate(user.active_session.expires_at);
+            if (expires && expires > new Date()) {
                 return { label: 'Active', bg: '#D1FAE5', color: '#065F46' };
             }
             return { label: 'Expired', bg: '#FEE2E2', color: '#991B1B' };
@@ -622,6 +698,21 @@ const UserManagementPage = () => {
                     }}
                 >
                     Device Audit Log
+                </button>
+                <button
+                    onClick={() => setActiveTab('teams')}
+                    style={{
+                        padding: '0.7rem 1.5rem',
+                        background: activeTab === 'teams' ? '#0066CC' : '#E5E7EB',
+                        color: activeTab === 'teams' ? 'white' : '#374151',
+                        border: 'none',
+                        borderRadius: '6px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        fontSize: '0.95rem'
+                    }}
+                >
+                    Teams
                 </button>
             </div>
 
@@ -948,7 +1039,7 @@ const UserManagementPage = () => {
                                     const actionStyle = actionColors[log.action] || { bg: '#F3F4F6', color: 'var(--text-body)' };
                                     return (
                                         <tr key={log.id}>
-                                            <td style={{ fontSize: '0.85rem', whiteSpace: 'nowrap' }}>{new Date(log.created_at).toLocaleString()}</td>
+                                            <td style={{ fontSize: '0.85rem', whiteSpace: 'nowrap' }}>{formatDateTime(log.created_at)}</td>
                                             <td style={{ fontWeight: 600, fontSize: '0.9rem' }}>{log.user_name || '-'} {log.user_ps_number ? `(${log.user_ps_number})` : ''}</td>
                                             <td>
                                                 <span style={{
@@ -977,6 +1068,158 @@ const UserManagementPage = () => {
                     </table>
                 </div>
             )}
+
+            {activeTab === 'teams' && (
+                <div style={{
+                    background: 'var(--surface)',
+                    border: '1px solid var(--border)',
+                    borderRadius: '8px',
+                    padding: '1.25rem',
+                }}>
+                    <h3 style={{ margin: '0 0 0.4rem 0', fontSize: '1.1rem' }}>Assign a team to a manager</h3>
+                    <p style={{ margin: '0 0 1rem 0', color: 'var(--text-muted)', fontSize: '0.88rem' }}>
+                        Pick a manager, tick everyone who reports to them, and assign the whole team in one go —
+                        instead of opening each person's Edit form individually.
+                    </p>
+
+                    <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: '1rem' }}>
+                        <div>
+                            <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.3rem' }}>Manager</label>
+                            <select
+                                value={teamManagerId}
+                                onChange={(e) => { setTeamManagerId(e.target.value); setTeamSelected(new Set()); }}
+                                style={{ padding: '0.5rem 0.75rem', borderRadius: '6px', border: '1px solid var(--border)', minWidth: '220px' }}
+                            >
+                                <option value="">Select a manager…</option>
+                                {managers.map(m => (
+                                    <option key={m.id} value={m.id}>{m.name} ({m.ps_number})</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.88rem', paddingBottom: '0.5rem' }}>
+                            <input type="checkbox" checked={teamShowUnassignedOnly}
+                                   onChange={(e) => setTeamShowUnassignedOnly(e.target.checked)} />
+                            Show only users with no manager yet
+                        </label>
+
+                        <button
+                            onClick={assignTeam}
+                            disabled={!teamManagerId || teamSelected.size === 0 || teamBusy}
+                            style={{
+                                padding: '0.6rem 1.25rem', background: (!teamManagerId || teamSelected.size === 0) ? '#9CA3AF' : '#0066CC',
+                                color: 'white', border: 'none', borderRadius: '6px', fontWeight: 600,
+                                cursor: (!teamManagerId || teamSelected.size === 0) ? 'not-allowed' : 'pointer',
+                            }}
+                        >
+                            {teamBusy ? 'Assigning…' : `Assign ${teamSelected.size || ''} to this manager`.trim()}
+                        </button>
+                    </div>
+
+                    {!teamManagerId ? (
+                        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Pick a manager above to see who can be assigned.</p>
+                    ) : teamSelectableUsers.length === 0 ? (
+                        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                            {teamShowUnassignedOnly
+                                ? 'Everyone already has a manager assigned. Untick "unassigned only" to reassign someone.'
+                                : 'No other users to assign.'}
+                        </p>
+                    ) : (
+                        <div className="table-container">
+                            <table className="table">
+                                <thead>
+                                    <tr>
+                                        <th style={{ width: '2.5rem' }}>
+                                            <input type="checkbox"
+                                                   checked={teamSelectableUsers.length > 0 && teamSelectableUsers.every(u => teamSelected.has(u.id))}
+                                                   onChange={selectAllTeamVisible} />
+                                        </th>
+                                        <th>PS Number</th><th>Name</th><th>Role</th><th>Current manager</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {teamSelectableUsers.map(u => (
+                                        <tr key={u.id} style={{ cursor: 'pointer' }} onClick={() => toggleTeamUser(u.id)}>
+                                            <td onClick={(e) => e.stopPropagation()}>
+                                                <input type="checkbox" checked={teamSelected.has(u.id)} onChange={() => toggleTeamUser(u.id)} />
+                                            </td>
+                                            <td>{u.ps_number}</td>
+                                            <td style={{ fontWeight: 600 }}>{u.name}</td>
+                                            <td style={{ textTransform: 'capitalize' }}>{u.role}</td>
+                                            <td className="text-muted">{u.manager_name || '—'}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {activeTab === 'teams' && (() => {
+                // Everyone who currently has a manager, grouped by that manager so it
+                // reads as an org chart rather than a flat list — and each row's Manager
+                // field is itself the edit control: change it to transfer them, clear it
+                // to unassign. No separate "edit" step needed.
+                const assignedByManager = users
+                    .filter(u => u.manager_id)
+                    .reduce((acc, u) => {
+                        const key = u.manager_name || 'Unknown manager';
+                        (acc[key] = acc[key] || []).push(u);
+                        return acc;
+                    }, {});
+                const managerGroups = Object.entries(assignedByManager);
+
+                return (
+                    <div className="glass-card" style={{ marginTop: '1.25rem' }}>
+                        <h3 style={{ margin: '0 0 0.4rem 0', fontSize: '1.1rem' }}>Current team assignments</h3>
+                        <p style={{ margin: '0 0 1rem 0', color: 'var(--text-muted)', fontSize: '0.88rem' }}>
+                            Who reports to whom today. Change the Manager field on any row to transfer that
+                            person, or clear it to unassign them — takes effect immediately.
+                        </p>
+                        {managerGroups.length === 0 ? (
+                            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No one has a manager assigned yet.</p>
+                        ) : (
+                            managerGroups.map(([managerLabel, rows]) => (
+                                <div key={managerLabel} style={{ marginBottom: '1rem' }}>
+                                    <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.95rem', color: 'var(--text-strong)' }}>
+                                        {managerLabel} <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: '0.82rem' }}>({rows.length})</span>
+                                    </h4>
+                                    <div className="table-container">
+                                        <table className="table">
+                                            <thead>
+                                                <tr><th>PS Number</th><th>Name</th><th>Role</th><th style={{ width: '14rem' }}>Manager</th></tr>
+                                            </thead>
+                                            <tbody>
+                                                {rows.map(u => (
+                                                    <tr key={u.id}>
+                                                        <td>{u.ps_number}</td>
+                                                        <td style={{ fontWeight: 600 }}>{u.name}</td>
+                                                        <td style={{ textTransform: 'capitalize' }}>{u.role}</td>
+                                                        <td>
+                                                            <select
+                                                                value={u.manager_id || ''}
+                                                                disabled={reassigningUserId === u.id}
+                                                                onChange={(e) => changeUserManager(u.id, e.target.value)}
+                                                                style={{ padding: '0.4rem 0.6rem', borderRadius: '6px', border: '1px solid var(--border)', width: '100%' }}
+                                                            >
+                                                                <option value="">— Unassign —</option>
+                                                                {managers.filter(m => m.id !== u.id).map(m => (
+                                                                    <option key={m.id} value={m.id}>{m.name} ({m.ps_number})</option>
+                                                                ))}
+                                                            </select>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                );
+            })()}
 
             {/* ===== DEVICE DETAILS MODAL ===== */}
             {showDeviceModal && selectedDeviceUser && (
@@ -1009,7 +1252,7 @@ const UserManagementPage = () => {
                                 </div>
 
                                 <div><strong>Bound At:</strong></div>
-                                <div>{selectedDeviceUser.device_bound_at ? new Date(selectedDeviceUser.device_bound_at).toLocaleString() : '-'}</div>
+                                <div>{formatDateTime(selectedDeviceUser.device_bound_at)}</div>
 
                                 <div><strong>Browser (UA):</strong></div>
                                 <div style={{ fontSize: '0.8rem', wordBreak: 'break-all' }}>{selectedDeviceUser.device_user_agent || '-'}</div>
@@ -1023,7 +1266,7 @@ const UserManagementPage = () => {
                                 {selectedDeviceUser.device_unbound_at && (
                                     <>
                                         <div><strong>Last Unbound:</strong></div>
-                                        <div>{new Date(selectedDeviceUser.device_unbound_at).toLocaleString()}</div>
+                                        <div>{formatDateTime(selectedDeviceUser.device_unbound_at)}</div>
                                     </>
                                 )}
                             </div>
@@ -1035,13 +1278,13 @@ const UserManagementPage = () => {
                             {selectedDeviceUser.active_session ? (
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.9rem' }}>
                                     <div><strong>Session Started:</strong></div>
-                                    <div>{new Date(selectedDeviceUser.active_session.created_at).toLocaleString()}</div>
+                                    <div>{formatDateTime(selectedDeviceUser.active_session.created_at)}</div>
 
                                     <div><strong>Last Active:</strong></div>
-                                    <div>{new Date(selectedDeviceUser.active_session.last_seen).toLocaleString()}</div>
+                                    <div>{formatDateTime(selectedDeviceUser.active_session.last_seen)}</div>
 
                                     <div><strong>Expires At:</strong></div>
-                                    <div>{new Date(selectedDeviceUser.active_session.expires_at).toLocaleString()}</div>
+                                    <div>{formatDateTime(selectedDeviceUser.active_session.expires_at)}</div>
 
                                     <div><strong>Session IP:</strong></div>
                                     <div>{selectedDeviceUser.active_session.ip_address || '-'}</div>

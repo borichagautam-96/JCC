@@ -11,11 +11,37 @@ const VL_REVIEWS = ['Cleared', 'Not Cleared'];
 const PURPOSES = ['Customer Submission for Review', 'Final Dispatch', 'Self Study', 'Rework', 'Training Purpose'];
 const YES_NO = ['Yes', 'No'];
 
-const PAPER_SIZES = ['A4', 'A3', 'A5', 'Letter', 'Legal'];
-const PAPER_GSMS = ['70', '80', '90', '100', '120', '170', '250', '300'];
+// Paper, binding and finishing options are published by the rate master
+// (GET /api/rates/print-options) rather than hardcoded, so adding a rate to the
+// Rate Master is all it takes for a new option to appear here — no code change.
+// The lists below are only the fallback used when no rate card is in force; work
+// must never be blocked because the master is unconfigured.
+const FALLBACK_SIZES = ['A4', 'A3', 'A5', 'A2', 'A1'];
+const FALLBACK_GSMS = ['80', '100', '130', '250', '300'];
+const FALLBACK_BINDINGS = ['Staple', 'Spiral', 'Wiro', 'Screw', 'Perfect / Glue', 'Hard Case', 'Hard Rexine'];
+const FALLBACK_FINISHING = [
+    { field: 'soft_lamination', label: 'Soft Lamination' },
+    { field: 'separators', label: 'Separators' },
+];
+
+// A document saved before the master narrowed still holds its old value. Keep it
+// selectable so opening an old job doesn't silently blank the field.
+const withLegacy = (options, current) =>
+    current && !options.includes(String(current)) ? [...options, String(current)] : options;
+
+// The sheet prices size, weight and colour together — 300 GSM exists for A4/A3 in
+// colour only. So the weights on offer depend on the size and colour already chosen,
+// and a NULL colour on the card means the rate covers either mode.
+const gsmsFor = (combinations, size, colourCode) => {
+    const hits = combinations.filter(
+        (c) => c.size === size && (!c.colour || !colourCode || c.colour === colourCode)
+    );
+    return [...new Set(hits.map((c) => String(c.gsm)))].sort((a, b) => Number(a) - Number(b));
+};
+
 const PRINT_SIDES = ['Single-sided', 'Double-sided'];
 const COLOR_MODES = ['Black & White', 'Colour'];
-const BINDING_TYPES = ['None', 'Staple', 'Spiral', 'Wiro', 'Perfect / Glue', 'Hard Case'];
+const colourCodeOf = (mode) => (String(mode).toLowerCase().startsWith('colour') ? 'COLOUR' : 'BW');
 
 const emptyDoc = () => ({
     document_name: '',
@@ -31,6 +57,9 @@ const emptyDoc = () => ({
     separator_thickness: '',
     hole_punch: false,
     binding_type: 'None',
+    binding_variant: '',
+    // [{ code, size, gsm, colour, variant, quantity, label, uom, costGroup }]
+    extra_services: [],
     file_colour: '',
     remarks: '',
 });
@@ -47,6 +76,79 @@ const JobCreationPage = () => {
     const [requestId, setRequestId] = useState(null);
     const [saving, setSaving] = useState(false);
     const [submitting, setSubmitting] = useState(false);
+
+    // What the rate master can actually price. Until it loads (or if no card is in
+    // force) the fallback lists apply, so the form is never empty.
+    const [rateOptions, setRateOptions] = useState(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const res = await fetch('/api/rates/print-options', {
+                    headers: { Authorization: `Bearer ${getToken()}`, 'X-Device-ID': getDeviceId() },
+                });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!cancelled && data?.card) setRateOptions(data);
+            } catch {
+                /* fall back to the static lists */
+            }
+        })();
+        return () => { cancelled = true; };
+    }, []);
+
+    const combinations = rateOptions?.combinations || [];
+    // Common sizes lead in the familiar order; anything the master adds later that
+    // isn't in that list sorts after them rather than jumping to the front.
+    const sizeRank = (s) => (FALLBACK_SIZES.indexOf(s) === -1 ? FALLBACK_SIZES.length : FALLBACK_SIZES.indexOf(s));
+    const paperSizes = combinations.length
+        ? [...new Set(combinations.map((c) => c.size))].sort(
+            (a, b) => sizeRank(a) - sizeRank(b) || String(a).localeCompare(String(b)))
+        : FALLBACK_SIZES;
+    const bindingList = rateOptions?.bindings || FALLBACK_BINDINGS.map((label) => ({ label, variants: [] }));
+    const bindingTypes = ['None', ...bindingList.map((b) => b.label)];
+    // Only a binding the master prices by variant (box file → spine thickness) asks
+    // for one; everything else resolves on paper size alone.
+    const variantsForBinding = (label) => bindingList.find((b) => b.label === label)?.variants || [];
+
+    // Extras the card prices but that have no dedicated field. Ticking one adds it to
+    // the document at the option and quantity chosen.
+    const extraServices = rateOptions?.services || [];
+    const extraFor = (entry, code) => (entry.extra_services || []).find((x) => x.code === code) || null;
+
+    const toggleExtra = (uid, service, on) => {
+        setEntries((prev) => prev.map((e) => {
+            if (e.uid !== uid) return e;
+            const rest = (e.extra_services || []).filter((x) => x.code !== service.code);
+            if (!on) return { ...e, extra_services: rest };
+            const first = service.options[0] || {};
+            return {
+                ...e,
+                extra_services: [...rest, {
+                    code: service.code, label: service.label, uom: service.uom,
+                    costGroup: service.costGroup,
+                    size: first.size || null, gsm: first.gsm || null,
+                    colour: first.colour || null, variant: first.variant || null,
+                    quantity: Number(e.quantity) || 1,
+                }],
+            };
+        }));
+    };
+
+    const patchExtra = (uid, code, patch) => {
+        setEntries((prev) => prev.map((e) => e.uid !== uid ? e : {
+            ...e,
+            extra_services: (e.extra_services || []).map((x) => x.code === code ? { ...x, ...patch } : x),
+        }));
+    };
+    const finishingFields = rateOptions?.finishing || FALLBACK_FINISHING;
+    const showsField = (field) => finishingFields.some((f) => f.field === field);
+    const gsmOptionsFor = (doc) => {
+        if (!combinations.length) return FALLBACK_GSMS;
+        const list = gsmsFor(combinations, doc.paper_size, colourCodeOf(doc.color_mode));
+        return list.length ? list : FALLBACK_GSMS;
+    };
 
     const [form1, setForm1] = useState({
         employee_name: user?.name || '',
@@ -81,7 +183,11 @@ const JobCreationPage = () => {
     // Client-side repeatable document entries. "+ Add New Entry" just appends a blank
     // one — nothing is uploaded until Save & Exit / Submit.
     const entryUid = useRef(1);
-    const [entries, setEntries] = useState(() => [{ uid: 1, ...emptyDoc(), file: null }]);
+    // A resumed request starts with no open row: if it already has documents, a blank
+    // row reads as "add another" and is how a recalled job ended up carrying both the
+    // old and the corrected file. The effect below puts a row back when there is
+    // genuinely nothing to type into.
+    const [entries, setEntries] = useState(() => (location.state?.jobId ? [] : [{ uid: 1, ...emptyDoc(), file: null }]));
     const [openUid, setOpenUid] = useState(1); // which entry is expanded (accordion)
 
     const authHeaders = (extra = {}) => ({
@@ -136,6 +242,19 @@ const JobCreationPage = () => {
         })();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [resumeJobId]);
+
+    // Step 2 must never show nothing. With no saved documents *and* no open entry
+    // row there is nowhere to type — which happened on a request resumed before any
+    // document was added, and again after deleting the last saved one. Suppressing
+    // the blank row is only correct while documents already exist.
+    useEffect(() => {
+        if (step !== 2) return;
+        if (documents.length > 0 || entries.length > 0) return;
+        entryUid.current += 1;
+        const uid = entryUid.current;
+        setEntries([{ uid, ...emptyDoc(), file: null }]);
+        setOpenUid(uid);
+    }, [step, documents.length, entries.length]);
 
     // Load distinct debit codes for the Phase-1 dropdown.
     useEffect(() => {
@@ -297,7 +416,24 @@ const JobCreationPage = () => {
         });
     };
     const updateEntry = (uid, name, value) => {
-        setEntries((prev) => prev.map((e) => (e.uid === uid ? { ...e, [name]: value } : e)));
+        setEntries((prev) => prev.map((e) => {
+            if (e.uid !== uid) return e;
+            const next = { ...e, [name]: value };
+            // Changing the size or colour can strand the chosen weight — the master
+            // prices 300 GSM for A4/A3 in colour only. Move to the nearest weight
+            // that is still priced rather than leaving an uncostable combination.
+            // A thickness picked for one binding is meaningless on another.
+            if (name === 'binding_type') next.binding_variant = '';
+            if ((name === 'paper_size' || name === 'color_mode') && combinations.length) {
+                const allowed = gsmsFor(combinations, next.paper_size, colourCodeOf(next.color_mode));
+                if (allowed.length && !allowed.includes(String(next.paper_gsm))) {
+                    const wanted = Number(next.paper_gsm);
+                    next.paper_gsm = allowed.reduce((best, g) =>
+                        Math.abs(Number(g) - wanted) < Math.abs(Number(best) - wanted) ? g : best, allowed[0]);
+                }
+            }
+            return next;
+        }));
     };
     const handleEntryField = (uid) => (ev) => {
         const { name, value, type, checked } = ev.target;
@@ -309,13 +445,35 @@ const JobCreationPage = () => {
         const fd = new FormData();
         Object.entries(entry).forEach(([k, v]) => {
             if (k === 'uid' || k === 'file') return;
-            fd.append(k, typeof v === 'boolean' ? (v ? '1' : '0') : (v ?? ''));
+            if (typeof v === 'boolean') return fd.append(k, v ? '1' : '0');
+            // Extras are a list — send as JSON, not the default comma-joined coercion.
+            if (v && typeof v === 'object') return fd.append(k, JSON.stringify(v));
+            fd.append(k, v ?? '');
         });
         fd.append('pdf', entry.file);
         const res = await fetch(`/api/jobs/${jobId}/documents`, { method: 'POST', headers: authHeaders(), body: fd });
         if (!res.ok) {
             const data = await res.json();
             throw new Error(data.error || `Failed to add "${entry.document_name || 'document'}"`);
+        }
+    };
+
+    // Swap the PDF on an already-saved document, keeping its name and specs. This is
+    // the correction path: replace the file rather than adding a second document.
+    const replaceSavedPdf = async (doc, file) => {
+        if (!file) return;
+        const fd = new FormData();
+        fd.append('pdf', file);
+        try {
+            const res = await fetch(`/api/jobs/${jobId}/documents/${doc.id}/file`, {
+                method: 'PUT', headers: authHeaders(), body: fd,
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Could not replace the PDF');
+            await loadDocuments(jobId);
+            await dialog.alert(data.message, { title: 'PDF replaced', variant: 'success' });
+        } catch (e) {
+            await dialog.alert(e.message, { title: 'Error', variant: 'error' });
         }
     };
 
@@ -590,6 +748,10 @@ const JobCreationPage = () => {
                         {documents.length > 0 && (
                             <div className="glass-card" style={{ marginBottom: '1.25rem' }}>
                                 <h4 style={{ marginTop: 0, color: 'var(--text-strong)' }}>Saved documents ({documents.length})</h4>
+                                <p className="text-muted" style={{ fontSize: '0.82rem', margin: '0 0 0.75rem' }}>
+                                    Correcting a file? Use <strong>Replace PDF</strong> on the document itself — adding a
+                                    new one below leaves the old file on the request as well.
+                                </p>
                                 <div className="table-container">
                                     <table className="table">
                                         <thead>
@@ -604,7 +766,15 @@ const JobCreationPage = () => {
                                                     <td>{d.color_mode || '-'}</td>
                                                     <td>{d.binding_type || '-'}</td>
                                                     <td style={{ textAlign: 'center' }}>
-                                                        <button className="btn btn-sm btn-outline" style={{ color: '#DC2626', borderColor: '#FCA5A5' }} onClick={() => deleteSavedDocument(d.id)}>Delete</button>
+                                                        <div style={{ display: 'flex', gap: '0.35rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+                                                            <label className="btn btn-sm btn-primary" style={{ marginBottom: 0, cursor: 'pointer' }}
+                                                                   title="Attach a corrected file to this document, keeping its name and settings">
+                                                                Replace PDF
+                                                                <input type="file" accept="application/pdf" style={{ display: 'none' }}
+                                                                       onChange={(ev) => { replaceSavedPdf(d, ev.target.files?.[0]); ev.target.value = ''; }} />
+                                                            </label>
+                                                            <button className="btn btn-sm btn-outline" style={{ color: '#DC2626', borderColor: '#FCA5A5' }} onClick={() => deleteSavedDocument(d.id)}>Delete</button>
+                                                        </div>
                                                     </td>
                                                 </tr>
                                             ))}
@@ -666,13 +836,13 @@ const JobCreationPage = () => {
                                         <div className="input-group">
                                             <label className="input-label">Paper Size</label>
                                             <select className="input-field" name="paper_size" value={e.paper_size} onChange={on}>
-                                                {PAPER_SIZES.map((o) => <option key={o} value={o}>{o}</option>)}
+                                                {withLegacy(paperSizes, e.paper_size).map((o) => <option key={o} value={o}>{o}</option>)}
                                             </select>
                                         </div>
                                         <div className="input-group">
                                             <label className="input-label">Paper GSM</label>
                                             <select className="input-field" name="paper_gsm" value={e.paper_gsm} onChange={on}>
-                                                {PAPER_GSMS.map((o) => <option key={o} value={o}>{o}</option>)}
+                                                {withLegacy(gsmOptionsFor(e), e.paper_gsm).map((o) => <option key={o} value={o}>{o}</option>)}
                                             </select>
                                         </div>
                                         <div className="input-group">
@@ -684,17 +854,30 @@ const JobCreationPage = () => {
                                         <div className="input-group">
                                             <label className="input-label">Binding Type</label>
                                             <select className="input-field" name="binding_type" value={e.binding_type} onChange={on}>
-                                                {BINDING_TYPES.map((o) => <option key={o} value={o}>{o}</option>)}
+                                                {withLegacy(bindingTypes, e.binding_type).map((o) => <option key={o} value={o}>{o}</option>)}
                                             </select>
                                         </div>
-                                        <div className="input-group">
-                                            <label className="input-label">Cover Page</label>
-                                            <input className="input-field" name="cover_page" value={e.cover_page} onChange={on} placeholder="e.g. Yes / colour cover" />
-                                        </div>
-                                        <div className="input-group">
-                                            <label className="input-label">Separator Thickness</label>
-                                            <input className="input-field" name="separator_thickness" value={e.separator_thickness} onChange={on} />
-                                        </div>
+                                        {variantsForBinding(e.binding_type).length > 0 && (
+                                            <div className="input-group">
+                                                <label className="input-label">{e.binding_type} Size *</label>
+                                                <select className="input-field" name="binding_variant" value={e.binding_variant || ''} onChange={on}>
+                                                    <option value="">Select…</option>
+                                                    {variantsForBinding(e.binding_type).map((o) => <option key={o} value={o}>{o}</option>)}
+                                                </select>
+                                            </div>
+                                        )}
+                                        {showsField('cover_page') && (
+                                            <div className="input-group">
+                                                <label className="input-label">Cover Page</label>
+                                                <input className="input-field" name="cover_page" value={e.cover_page} onChange={on} placeholder="e.g. Yes / colour cover" />
+                                            </div>
+                                        )}
+                                        {showsField('separators') && (
+                                            <div className="input-group">
+                                                <label className="input-label">Separator Thickness</label>
+                                                <input className="input-field" name="separator_thickness" value={e.separator_thickness} onChange={on} />
+                                            </div>
+                                        )}
                                         <div className="input-group">
                                             <label className="input-label">File Colour</label>
                                             <input className="input-field" name="file_colour" value={e.file_colour} onChange={on} />
@@ -704,17 +887,77 @@ const JobCreationPage = () => {
                                             <textarea className="input-field" name="remarks" rows="2" value={e.remarks} onChange={on} style={{ resize: 'vertical' }} />
                                         </div>
                                     </div>
+                                    {/* Only finishing the rate master can price is offered. Add a rate
+                                        for a service and its option appears here automatically. */}
                                     <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', marginTop: '0.75rem' }}>
-                                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                            <input type="checkbox" name="soft_lamination" checked={e.soft_lamination} onChange={on} /> Soft Lamination
-                                        </label>
-                                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                            <input type="checkbox" name="separators" checked={e.separators} onChange={on} /> Separators
-                                        </label>
-                                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                            <input type="checkbox" name="hole_punch" checked={e.hole_punch} onChange={on} /> Hole Punch
-                                        </label>
+                                        {finishingFields.filter((f) => f.field !== 'cover_page').map((f) => (
+                                            <label key={f.field} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                                <input type="checkbox" name={f.field} checked={!!e[f.field]} onChange={on} /> {f.label}
+                                            </label>
+                                        ))}
                                     </div>
+
+                                    {/* Everything else the rate master prices. Driven entirely by the card,
+                                        so a new service becomes requestable the moment it has a rate. */}
+                                    {extraServices.length > 0 && (
+                                        <div style={{ marginTop: '1rem', borderTop: '1px solid var(--border-subtle, #E2E8F0)', paddingTop: '0.85rem' }}>
+                                            <div style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-strong)', marginBottom: '0.15rem' }}>
+                                                Additional Services
+                                            </div>
+                                            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted, #64748B)', marginBottom: '0.6rem' }}>
+                                                Optional — tick only what this document needs.
+                                            </div>
+                                            {/* align-items:start keeps a ticked row from stretching its
+                                                neighbours; the controls stack under their own label. */}
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '0.35rem 1.5rem', alignItems: 'start' }}>
+                                                {extraServices.map((svc) => {
+                                                    const picked = extraFor(e, svc.code);
+                                                    return (
+                                                        <div key={svc.code} style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                                                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={!!picked}
+                                                                    onChange={(ev) => toggleExtra(e.uid, svc, ev.target.checked)}
+                                                                />
+                                                                {svc.label}
+                                                            </label>
+                                                            {picked && (
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', paddingLeft: '1.5rem', paddingBottom: '0.35rem' }}>
+                                                                    {svc.options.length > 1 && (
+                                                                        <select
+                                                                            className="input-field"
+                                                                            style={{ width: 'auto', minWidth: '9rem', padding: '0.3rem 0.5rem', fontSize: '0.82rem' }}
+                                                                            value={JSON.stringify([picked.size, picked.gsm, picked.colour, picked.variant])}
+                                                                            onChange={(ev) => {
+                                                                                const [size, gsm, colour, variant] = JSON.parse(ev.target.value);
+                                                                                patchExtra(e.uid, svc.code, { size, gsm, colour, variant });
+                                                                            }}
+                                                                        >
+                                                                            {svc.options.map((o) => (
+                                                                                <option key={o.label} value={JSON.stringify([o.size, o.gsm, o.colour, o.variant])}>
+                                                                                    {o.label}
+                                                                                </option>
+                                                                            ))}
+                                                                        </select>
+                                                                    )}
+                                                                    <input
+                                                                        className="input-field"
+                                                                        type="number"
+                                                                        min="1"
+                                                                        style={{ width: '5.5rem', padding: '0.3rem 0.5rem', fontSize: '0.82rem' }}
+                                                                        value={picked.quantity}
+                                                                        onChange={(ev) => patchExtra(e.uid, svc.code, { quantity: ev.target.value })}
+                                                                    />
+                                                                    <span style={{ fontSize: '0.78rem', color: 'var(--text-muted, #64748B)' }}>{svc.uom}</span>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    )}
                                     </>)}
                                 </div>
                             );

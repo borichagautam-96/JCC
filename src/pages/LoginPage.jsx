@@ -184,8 +184,9 @@ const LoginPage = () => {
                                     type="button"
                                     onClick={() => setShowPassword(!showPassword)}
                                     className={`jcc-login-eye-btn${showPassword ? ' is-on' : ''}`}
-                                    tabIndex={-1}
                                     title={showPassword ? 'Hide password' : 'Show password'}
+                                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                                    aria-pressed={showPassword}
                                 >
                                     {showPassword ? (
                                         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

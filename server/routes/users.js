@@ -306,17 +306,20 @@ router.get('/', authenticateToken, authorizeRoles(['admin']), (req, res) => {
             'location_id',
         ];
 
-        const selectOptionalColumns = optionalUserColumns.map((columnName) => (
-            userColumns.has(columnName)
-                ? columnName
-                : `NULL AS ${columnName}`
+        // A bare column name needs the u. prefix now that the query joins two copies
+        // of the table; a "NULL AS x" fallback (column doesn't exist on this install)
+        // must NOT get one — u.NULL is not valid SQL.
+        const qualifiedOptionalColumns = optionalUserColumns.map((columnName) => (
+            userColumns.has(columnName) ? `u.${columnName}` : `NULL AS ${columnName}`
         ));
 
         const users = db.prepare(`
-            SELECT id, ps_number, name, email, role, created_at,
-                   ${selectOptionalColumns.join(',\n                   ')}
-            FROM users 
-            ORDER BY created_at DESC
+            SELECT u.id, u.ps_number, u.name, u.email, u.role, u.created_at, u.manager_id,
+                   m.name AS manager_name,
+                   ${qualifiedOptionalColumns.join(',\n                   ')}
+            FROM users u
+            LEFT JOIN users m ON m.id = u.manager_id
+            ORDER BY u.created_at DESC
         `).all();
 
         // Attach active session info for each user
@@ -569,6 +572,52 @@ router.put('/:id', authenticateToken, authorizeRoles(['admin']), async (req, res
         console.error('Error updating user:', error);
         // return full error details for debugging
         res.status(500).json({ error: 'Failed to update user', details: error.message });
+    }
+});
+
+// ── Bulk-assign a manager to many users at once ──────────────────────────────
+// The per-user Edit form sets manager_id one person at a time — fine for a handful
+// of people, but with several managers each owning a team, that's a lot of
+// individual edits. This does the whole team in one request instead.
+router.post('/bulk-assign-manager', authenticateToken, authorizeRoles(['admin']), (req, res) => {
+    try {
+        const { manager_id, user_ids } = req.body || {};
+        if (!Array.isArray(user_ids) || user_ids.length === 0) {
+            return res.status(400).json({ error: 'Select at least one user' });
+        }
+
+        // manager_id may be explicitly null/omitted to clear the assignment in bulk
+        // (e.g. a manager leaves and their team needs reassigning from scratch).
+        let manager = null;
+        if (manager_id) {
+            manager = db.prepare('SELECT id, name, role FROM users WHERE id = ?').get(manager_id);
+            if (!manager) return res.status(404).json({ error: 'Manager not found' });
+            // 'admin' is a system permission, not an org-chart position, so it does not
+            // qualify here even though an admin account can do almost anything else.
+            if (manager.role !== 'manager') {
+                return res.status(400).json({ error: 'Only a manager-role account can be assigned as a manager' });
+            }
+            if (user_ids.map(Number).includes(Number(manager_id))) {
+                return res.status(400).json({ error: 'A manager cannot be assigned as their own manager' });
+            }
+        }
+
+        const update = db.prepare('UPDATE users SET manager_id = ? WHERE id = ?');
+        const updated = db.transaction((ids) => {
+            let count = 0;
+            for (const id of ids) count += update.run(manager?.id ?? null, id).changes;
+            return count;
+        })(user_ids);
+
+        res.json({
+            updated,
+            message: manager
+                ? `${updated} user(s) assigned to ${manager.name}.`
+                : `${updated} user(s) unassigned.`,
+        });
+    } catch (error) {
+        console.error('Error bulk-assigning manager:', error);
+        res.status(500).json({ error: 'Failed to assign manager' });
     }
 });
 

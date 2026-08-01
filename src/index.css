@@ -237,6 +237,17 @@ h6 {
     color: white;
 }
 
+/* `btn-sm` has been used all over the app (table row actions, compact toolbars)
+   expecting a smaller button, but no such rule existed — every one of them was
+   silently rendering at full .btn size (0.75rem/1.5rem padding, 0.95rem font).
+   This is the actual "small" variant; it must come after .btn to win the cascade. */
+.btn-sm {
+    padding: 0.35rem 0.75rem;
+    font-size: 0.82rem;
+    border-radius: 0.5rem;
+    gap: 0.3rem;
+}
+
 .btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
@@ -332,6 +343,36 @@ select.input-field {
 
 .table tbody tr:hover {
     background: #f8fafc;
+}
+
+/* A dense, input-heavy table (a row of selects plus an action button, like the
+   cost-correction editor) can't afford the default 1rem cell padding — eight
+   columns of it is 256px before any content. This is the compact variant;
+   apply alongside .table, not instead of it. */
+.table-compact th,
+.table-compact td {
+    padding: 0.45rem 0.6rem;
+}
+
+/* A visible scroll affordance for any table that still doesn't fit — so content
+   is never silently clipped off the edge with no hint that more exists. Firefox
+   gets the standardised properties; the pseudo-elements cover WebKit/Blink. */
+.table-container {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong, #CBD5E1) transparent;
+}
+
+.table-container::-webkit-scrollbar {
+    height: 8px;
+}
+
+.table-container::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.table-container::-webkit-scrollbar-thumb {
+    background: var(--border-strong, #CBD5E1);
+    border-radius: 999px;
 }
 
 .feedback-inbox-scroll {
@@ -544,8 +585,15 @@ select.input-field {
 .jcc-login-card-3d .jcc-login-layer-front {
     transform: translateZ(55px);
 }
+/* The form layer must NOT be Z-displaced. Inside a transform-style: preserve-3d
+   parent, translateZ moves the browser's hit-test geometry for the whole subtree
+   away from where it paints — the password field could not be clicked into and the
+   show-password eye swallowed every click, both landing on .jcc-login-input-wrap
+   instead. Verified by isolation: neutralising this one declaration restores both.
+   The card still rotates and the header still pops at 55px, so the depth effect
+   survives; only the layer carrying interactive controls stays flat. */
 .jcc-login-card-3d .jcc-login-layer-mid {
-    transform: translateZ(28px);
+    transform: none;
 }
 .jcc-login-card-3d .jcc-login-mark {
     transform: translateZ(30px);
@@ -849,16 +897,37 @@ select.input-field {
 
 .jcc-login-eye-btn {
     position: absolute;
-    right: 0.75rem;
+    right: 0.5rem;
     top: 50%;
-    transform: translateY(-50%);
+    /* The login card is a transform-style: preserve-3d stack. Without an explicit
+       Z of its own, this button sorted BEHIND .jcc-login-input-wrap for hit-testing
+       even though it painted on top — every click on the eye landed on the wrapper
+       and the password never revealed. translateZ puts it genuinely in front. */
+    transform: translateY(-50%) translateZ(1px);
+    z-index: 3;
     background: none;
     border: none;
     cursor: pointer;
     color: #7f8da6;
     padding: 0;
+    /* 20px of icon was also a small target; the box is now 32px while the glyph
+       stays the same size and roughly the same place. */
+    width: 2rem;
+    height: 2rem;
     display: flex;
     align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+}
+
+.jcc-login-eye-btn:hover {
+    color: #4b5b73;
+    background: rgba(100, 116, 139, 0.10);
+}
+
+.jcc-login-eye-btn:focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 1px;
 }
 
 .jcc-login-helper-row {
@@ -1200,6 +1269,11 @@ select.input-field {
     color: #a3afc2;
 }
 
+.jcc-login-theme-dark .jcc-login-eye-btn:hover {
+    color: #e2e8f0;
+    background: rgba(148, 163, 184, 0.16);
+}
+
 .jcc-login-theme-dark .jcc-login-submit {
     background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 10px 26px rgba(37, 99, 235, 0.4);
@@ -1294,6 +1368,20 @@ select.input-field {
     margin-top: 1.25rem;
     padding-top: 0.9rem;
     border-top: 1px solid #e2e8f0;
+}
+
+/* A disabled field has to look disabled. Without this a greyed-out select is
+   indistinguishable from an active one, so an inapplicable option reads as a
+   choice the user simply has not made yet. */
+.input-field:disabled,
+select.input-field:disabled,
+textarea.input-field:disabled {
+    background: var(--surface-3);
+    cursor: not-allowed;
+    /* Dim the whole control rather than recolouring it. Recolouring only reads as
+       "disabled" on a light ground — in dark mode a darker surface is just another
+       field. Fading text, border and chevron together is unambiguous in both. */
+    opacity: 0.55;
 }
 
 .app-modal-actions .btn {
@@ -2814,6 +2902,44 @@ select.input-field {
     --border-strong: #cbd5e1;
 }
 
+/* Accent scale for figures rendered *on* a surface — metric values, status
+   numbers, emphasis text. The 600/700 steps that read well on white turn muddy
+   on a dark surface, so dark mode lifts each hue to its 300 step (the same
+   mapping the utility overrides further down already use). Use these instead
+   of writing a hex inline: an inline colour beats the stylesheet, so it also
+   defeats any dark-mode rule meant to correct it. */
+:root {
+    --stat-blue: #2563EB;
+    --stat-indigo: #4F46E5;
+    --stat-sky: #0891B2;
+    --stat-teal: #0D9488;
+    --stat-emerald: #059669;
+    --stat-green: #16A34A;
+    --stat-green-strong: #15803D;
+    --stat-amber: #D97706;
+    --stat-orange: #EA580C;
+    --stat-red: #DC2626;
+    --stat-purple: #7C3AED;
+    --stat-navy: #1E3A5F;
+}
+
+[data-theme='dark'] {
+    --stat-blue: #93C5FD;
+    --stat-indigo: #A5B4FC;
+    --stat-sky: #7DD3FC;
+    --stat-teal: #5EEAD4;
+    --stat-emerald: #6EE7B7;
+    --stat-green: #86EFAC;
+    --stat-green-strong: #86EFAC;
+    --stat-amber: #FCD34D;
+    --stat-orange: #FDBA74;
+    --stat-red: #FCA5A5;
+    --stat-purple: #D8B4FE;
+    /* Navy is a neutral emphasis rather than a hue — it becomes plain bright
+       text on dark, since a lifted navy would just read as another blue. */
+    --stat-navy: var(--text-strong);
+}
+
 [data-theme='dark'] {
     --primary: #6366F1;
     --primary-dark: #4F46E5;
@@ -2991,8 +3117,10 @@ html.theme-switching * {
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 [data-theme='dark'] .page-title { color: var(--text-strong); }
-[data-theme='dark'] .page-subtitle,
-[data-theme='dark'] .metric-label { color: var(--text-faint); }
+[data-theme='dark'] .page-subtitle { color: var(--text-faint); }
+/* Brighter than the page subtitle: the label is 0.74rem uppercase with wide
+   tracking, which needs more contrast than body-size text to stay readable. */
+[data-theme='dark'] .metric-label { color: var(--text-body); }
 [data-theme='dark'] .metric-card {
     background: var(--surface);
     border-color: var(--border);
@@ -3010,11 +3138,16 @@ html.theme-switching * {
 [data-theme='dark'] .voucher-hero h1 { color: var(--text-strong); }
 [data-theme='dark'] .voucher-hero p { color: var(--text-body); }
 [data-theme='dark'] .voucher-section-card { background: var(--surface); border-color: var(--border); }
+/* Light mode gets its punch from figure/ground: dark blue text on a near-white
+   band. Mirroring the *tints* into dark mode loses exactly that — a 0.14 indigo
+   wash sat 1.17:1 off the card behind it, so the bar read as a smudge rather
+   than a header, and a mid-indigo title on a dark-indigo band had nothing to
+   push against. Dark needs a genuinely lit band and near-white text instead. */
 [data-theme='dark'] .voucher-section-head {
-    background: linear-gradient(180deg, rgba(99, 102, 241, 0.14) 0%, rgba(99, 102, 241, 0.08) 100%);
-    border-color: rgba(99, 102, 241, 0.35);
+    background: linear-gradient(180deg, rgba(99, 102, 241, 0.30) 0%, rgba(99, 102, 241, 0.20) 100%);
+    border-color: rgba(129, 140, 248, 0.55);
 }
-[data-theme='dark'] .voucher-section-head-title { color: var(--primary-light); }
+[data-theme='dark'] .voucher-section-head-title { color: #E0E7FF; }
 [data-theme='dark'] .voucher-modal-panel { background: var(--surface-2); border-color: var(--border); }
 [data-theme='dark'] .voucher-readonly { background: var(--surface-3) !important; color: var(--text-body); }
 [data-theme='dark'] .voucher-search-input { background: var(--surface-2); border-color: var(--border); color: var(--text-strong); }
@@ -3518,14 +3651,21 @@ html.theme-switching * {
 [data-theme='dark'] .border-slate-100 { border-color: var(--border) !important; }
 [data-theme='dark'] .border-slate-200 { border-color: var(--border) !important; }
 [data-theme='dark'] .border-slate-300 { border-color: var(--border) !important; }
-[data-theme='dark'] .hover:bg-amber-50:hover { background-color: rgba(245,158,11, 0.22) !important; }
-[data-theme='dark'] .hover:bg-blue-50:hover { background-color: rgba(59,130,246, 0.22) !important; }
-[data-theme='dark'] .hover:bg-indigo-50:hover { background-color: rgba(99,102,241, 0.22) !important; }
-[data-theme='dark'] .hover:bg-orange-50:hover { background-color: rgba(249,115,22, 0.22) !important; }
-[data-theme='dark'] .hover:bg-slate-100:hover { background-color: var(--hover) !important; }
-[data-theme='dark'] .hover:bg-slate-50:hover { background-color: var(--surface-2) !important; }
-[data-theme='dark'] .hover:text-blue-700:hover { color: #93C5FD !important; }
-[data-theme='dark'] .hover:text-slate-900:hover { color: var(--text-primary) !important; }
+/* The colon in a Tailwind variant is part of the class *name* and has to be
+   escaped in a selector. Written bare, `.hover:bg-amber-50` parses as class
+   `.hover` plus an unknown pseudo-class, which is an invalid selector — so the
+   browser discarded these eight rules outright and every one of these hovers
+   kept flashing its light-mode colour in dark mode. Opacity modifiers escape
+   the slash the same way. */
+[data-theme='dark'] .hover\:bg-amber-50:hover { background-color: rgba(245,158,11, 0.22) !important; }
+[data-theme='dark'] .hover\:bg-blue-50:hover { background-color: rgba(59,130,246, 0.22) !important; }
+[data-theme='dark'] .hover\:bg-indigo-50:hover { background-color: rgba(99,102,241, 0.22) !important; }
+[data-theme='dark'] .hover\:bg-orange-50:hover { background-color: rgba(249,115,22, 0.22) !important; }
+[data-theme='dark'] .hover\:bg-slate-100:hover { background-color: var(--hover) !important; }
+[data-theme='dark'] .hover\:bg-slate-50:hover { background-color: var(--surface-2) !important; }
+[data-theme='dark'] .hover\:bg-slate-50\/60:hover { background-color: var(--hover) !important; }
+[data-theme='dark'] .hover\:text-blue-700:hover { color: #93C5FD !important; }
+[data-theme='dark'] .hover\:text-slate-900:hover { color: var(--text-primary) !important; }
 [data-theme='dark'] .text-amber-700 { color: #FCD34D !important; }
 [data-theme='dark'] .text-amber-800 { color: #FCD34D !important; }
 [data-theme='dark'] .text-blue-600 { color: #93C5FD !important; }

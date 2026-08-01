@@ -449,3 +449,32 @@
     resize: vertical;
     line-height: 1.5;
 }
+
+/* ---------- Outdoor / field-duty notice ----------
+   Tinted callout that has to read in both themes. It previously carried its
+   colours inline as light-only hex (#F8FAFC idle / #FFFBEB active), so in dark
+   mode it stayed a white slab with near-invisible text while its border and
+   text still followed the theme tokens. Amber values match the tint convention
+   used by the dark-mode utility overrides in index.css. */
+.voucher-notice {
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface-2);
+    transition: background-color 200ms ease, border-color 200ms ease;
+}
+
+.voucher-notice-active {
+    background: #FFFBEB;
+    border-color: #FCD34D;
+}
+
+[data-theme='dark'] .voucher-notice-active {
+    background: rgba(245, 158, 11, 0.16);
+    border-color: rgba(245, 158, 11, 0.38);
+}
+
+/* Native checkbox follows the brand instead of the browser default. */
+.voucher-notice input[type='checkbox'] {
+    accent-color: var(--primary);
+}

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
+import { formatDateTime } from '../utils/datetime';
 
 const FEEDBACK_TYPES = [
   { value: 'bug', label: 'Bug' },
@@ -29,13 +30,6 @@ const getDefaultForm = (sourcePath = '/') => ({
   actualResult: '',
   contactAllowed: true,
 });
-
-const formatDateTime = (value) => {
-  if (!value) return '-';
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return String(value);
-  return parsed.toLocaleString();
-};
 
 const FeedbackPage = () => {
   const { getToken } = useAuth();

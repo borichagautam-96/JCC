@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { formatDate, formatDateTime } from '../utils/datetime';
 
 const AssignedInvoicesPage = () => {
     const { user, getToken } = useAuth();
@@ -105,13 +106,6 @@ const AssignedInvoicesPage = () => {
 
     const handleCreateVoucher = (invoice) => {
         navigate('/create-voucher', { state: { invoiceData: invoice } });
-    };
-
-    const formatDateTime = (value) => {
-        if (!value) return '-';
-        const parsed = new Date(value);
-        if (Number.isNaN(parsed.getTime())) return '-';
-        return parsed.toLocaleString();
     };
 
     const isAssignedToCurrentUser = (invoice) => {
@@ -379,7 +373,7 @@ const AssignedInvoicesPage = () => {
                             </div>
 
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
-                                <div><strong>Date:</strong> {selectedInvoice.invoice_date ? new Date(selectedInvoice.invoice_date).toLocaleDateString() : '-'}</div>
+                                <div><strong>Date:</strong> {formatDate(selectedInvoice.invoice_date)}</div>
                                 <div><strong>Vendor:</strong> {selectedInvoice.vendor_name || '-'}</div>
                                 <div><strong>Invoice No:</strong> {selectedInvoice.invoice_number || '-'}</div>
                                 <div><strong>PO Number:</strong> {selectedInvoice.po_number || '-'}</div>
