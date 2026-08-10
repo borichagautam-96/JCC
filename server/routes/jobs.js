@@ -238,7 +238,11 @@ router.post('/', authenticateToken, authorizeRoles(...REQUESTOR_ROLES), (req, re
         req.user.id
       );
 
-    writeAudit(req, 'CREATE_PRINT_REQUEST', result.lastInsertRowid, `Request ${requestId} created`);
+    // Provenance is recorded here rather than at clone time, because cloning no longer
+    // writes anything — the copy only becomes real when it is saved.
+    const clonedFrom = cleanStr(b.cloned_from);
+    writeAudit(req, clonedFrom ? 'CLONE_PRINT_REQUEST' : 'CREATE_PRINT_REQUEST', result.lastInsertRowid,
+      clonedFrom ? `Request ${requestId} created, cloned from ${clonedFrom}` : `Request ${requestId} created`);
     res.json({ id: result.lastInsertRowid, request_id: requestId, message: `Request ${requestId} created` });
   } catch (error) {
     console.error('Error creating print request:', error);
@@ -246,38 +250,40 @@ router.post('/', authenticateToken, authorizeRoles(...REQUESTOR_ROLES), (req, re
   }
 });
 
-// Clone: create a fresh DRAFT copying a past request's Form-1 details (not the
-// documents/PDFs — those are re-added). "Repeat last request" for the owner.
-router.post('/:id/clone', authenticateToken, authorizeRoles(...REQUESTOR_ROLES), (req, res) => {
+// Clone: hand back a past request's Form-1 details so the New Printing Job form can
+// open pre-filled. Deliberately a READ, not a write.
+//
+// This used to POST and insert a draft immediately, so every accidental click on
+// "Clone" — a single button with no confirmation, sitting next to View — left a
+// permanent row that nothing in the app could remove. The copy now exists only in the
+// form until the user saves step 1, which is the same path a normal new request takes.
+router.get('/:id/clone-source', authenticateToken, authorizeRoles(...REQUESTOR_ROLES), (req, res) => {
   try {
     const src = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
     if (!src) return res.status(404).json({ error: 'Source request not found' });
     if (src.created_by !== req.user.id && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'You can only clone your own request' });
     }
-    const requestId = nextSequential('request_id', 'REQ');
-    const psNumber = db.prepare('SELECT ps_number FROM users WHERE id = ?').get(req.user.id)?.ps_number || null;
-    const result = db.prepare(
-      `INSERT INTO print_jobs (
-         request_id, employee_name, employee_id, department_name, department_code,
-         debit_code, project_name, dt_number, shipset_batch, classification,
-         number_of_pages, lead_name, edc, recipient_name, recipient_contact,
-         recipient_address, vl_review, drp_remarks, pre_printing_checklist,
-         purpose, printing_form_available, remarks, location_id, status, created_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)`
-    ).run(
-      requestId, req.user.name || null, psNumber,
-      src.department_name, src.department_code, src.debit_code, src.project_name, src.dt_number,
-      src.shipset_batch, src.classification, src.number_of_pages, src.lead_name, src.edc,
-      src.recipient_name, src.recipient_contact, src.recipient_address, src.vl_review,
-      src.drp_remarks, src.pre_printing_checklist, src.purpose, src.printing_form_available,
-      src.remarks, src.location_id, req.user.id
-    );
-    writeAudit(req, 'CLONE_PRINT_REQUEST', result.lastInsertRowid, `Cloned from ${src.job_number || src.request_id}`);
-    res.json({ id: result.lastInsertRowid, request_id: requestId, message: `Cloned into ${requestId}` });
+    // Form-1 fields only. Documents and PDFs are re-added on the new request, and
+    // identity is re-derived from whoever is signed in rather than copied.
+    res.json({
+      cloned_from: src.job_number || src.request_id,
+      cloned_from_id: src.id,
+      form: {
+        department_name: src.department_name, department_code: src.department_code,
+        debit_code: src.debit_code, project_name: src.project_name, dt_number: src.dt_number,
+        shipset_batch: src.shipset_batch, classification: src.classification,
+        number_of_pages: src.number_of_pages, lead_name: src.lead_name, edc: src.edc,
+        recipient_name: src.recipient_name, recipient_contact: src.recipient_contact,
+        recipient_address: src.recipient_address, vl_review: src.vl_review,
+        drp_remarks: src.drp_remarks, pre_printing_checklist: src.pre_printing_checklist,
+        purpose: src.purpose, printing_form_available: src.printing_form_available,
+        remarks: src.remarks, location_id: src.location_id,
+      },
+    });
   } catch (error) {
-    console.error('Error cloning request:', error);
-    res.status(500).json({ error: 'Failed to clone request' });
+    console.error('Error reading clone source:', error);
+    res.status(500).json({ error: 'Failed to read that request' });
   }
 });
 
@@ -511,6 +517,71 @@ router.delete('/:id/documents/:docId', authenticateToken, (req, res) => {
   }
 });
 
+// ── Discard an unsubmitted draft ──────────────────────────────────────────────
+//
+// Only a draft can go. It has never been submitted, so no coordinator has seen it,
+// nothing has been printed, and no cost exists — there is no history to lose. Once a
+// request is submitted it belongs to the workflow and stays for good, which is why
+// this deliberately refuses every other status rather than offering a force flag.
+//
+// A hard delete, not a soft one: the point is to get abandoned rows out of the
+// requestor's list. The audit entry is written first so the fact a draft existed and
+// was discarded survives the row itself.
+router.delete('/:id', authenticateToken, (req, res) => {
+  try {
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Request not found' });
+    if (!canEditJob(req, job)) {
+      return res.status(403).json({ error: 'You can only discard your own request' });
+    }
+    if (job.status !== 'draft') {
+      return res.status(400).json({
+        error: `${jobLabel(job)} has already been submitted (it is ${job.status}) and cannot be deleted. `
+             + 'Recall it if you need to change it.',
+        code: 'NOT_A_DRAFT',
+      });
+    }
+
+    // Children are removed explicitly rather than left to ON DELETE CASCADE. Those
+    // clauses are declared on every child table, but the connection runs with
+    // `foreign_keys = OFF` (see database.js), so they never fire — trusting them here
+    // would delete the job and strand its documents and cost lines behind it.
+    const files = db.prepare('SELECT pdf_path FROM print_job_documents WHERE job_id = ?')
+      .all(job.id).map((d) => d.pdf_path).filter(Boolean);
+    const reworkFiles = db.prepare('SELECT pdf_path FROM print_job_reworks WHERE job_id = ?')
+      .all(job.id).map((r) => r.pdf_path).filter(Boolean);
+
+    writeAudit(req, 'DELETE_PRINT_REQUEST', job.id,
+      `Draft ${job.request_id} discarded by ${req.user.name}`
+      + (files.length ? ` (${files.length} document${files.length === 1 ? '' : 's'})` : ''));
+
+    db.transaction(() => {
+      // A draft should have none of these, but a half-finished one that was recalled or
+      // costed early would — and a partial delete is worse than none.
+      db.prepare(
+        `DELETE FROM annexure_approvals WHERE annexure_id IN
+           (SELECT id FROM cost_annexures WHERE job_id = ?)`
+      ).run(job.id);
+      db.prepare('DELETE FROM cost_annexures WHERE job_id = ?').run(job.id);
+      db.prepare('DELETE FROM job_cost_lines WHERE job_id = ?').run(job.id);
+      db.prepare('DELETE FROM print_job_submissions WHERE job_id = ?').run(job.id);
+      db.prepare('DELETE FROM print_job_reworks WHERE job_id = ?').run(job.id);
+      db.prepare('DELETE FROM print_job_documents WHERE job_id = ?').run(job.id);
+      db.prepare('DELETE FROM print_jobs WHERE id = ?').run(job.id);
+    })();
+
+    // Files last: the row is gone either way, and an unlink failure must not roll back
+    // a delete that already succeeded. A stray file is recoverable; a half-deleted job
+    // in the requestor's list is the bug being fixed.
+    for (const f of [...files, ...reworkFiles]) fs.unlink(path.join(uploadDir, f), () => {});
+
+    res.json({ message: `${job.request_id} discarded.`, deleted_documents: files.length });
+  } catch (error) {
+    console.error('Error deleting draft request:', error);
+    res.status(500).json({ error: 'Failed to discard the request' });
+  }
+});
+
 // Download a document's PDF (access-checked).
 router.get('/:id/documents/:docId/file', authenticateToken, (req, res) => {
   try {
@@ -559,15 +630,28 @@ router.post('/:id/submit', authenticateToken, (req, res) => {
     // recalled it, or a resubmit after the coordinator returned it.
     const snapshot = recordSubmission(req, { ...job, job_number: jobNumber }, docs);
 
+    // The reporting line is captured here rather than at draft creation: a draft can
+    // sit for weeks, and the manager who owns the cost is the one in place when the
+    // work is actually requested. Stamped only on the FIRST submission so a
+    // resubmit after a recall or return does not re-parent an in-flight job.
+    const reportsTo = db.prepare(
+      `SELECT m.id, m.name, m.ps_number
+         FROM users u JOIN users m ON m.id = u.manager_id
+        WHERE u.id = ?`
+    ).get(job.created_by);
+
     db.prepare(
       `UPDATE print_jobs SET
          job_number = ?, status = 'submitted',
          submitted_at = datetime('now'),
          return_reason = NULL,
          recall_reason = NULL,
+         manager_id_at_submit   = COALESCE(manager_id_at_submit, ?),
+         manager_name_at_submit = COALESCE(manager_name_at_submit, ?),
+         manager_ps_at_submit   = COALESCE(manager_ps_at_submit, ?),
          updated_at = datetime('now')
        WHERE id = ?`
-    ).run(jobNumber, job.id);
+    ).run(jobNumber, reportsTo?.id || null, reportsTo?.name || null, reportsTo?.ps_number || null, job.id);
 
     const changeNote = snapshot.seq > 1
       ? ` (submission ${snapshot.seq}${snapshot.changeCount === null ? '' : `, ${snapshot.changeCount} change${snapshot.changeCount === 1 ? '' : 's'}`})`

@@ -190,7 +190,14 @@ const normalizeDuplicateCsvPair = (value) => {
   return text;
 };
 
-const parseVoucherMaterials = (body) => {
+// Exported for tests. This parser is where descriptionOfMaterial was once lost: it
+// accepts several body shapes, and a field missing from any one of them disappears
+// without an error. Testing it directly is the only way to pin every shape.
+// Department codes cost may be booked against. Mirrors src/constants/departments.js —
+// the server must not trust whatever the form posts, since this routes real money.
+const VALID_DEPARTMENT_CODES = ['3559', '3998'];
+
+export const parseVoucherMaterials = (body) => {
   const normalizeMaterial = (item = {}) => ({
     amount: normalizeDuplicateCsvPair(item.amount ?? item.projectAmount ?? ''),
     projectCode: normalizeDuplicateCsvPair(item.projectCode ?? item.project_code ?? ''),
@@ -201,6 +208,7 @@ const parseVoucherMaterials = (body) => {
     descriptionOfMaterial: normalizeDuplicateCsvPair(
       item.descriptionOfMaterial ?? item.description_of_material ?? ''
     ),
+    quantity: normalizeDuplicateCsvPair(item.quantity ?? ''),
   });
 
   const hasMaterialKeys = (value) => (
@@ -212,6 +220,7 @@ const parseVoucherMaterials = (body) => {
     || 'project_name' in value
     || 'descriptionOfMaterial' in value
     || 'description_of_material' in value
+    || 'quantity' in value
   );
 
 
@@ -287,10 +296,10 @@ const parseVoucherMaterials = (body) => {
     const map = new Map();
     const extractIndexAndField = (key) => {
       const patterns = [
-        /^materials\[(\d+)\]\[(amount|projectCode|projectName|project_code|project_name|descriptionOfMaterial|description_of_material)\]$/,
-        /^materials\.(\d+)\.(amount|projectCode|projectName|project_code|project_name|descriptionOfMaterial|description_of_material)$/,
-        /^materials\[(\d+)\]\.(amount|projectCode|projectName|project_code|project_name|descriptionOfMaterial|description_of_material)$/,
-        /^(amount|projectCode|projectName|project_code|project_name|descriptionOfMaterial|description_of_material)_(\d+)$/,
+        /^materials\[(\d+)\]\[(amount|projectCode|projectName|project_code|project_name|descriptionOfMaterial|description_of_material|quantity)\]$/,
+        /^materials\.(\d+)\.(amount|projectCode|projectName|project_code|project_name|descriptionOfMaterial|description_of_material|quantity)$/,
+        /^materials\[(\d+)\]\.(amount|projectCode|projectName|project_code|project_name|descriptionOfMaterial|description_of_material|quantity)$/,
+        /^(amount|projectCode|projectName|project_code|project_name|descriptionOfMaterial|description_of_material|quantity)_(\d+)$/,
       ];
 
       for (const pattern of patterns) {
@@ -298,7 +307,7 @@ const parseVoucherMaterials = (body) => {
         if (!match) continue;
 
         // Pattern variant where field appears first: amount_0
-        if (/^(amount|projectCode|projectName|project_code|project_name|descriptionOfMaterial|description_of_material)_/.test(key)) {
+        if (/^(amount|projectCode|projectName|project_code|project_name|descriptionOfMaterial|description_of_material|quantity)_/.test(key)) {
           return { index: Number(match[2]), field: match[1] };
         }
 
@@ -313,13 +322,14 @@ const parseVoucherMaterials = (body) => {
       if (!parsed) return;
 
       const { index, field } = parsed;
-      if (!map.has(index)) map.set(index, { amount: '', projectCode: '', projectName: '', descriptionOfMaterial: '' });
+      if (!map.has(index)) map.set(index, { amount: '', projectCode: '', projectName: '', descriptionOfMaterial: '', quantity: '' });
       const target = map.get(index);
 
       if (field === 'amount') target.amount = value ?? '';
       if (field === 'projectCode' || field === 'project_code') target.projectCode = value ?? '';
       if (field === 'projectName' || field === 'project_name') target.projectName = value ?? '';
       if (field === 'descriptionOfMaterial' || field === 'description_of_material') target.descriptionOfMaterial = value ?? '';
+      if (field === 'quantity') target.quantity = value ?? '';
     });
 
     return [...map.entries()]
@@ -386,6 +396,7 @@ const parseVoucherMaterials = (body) => {
         projectName: String(item.projectName ?? '').trim(),
         // descriptionOfMaterial MUST be included — omitting it caused it to be silently dropped
         descriptionOfMaterial: String(item.descriptionOfMaterial ?? '').trim(),
+        quantity: String(item.quantity ?? '').trim(),
       };
       // Dedup key excludes description so that rows with same amount/code/name but different
       // descriptions aren't wrongly merged. When there IS a duplicate, prefer the one with a description.
@@ -400,7 +411,7 @@ const parseVoucherMaterials = (body) => {
 
   // Keep only rows with at least one meaningful value.
   return uniqueCandidates
-    .filter((item) => item.amount || item.projectCode || item.projectName || item.descriptionOfMaterial);
+    .filter((item) => item.amount || item.projectCode || item.projectName || item.descriptionOfMaterial || item.quantity);
 };
 
 const SUPPLIER_ACK_TOKEN_VALIDITY_HOURS = 24 * 7;
@@ -893,14 +904,20 @@ const createVoucherPdfArtifact = async (voucherId) => {
     }
   }
 
+  // What the initiator actually chose wins. The name-based derivation below is only a
+  // fallback for vouchers raised before the field existed — it cannot tell 3559 from
+  // 3998, because both belong to the same department, so it must never override a
+  // recorded choice.
   const deptCode = (() => {
+    const stored = String(voucher.department_code || '').trim();
+    if (stored) return stored;
     const dept = (voucher.department || '').toUpperCase();
     if (dept.includes('DOCUMENTATION') || dept.includes('TRAINING')) return '3559';
     return '';
   })();
 
   const materialsQuery = db.prepare(`
-    SELECT amount, project_code, project_name, description_of_material
+    SELECT amount, project_code, project_name, description_of_material, quantity
     FROM voucher_materials
     WHERE voucher_id = ?
     ORDER BY id ASC
@@ -913,10 +930,12 @@ const createVoucherPdfArtifact = async (voucherId) => {
         project_code: normalizeDuplicateCsvPair(row.project_code),
         project_name: normalizeDuplicateCsvPair(row.project_name),
         description_of_material: normalizeDuplicateCsvPair(row.description_of_material),
+        quantity: row.quantity,
       };
       return [JSON.stringify(normalized), normalized];
     })
-  ).values()].filter((row) => row.amount || row.project_code || row.project_name || row.description_of_material);
+  ).values()].filter((row) => row.amount || row.project_code || row.project_name
+    || row.description_of_material || row.quantity != null);
 
   const isMaterialsEmpty = normalizedMaterials.length === 0;
 
@@ -936,6 +955,7 @@ const createVoucherPdfArtifact = async (voucherId) => {
     project_code: voucher.project_code || '',
     amount: voucher.basic_amount,
     description_of_material: voucherDescriptionFallback,
+    quantity: null,
   }] : normalizedMaterials.map((material) => ({
     loc: voucher.expense_booking_location || 'PEW',
     dept: (() => {
@@ -949,6 +969,7 @@ const createVoucherPdfArtifact = async (voucherId) => {
     amount: material.amount,
     // Use material-specific description if available; fall back to voucher description
     description_of_material: String(material.description_of_material || '').trim() || voucherDescriptionFallback,
+    quantity: material.quantity,
   }));
 
   const pdfData = {
@@ -1384,6 +1405,7 @@ router.post('/create-voucher', authenticateToken, authorizeRoles('initiator', 'u
     const {
       claimedBy,
       department,
+      departmentCode,
       claimedDate,
       supplier,
       expenseBookingLocation,
@@ -1642,7 +1664,7 @@ router.post('/create-voucher', authenticateToken, authorizeRoles('initiator', 'u
     // Insert into voucher_requests table with sequential approval
     const result = db.prepare(`
         INSERT INTO voucher_requests (
-          user_id, claimed_by, department, claimed_date,
+          user_id, claimed_by, department, department_code, claimed_date,
           supplier, buyer_name, buyer_email, expense_booking_location, description,
           invoice_number, invoice_date, basic_amount, gross_amount,
           nature_of_expenses, po_number, project_code, project_name,
@@ -1651,11 +1673,16 @@ router.post('/create-voucher', authenticateToken, authorizeRoles('initiator', 'u
           approver1_name, approver2_name,
           approver1_status, approver2_status,
           current_approval_level, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_approval_1')
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_approval_1')
       `).run(
       req.user.id,
       claimedBy,
       department,
+      // Validated against the shared list rather than trusted: this is the code cost is
+      // booked against, and an arbitrary string here misroutes it silently.
+      VALID_DEPARTMENT_CODES.includes(String(departmentCode ?? '').trim())
+        ? String(departmentCode).trim()
+        : null,
       normalizedClaimedDate,
       supplier,
       buyerName,
@@ -1745,14 +1772,18 @@ router.post('/create-voucher', authenticateToken, authorizeRoles('initiator', 'u
 
     if (finalMaterials.length > 0) {
       const stmt = db.prepare(`
-        INSERT INTO voucher_materials (voucher_id, amount, project_code, project_name, description_of_material)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO voucher_materials (voucher_id, amount, project_code, project_name, description_of_material, quantity)
+        VALUES (?, ?, ?, ?, ?, ?)
       `);
       // Use the voucher's main description as fallback when a material row has no description
       const voucherDescFallback = String(description || '').trim() || null;
       for (const item of finalMaterials) {
         const descValue = String(item.descriptionOfMaterial || '').trim() || voucherDescFallback;
-        stmt.run(voucherId, item.amount || null, item.projectCode || null, item.projectName || null, descValue);
+        // Stored NULL rather than 0 when left blank: quantity is optional, and 0 would
+        // read as "none were claimed" rather than "not stated".
+        const qtyValue = String(item.quantity ?? '').trim() === '' ? null : Number(item.quantity);
+        stmt.run(voucherId, item.amount || null, item.projectCode || null, item.projectName || null,
+                 descValue, Number.isFinite(qtyValue) ? qtyValue : null);
       }
     }
 
@@ -2285,17 +2316,22 @@ router.get('/vouchers', authenticateToken, (req, res) => {
     // Admin/coordinator/manager can see all vouchers, others only see their own
     // Admin/coordinator/manager/final_approver can see all vouchers, others only see their own
     if (req.user.role === 'admin' || req.user.role === 'coordinator' || req.user.role === 'manager' || req.user.role === 'final_approver') {
+      // LEFT JOIN, not JOIN. An inner join drops the voucher entirely when its creator
+      // no longer resolves — a claim would silently disappear from history because of
+      // something done to somebody's account, which is the worst possible failure for a
+      // financial record. Soft-deleting users mostly closed this, but a NULL or dangling
+      // user_id from older data would still do it.
       vouchers = db.prepare(`
-        SELECT v.*, u.name as user_name
+        SELECT v.*, COALESCE(u.name, v.claimed_by, 'Unknown user') as user_name
         FROM voucher_requests v
-        JOIN users u ON v.user_id = u.id
+        LEFT JOIN users u ON v.user_id = u.id
         ORDER BY v.created_at DESC
       `).all();
     } else {
       vouchers = db.prepare(`
-        SELECT v.*, u.name as user_name
+        SELECT v.*, COALESCE(u.name, v.claimed_by, 'Unknown user') as user_name
         FROM voucher_requests v
-        JOIN users u ON v.user_id = u.id
+        LEFT JOIN users u ON v.user_id = u.id
         WHERE v.user_id = ?
         ORDER BY v.created_at DESC
       `).all(req.user.id);
@@ -2315,9 +2351,9 @@ router.get('/vouchers/:id', authenticateToken, (req, res) => {
   try {
     const voucherId = req.params.id;
     const voucher = db.prepare(`
-      SELECT v.*, u.name as user_name
+      SELECT v.*, COALESCE(u.name, v.claimed_by, 'Unknown user') as user_name
       FROM voucher_requests v
-      JOIN users u ON v.user_id = u.id
+      LEFT JOIN users u ON v.user_id = u.id
       WHERE v.id = ?
     `).get(voucherId);
 
@@ -3346,7 +3382,7 @@ router.get('/vouchers/:id/materials-list', authenticateToken, (req, res) => {
     }
 
     const materials = db.prepare(`
-      SELECT id, amount, project_code, project_name, description_of_material
+      SELECT id, amount, project_code, project_name, description_of_material, quantity
       FROM voucher_materials WHERE voucher_id = ? ORDER BY id ASC
     `).all(voucherId);
 
@@ -3420,12 +3456,12 @@ router.put('/vouchers/:id/materials', authenticateToken, async (req, res) => {
     ).all(voucherId);
 
     const updateStmt = db.prepare(
-      'UPDATE voucher_materials SET description_of_material = ?, project_code = ?, project_name = ?, amount = ? WHERE id = ?'
+      'UPDATE voucher_materials SET description_of_material = ?, project_code = ?, project_name = ?, amount = ?, quantity = ? WHERE id = ?'
     );
 
     // Update each row by position; if frontend sends more rows than DB, insert them
     const insertStmt = db.prepare(
-      'INSERT INTO voucher_materials (voucher_id, amount, project_code, project_name, description_of_material) VALUES (?, ?, ?, ?, ?)'
+      'INSERT INTO voucher_materials (voucher_id, amount, project_code, project_name, description_of_material, quantity) VALUES (?, ?, ?, ?, ?, ?)'
     );
 
     materials.forEach((mat, i) => {
@@ -3433,11 +3469,14 @@ router.put('/vouchers/:id/materials', authenticateToken, async (req, res) => {
       const projCode = String(mat.projectCode ?? mat.project_code ?? '').trim();
       const projName = String(mat.projectName ?? mat.project_name ?? '').trim();
       const amount = String(mat.amount ?? '').trim();
+      // Blank stays NULL rather than becoming 0 — "not stated" and "none" are different.
+      const rawQty = String(mat.quantity ?? '').trim();
+      const qty = rawQty === '' || !Number.isFinite(Number(rawQty)) ? null : Number(rawQty);
 
       if (i < existingRows.length) {
-        updateStmt.run(desc || null, projCode || null, projName || null, amount || null, existingRows[i].id);
+        updateStmt.run(desc || null, projCode || null, projName || null, amount || null, qty, existingRows[i].id);
       } else {
-        insertStmt.run(voucherId, amount || null, projCode || null, projName || null, desc || null);
+        insertStmt.run(voucherId, amount || null, projCode || null, projName || null, desc || null, qty);
       }
     });
 

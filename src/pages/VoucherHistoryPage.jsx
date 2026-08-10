@@ -3,6 +3,7 @@ import { Search, Download, Copy } from 'lucide-react';
 import DownloadButton from '../components/DownloadButton';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
+import { isPending, isApproved, isRejected } from '../constants/voucherStatus';
 import { useDialog } from '../components/DialogProvider';
 import '../voucher-styles.css';
 import { daysSince, formatDate, formatDateTime } from '../utils/datetime';
@@ -493,9 +494,12 @@ const VoucherHistoryPage = () => {
         }
     };
 
-    const pendingCount = vouchers.filter((v) => v.status === 'pending').length;
-    const approvedCount = vouchers.filter((v) => v.status === 'approved').length;
-    const rejectedCount = vouchers.filter((v) => v.status === 'rejected').length;
+    // 'pending' is not a voucher status — it belongs to approver_status and
+    // supplier_ack_status. Comparing against it matched nothing, so this tile showed 0
+    // however many claims were actually in flight.
+    const pendingCount = vouchers.filter((v) => isPending(v.status)).length;
+    const approvedCount = vouchers.filter((v) => isApproved(v.status)).length;
+    const rejectedCount = vouchers.filter((v) => isRejected(v.status)).length;
 
     if (loading) {
         return (

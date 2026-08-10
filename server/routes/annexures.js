@@ -208,6 +208,30 @@ const canViewCosting = (req) => {
   return canEditCosting(req);
 };
 
+/**
+ * How much of the cost register this user may see.
+ *
+ *   null                  → nothing; the route should 403
+ *   { managerId: null }   → everything (printing floor and admins)
+ *   { managerId: 25 }     → only jobs stamped to that manager's team
+ *
+ * A manager is not part of the printing module, so canViewCosting excludes them — but
+ * they own the budget these annexures land against and previously could not open the
+ * page at all. They are scoped to their own team rather than given the whole register,
+ * and the scope keys off the manager stamped on the job, so a person moving teams does
+ * not hand their new manager visibility of work booked under the old one.
+ */
+const costingScope = (req) => {
+  if (canViewCosting(req)) return { managerId: null };
+
+  const me = db.prepare('SELECT id, role FROM users WHERE id = ? AND deleted_at IS NULL').get(req.user.id);
+  // Read from the database, not the token: a role revoked after sign-in must take
+  // effect immediately rather than lasting until the JWT expires.
+  if (me && String(me.role || '').toLowerCase() === 'manager') return { managerId: me.id };
+
+  return null;
+};
+
 // Editing stops the moment the annexure is approved — at that point it is signed-off
 // evidence. A draft annexure is fair game and its totals are recomputed after.
 const openAnnexure = (jobId) => db.prepare(
@@ -727,26 +751,89 @@ router.post('/jobs/:id/annexure', authenticateToken, (req, res) => {
 const jobLabel = (job) => job.job_number || job.request_id || `Job #${job.id}`;
 
 // ── Register ──
+//
+// The manager shown is the one stamped when the job was submitted, NOT whoever the
+// requestor reports to today. Without that, moving somebody between teams silently
+// re-parents every job they ever raised — including approved, locked annexures. The
+// live join is only a fallback for rows submitted before the stamp existed.
+const REGISTER_SELECT = `
+  SELECT a.*, j.job_number, j.request_id, j.project_name, j.department_name, j.debit_code,
+         j.lead_name, j.completed_at,
+         u.name AS requestor_name, u.ps_number AS requestor_ps, u.id AS requestor_id,
+         iss.name AS issued_by_name, v.code AS rate_card,
+         COALESCE(j.manager_id_at_submit,   mgr.id)        AS manager_id,
+         COALESCE(j.manager_name_at_submit, mgr.name)      AS manager_name,
+         COALESCE(j.manager_ps_at_submit,   mgr.ps_number) AS manager_ps
+    FROM cost_annexures a
+    JOIN print_jobs j ON j.id = a.job_id
+    LEFT JOIN users u ON u.id = j.created_by
+    LEFT JOIN users iss ON iss.id = a.issued_by
+    LEFT JOIN rate_versions v ON v.id = a.rate_version_id
+    LEFT JOIN users mgr ON mgr.id = u.manager_id`;
+
+const REGISTER_ORDER = `
+  -- Manager first (unassigned last), then team member, then job — so the client can
+  -- group by walking the rows in the order they already arrive.
+  ORDER BY (manager_name IS NULL), manager_name,
+           (requestor_name IS NULL), requestor_name,
+           COALESCE(j.job_number, j.request_id), a.version DESC`;
+
+const blank = (v) => v === undefined || v === null || String(v).trim() === '';
+
 router.get('/annexures', authenticateToken, (req, res) => {
   try {
-    if (!canViewCosting(req)) return res.status(403).json({ error: 'Printing coordinators and operators only' });
-    const rows = db.prepare(
-      `SELECT a.*, j.job_number, j.request_id, j.project_name, j.department_name, j.debit_code,
-              j.lead_name,
-              u.name AS requestor_name, u.ps_number AS requestor_ps,
-              iss.name AS issued_by_name, v.code AS rate_card,
-              mgr.id AS manager_id, mgr.name AS manager_name, mgr.ps_number AS manager_ps
-         FROM cost_annexures a
-         JOIN print_jobs j ON j.id = a.job_id
-         LEFT JOIN users u ON u.id = j.created_by
-         LEFT JOIN users iss ON iss.id = a.issued_by
-         LEFT JOIN rate_versions v ON v.id = a.rate_version_id
-         LEFT JOIN users mgr ON mgr.id = u.manager_id
-        -- Grouped by the requestor's manager first (unassigned last, alphabetically
-        -- within each group), then by job so every version still sits together.
-        ORDER BY (mgr.name IS NULL), mgr.name, COALESCE(j.job_number, j.request_id), a.version DESC`
-    ).all();
-    res.json(rows.map((r) => ({ ...r, totals_display: shapeTotals(r) })));
+    const scope = costingScope(req);
+    if (!scope) return res.status(403).json({ error: 'Printing coordinators and operators only' });
+
+    // Every filter is optional and every value is bound, never interpolated. The scope
+    // clause is applied first and separately: a manager's slice is a permission, not a
+    // filter, so clearing the filters must never widen what they can see.
+    const where = ['(? IS NULL OR COALESCE(j.manager_id_at_submit, mgr.id) = ?)'];
+    const args = [scope.managerId, scope.managerId];
+    const q = req.query || {};
+
+    if (!blank(q.manager) && scope.managerId === null) {
+      where.push('COALESCE(j.manager_id_at_submit, mgr.id) = ?');
+      args.push(Number(q.manager));
+    }
+    if (!blank(q.member)) { where.push('u.id = ?'); args.push(Number(q.member)); }
+    if (!blank(q.status)) { where.push('a.status = ?'); args.push(String(q.status)); }
+    if (!blank(q.debit_code)) { where.push('j.debit_code = ?'); args.push(String(q.debit_code)); }
+    if (!blank(q.department)) { where.push('j.department_name = ?'); args.push(String(q.department)); }
+    // Free text spans the identifiers someone actually types: job number, request id,
+    // annexure number or project.
+    if (!blank(q.q)) {
+      where.push(`(COALESCE(j.job_number,'') LIKE ? OR COALESCE(j.request_id,'') LIKE ?
+                   OR a.annexure_no LIKE ? OR COALESCE(j.project_name,'') LIKE ?)`);
+      const like = `%${String(q.q).trim()}%`;
+      args.push(like, like, like, like);
+    }
+    // Dates bound on completion, which is what a cost report is actually about. `date()`
+    // on both sides so a stored datetime compares against a plain YYYY-MM-DD.
+    if (!blank(q.from)) { where.push('date(j.completed_at) >= date(?)'); args.push(String(q.from)); }
+    if (!blank(q.to)) { where.push('date(j.completed_at) <= date(?)'); args.push(String(q.to)); }
+
+    const rows = db.prepare(`${REGISTER_SELECT} WHERE ${where.join(' AND ')} ${REGISTER_ORDER}`).all(...args);
+
+    // Dropdown options come from everything in scope, NOT from the filtered rows —
+    // otherwise picking one department empties the department list and the user cannot
+    // change their mind without clearing everything first.
+    const inScope = db.prepare(`${REGISTER_SELECT} WHERE ${where[0]} ${REGISTER_ORDER}`)
+      .all(scope.managerId, scope.managerId);
+    const distinct = (pick) => [...new Map(inScope.map(pick).filter((x) => x && x.value != null)
+      .map((x) => [String(x.value), x])).values()];
+
+    res.json({
+      annexures: rows.map((r) => ({ ...r, totals_display: shapeTotals(r) })),
+      total_count: inScope.length,
+      filters: {
+        managers: distinct((r) => ({ value: r.manager_id, label: r.manager_name, ps: r.manager_ps })),
+        members: distinct((r) => ({ value: r.requestor_id, label: r.requestor_name, ps: r.requestor_ps })),
+        departments: distinct((r) => ({ value: r.department_name, label: r.department_name })),
+        debit_codes: distinct((r) => ({ value: r.debit_code, label: r.debit_code })),
+        statuses: distinct((r) => ({ value: r.status, label: r.status })),
+      },
+    });
   } catch (error) {
     console.error('Error listing annexures:', error);
     res.status(500).json({ error: 'Failed to list annexures' });
@@ -977,7 +1064,13 @@ router.get('/annexures/:no', authenticateToken, (req, res) => {
     const detail = buildAnnexureDetail(req.params.no);
     if (!detail) return res.status(404).json({ error: 'Annexure not found' });
     const isOwnJob = detail.annexure.created_by === req.user.id;
-    if (!canViewCosting(req) && !isOwnJob) {
+    // A manager may open any annexure their team raised — matched on the manager
+    // stamped at submit, so it follows the same history the register groups by.
+    const scope = costingScope(req);
+    const inMyTeam = scope?.managerId != null
+      && db.prepare('SELECT 1 FROM print_jobs WHERE id = ? AND manager_id_at_submit = ?')
+           .get(detail.annexure.job_id, scope.managerId);
+    if (!canViewCosting(req) && !isOwnJob && !inMyTeam) {
       return res.status(403).json({ error: 'Not authorized to view this annexure' });
     }
     res.json(detail);

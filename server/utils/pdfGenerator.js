@@ -186,12 +186,15 @@ export const generateJCCPDF = (d, out) =>
 
         /* ---------- ITEMS TABLE ----------
            Removed: LEDGER ACCOUNT, ENTERPRISE UNIT, CSR PROJECT, EXCISE EXEMPT, EMPLOYEE, DEPT
-           Kept/Added: SR.No, DESCRIPTION OF MATERIAL, DEPT CODE, PROJECT, PROJECT CODE, AMOUNT
-           Total W = 515
+           Kept/Added: SR.No, DESCRIPTION OF MATERIAL, QTY, DEPT CODE, PROJECT, PROJECT CODE, AMOUNT
+           Total W = 515 — the widths MUST still sum to this, or the header cells drift
+           out of line with the rows beneath them. QTY's 40 came out of DESCRIPTION,
+           the only column with slack to give.
         */
         const iCols = [
             { h: "SR.\nNo.", w: 25 },
-            { h: "DESCRIPTION OF\nMATERIAL", w: 180 },
+            { h: "DESCRIPTION OF\nMATERIAL", w: 140 },
+            { h: "QTY", w: 40 },
             { h: "DEPT\nCODE", w: 60 },
             { h: "PROJECT\nNAME", w: 75 },
             { h: "PROJECT\nCODE", w: 75 },
@@ -229,6 +232,9 @@ export const generateJCCPDF = (d, out) =>
             const vals = [
                 idx + 1,
                 descText,
+                // Blank rather than 0 when no quantity was stated — the column is optional,
+                // and a printed 0 would read as "none were claimed".
+                it.quantity === null || it.quantity === undefined || it.quantity === '' ? '' : it.quantity,
                 it.dept_code || '',
                 it.project || '',
                 it.project_code || '',

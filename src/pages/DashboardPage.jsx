@@ -587,6 +587,7 @@ const DashboardPage = () => {
                             <thead>
                                 <tr>
                                     <th>PO Number</th>
+                                    <th>Vendor</th>
                                     <th>Total Amount</th>
                                     <th>Amount Used</th>
                                     <th>Remaining Amount</th>
@@ -596,12 +597,17 @@ const DashboardPage = () => {
                             <tbody>
                                 {poBudget.length === 0 ? (
                                     <tr>
-                                        <td colSpan="5" className="text-center" style={{ color: '#999', padding: '2rem' }}>No PO budget data available</td>
+                                        <td colSpan="6" className="text-center" style={{ color: '#999', padding: '2rem' }}>No PO budget data available</td>
                                     </tr>
                                 ) : (
                                     poBudget.map((po) => (
                                         <tr key={po.poNumber || `po-${po.totalAmount}-${po.usedAmount}`}>
                                             <td style={{ fontWeight: 600, color: 'var(--text-strong)' }}>{po.poNumber}</td>
+                                            {/* vendorName was already selected and returned by
+                                                /api/dashboard/po-budget — the table just never
+                                                rendered it. An em dash for the POs that predate
+                                                the field rather than an empty cell. */}
+                                            <td>{po.vendorName || '—'}</td>
                                             <td>₹{po.totalAmount.toLocaleString()}</td>
                                             <td style={{ color: 'var(--text-muted)' }}>₹{po.usedAmount.toLocaleString()}</td>
                                             <td style={{

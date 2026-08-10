@@ -44,7 +44,7 @@ const SHOW_ADMIN_LOGS = import.meta.env.VITE_SHOW_ADMIN_LOGS === 'true';
 const ENABLE_ASSET_MODULE = import.meta.env.VITE_ENABLE_ASSET_MODULE === 'true';
 const ENABLE_FEEDBACK_MODULE = import.meta.env.VITE_ENABLE_FEEDBACK === 'true';
 
-const ProtectedRoute = ({ children, allowedRoles, requireFlag, requireAnyFlag, allowAdmin = false }) => {
+const ProtectedRoute = ({ children, allowedRoles, requireFlag, requireAnyFlag, allowAdmin = false, allowRoles }) => {
     const { user, loading } = useAuth();
     const location = useLocation();
 
@@ -85,9 +85,15 @@ const ProtectedRoute = ({ children, allowedRoles, requireFlag, requireAnyFlag, a
     // belong to whoever holds the module flag, admin or not.
     // requireAnyFlag: the screen belongs to more than one printing role — costing is
     // read and corrected by coordinators and operators alike.
+    // allowRoles: a JCC role the API serves a NARROWER slice of the same screen to —
+    // a manager reaches the cost register but only sees their own team's jobs. The
+    // server enforces the narrowing; this only stops the router bouncing them first.
     const anyFlagOk = !requireAnyFlag || requireAnyFlag.some((f) => Number(user?.[f]) === 1);
+    const roleOk = Array.isArray(allowRoles)
+        && allowRoles.map((r) => String(r).toLowerCase()).includes(String(user.role || '').toLowerCase());
     const flagOk = ((!requireFlag || Number(user?.[requireFlag]) === 1) && anyFlagOk)
-        || (allowAdmin && user.role === 'admin');
+        || (allowAdmin && user.role === 'admin')
+        || roleOk;
     if (!flagOk) {
         return <Navigate to="/hub" replace />;
     }
@@ -315,7 +321,8 @@ const AppContent = () => {
                         <Route
                             path="/print-cost"
                             element={
-                                <ProtectedRoute requireAnyFlag={['is_printer_coordinator', 'is_printer_operator']} allowAdmin>
+                                <ProtectedRoute requireAnyFlag={['is_printer_coordinator', 'is_printer_operator']}
+                                                allowAdmin allowRoles={['manager']}>
                                     <PrintingCostPage />
                                 </ProtectedRoute>
                             }

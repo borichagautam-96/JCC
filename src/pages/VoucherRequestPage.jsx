@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
+import { DEPARTMENT_CODES } from '../constants/departments';
 import { useDialog } from '../components/DialogProvider';
 import DatePicker from '../components/DatePicker';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -77,6 +78,9 @@ const VoucherRequestPage = () => {
         // Initiator Details
         claimedBy: user?.name || '',
         department: 'Documentation & Training',
+        // Defaults to the code every voucher used while the field was hardcoded, so
+        // nothing changes for anyone who does not touch it.
+        departmentCode: DEPARTMENT_CODES[0],
         claimedDate: getTodayDateValue(),
 
         // Voucher Header
@@ -118,7 +122,7 @@ const VoucherRequestPage = () => {
 
     // Materials array for multiple project entries
     const [materials, setMaterials] = useState([
-        { amount: '', projectCode: '', projectName: '', descriptionOfMaterial: '' }
+        { amount: '', projectCode: '', projectName: '', descriptionOfMaterial: '', quantity: '' }
     ]);
 
     const [attachmentFile, setAttachmentFile] = useState(null);
@@ -810,7 +814,7 @@ const VoucherRequestPage = () => {
 
     // Add new material entry
     const addMaterial = () => {
-        setMaterials([...materials, { amount: '', projectCode: '', projectName: '', descriptionOfMaterial: '' }]);
+        setMaterials([...materials, { amount: '', projectCode: '', projectName: '', descriptionOfMaterial: '', quantity: '' }]);
 
     };
 
@@ -1010,6 +1014,7 @@ const VoucherRequestPage = () => {
             // Core voucher fields from formData state
             formDataToSend.append('claimedBy', formData.claimedBy || '');
             formDataToSend.append('department', formData.department || '');
+            formDataToSend.append('departmentCode', formData.departmentCode || '');
             formDataToSend.append('claimedDate', formData.claimedDate || '');
             formDataToSend.append('supplier', formData.supplier || '');
             formDataToSend.append('expenseBookingLocation', formData.expenseBookingLocation || '');
@@ -1116,7 +1121,7 @@ const VoucherRequestPage = () => {
                 approver2Remarks: '',
             });
             setAttachmentFile(null);
-            setMaterials([{ amount: '', projectCode: '', projectName: '' }]);
+            setMaterials([{ amount: '', projectCode: '', projectName: '', descriptionOfMaterial: '', quantity: '' }]);
 
             // Claim submitted successfully — discard the working draft if any
             if (draftIdRef.current) {
@@ -1227,14 +1232,21 @@ const VoucherRequestPage = () => {
                                 </div>
 
                                 <div className="input-group" style={{ marginBottom: 0 }}>
-                                    <label className="input-label">Department Code</label>
-                                    <input
-                                        type="text"
+                                    <label className="input-label">Department Code *</label>
+                                    {/* Was a read-only input hardcoded to "3559" — not bound to
+                                        formData and never submitted. With two codes in use the
+                                        choice has to be made and recorded per voucher. */}
+                                    <select
                                         name="departmentCode"
-                                        className="input-field voucher-readonly"
-                                        value="3559"
-                                        readOnly
-                                    />
+                                        className="input-field"
+                                        value={formData.departmentCode}
+                                        onChange={handleChange}
+                                        required
+                                    >
+                                        {DEPARTMENT_CODES.map((c) => (
+                                            <option key={c} value={c}>{c}</option>
+                                        ))}
+                                    </select>
                                 </div>
 
                                 <div className="input-group" style={{ marginBottom: 0 }}>
@@ -1581,6 +1593,7 @@ const VoucherRequestPage = () => {
                                 <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: 'var(--surface-2)' }}>
                                     <tr style={{ textAlign: 'left', borderBottom: '2px solid var(--border)' }}>
                                         <th style={{ padding: '8px', minWidth: '200px', color: 'var(--text-body)', fontWeight: 600 }}>Description of Materials</th>
+                                        <th style={{ padding: '8px', width: '90px', color: 'var(--text-body)', fontWeight: 600 }}>Quantity</th>
                                         <th style={{ padding: '8px', width: '120px', color: 'var(--text-body)', fontWeight: 600 }}>Basic Amount (₹)</th>
                                         <th style={{ padding: '8px', width: '150px', color: 'var(--text-body)', fontWeight: 600 }}>Project/Debit Code</th>
                                         <th style={{ padding: '8px', width: '150px', color: 'var(--text-body)', fontWeight: 600 }}>Project Name</th>
@@ -1599,6 +1612,19 @@ const VoucherRequestPage = () => {
                                                     value={material.descriptionOfMaterial || ''}
                                                     onChange={(e) => handleMaterialChange(index, 'descriptionOfMaterial', e.target.value)}
                                                     placeholder="Description"
+                                                />
+                                            </td>
+                                            <td style={{ padding: '4px 8px' }}>
+                                            <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    min="0"
+                                                    className="input-field"
+                                                    name={`materials[${index}][quantity]`}
+                                                    style={{ padding: '6px 8px', fontSize: '0.85rem', marginBottom: 0, height: 'auto' }}
+                                                    value={material.quantity ?? ''}
+                                                    onChange={(e) => handleMaterialChange(index, 'quantity', e.target.value)}
+                                                    placeholder="0"
                                                 />
                                             </td>
                                             <td style={{ padding: '4px 8px' }}>

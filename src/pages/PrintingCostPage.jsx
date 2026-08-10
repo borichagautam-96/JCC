@@ -31,6 +31,52 @@ const GROUP_LABEL = {
 const formatMoney = (paise) =>
     `₹${(Number(paise || 0) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+// Rows → manager → team member, with rollups at both levels.
+//
+// The server already orders by manager, then requestor, then job, so this walks the
+// list rather than sorting it — insertion order into the Maps IS the display order,
+// including "Unassigned" last. Summing in paise and formatting once at the end avoids
+// the rounding drift you get from adding up already-rounded rupee strings.
+const groupByManager = (rows) => {
+    const managers = new Map();
+    for (const row of rows) {
+        const mKey = row.manager_id != null ? `m${row.manager_id}` : 'unassigned';
+        if (!managers.has(mKey)) {
+            managers.set(mKey, {
+                key: mKey,
+                name: row.manager_name || 'Unassigned',
+                ps: row.manager_ps || null,
+                members: new Map(),
+                jobCount: 0,
+                totals: { printing: 0, binding: 0, finishing: 0, grand: 0 },
+            });
+        }
+        const mgr = managers.get(mKey);
+
+        const uKey = row.requestor_id != null ? `u${row.requestor_id}` : `n${row.requestor_name || 'unknown'}`;
+        if (!mgr.members.has(uKey)) {
+            mgr.members.set(uKey, {
+                key: uKey,
+                name: row.requestor_name || 'Unknown',
+                ps: row.requestor_ps || null,
+                rows: [],
+                totals: { printing: 0, binding: 0, finishing: 0, grand: 0 },
+            });
+        }
+        const member = mgr.members.get(uKey);
+        member.rows.push(row);
+
+        for (const bucket of [mgr.totals, member.totals]) {
+            bucket.printing += Number(row.printing_paise || 0);
+            bucket.binding += Number(row.binding_paise || 0);
+            bucket.finishing += Number(row.finishing_paise || 0);
+            bucket.grand += Number(row.grand_total_paise || 0);
+        }
+        mgr.jobCount += 1;
+    }
+    return [...managers.values()].map((m) => ({ ...m, members: [...m.members.values()] }));
+};
+
 const StatusPill = ({ status }) => {
     const tone = status === 'approved' ? 'var(--stat-emerald)'
         : status === 'superseded' ? 'var(--text-muted)'
@@ -120,6 +166,11 @@ const PrintingCostPage = () => {
     // approver reaching this page can read the annexures but not restate them, and the
     // server enforces the same rule.
     const canCorrect = Number(user?.is_printer_coordinator) === 1 || Number(user?.is_printer_operator) === 1;
+    // A manager reaches this page for their own team's costs only. The issuing queue
+    // and the awaiting-approval queue are printing-floor tools the API refuses them,
+    // so the tabs are hidden and the calls are skipped — otherwise the page fires
+    // requests that 403 and shows queues that can only ever be empty.
+    const isTeamViewOnly = !canCorrect && String(user?.role || '').toLowerCase() !== 'admin';
     // ProtectedRoute only renders this page once `user` is loaded, so this initial
     // value is accurate from the first render — no flash of the wrong default tab.
     const [tab, setTab] = useState(() => (canSeeRates ? 'card' : 'annexures'));
@@ -128,6 +179,13 @@ const PrintingCostPage = () => {
     const [card, setCard] = useState(null);
     const [loading, setLoading] = useState(true);
     const [annexures, setAnnexures] = useState([]);
+    // Filters are applied server-side: the option lists come back from the whole set in
+    // scope, so narrowing on one field never empties another field's dropdown.
+    const EMPTY_FILTERS = { q: '', manager: '', member: '', status: '', department: '', debit_code: '', from: '', to: '' };
+    const [filters, setFilters] = useState(EMPTY_FILTERS);
+    const [filterOptions, setFilterOptions] = useState({ managers: [], members: [], departments: [], debit_codes: [], statuses: [] });
+    const [totalCount, setTotalCount] = useState(0);
+    const activeFilterCount = Object.values(filters).filter((v) => String(v).trim()).length;
     const [candidates, setCandidates] = useState([]);
     // Drafts the requestor has not signed off. Loaded on mount rather than on tab
     // switch so the count sits on the tab itself — the whole point is that these are
@@ -147,6 +205,15 @@ const PrintingCostPage = () => {
     // These groups open by default — unlike the 44-line rate card, a manager's team is
     // usually a handful of rows, so collapsing first would hide more than it helps.
     const [closedManagerGroups, setClosedManagerGroups] = useState(() => new Set());
+    // Team members collapse independently of their manager. Open by default, like the
+    // manager sections — a team is usually a handful of people, so collapsing first
+    // would hide more than it helps.
+    const [closedMemberGroups, setClosedMemberGroups] = useState(() => new Set());
+    const toggleMemberGroup = (key) => setClosedMemberGroups((prev) => {
+        const next = new Set(prev);
+        if (next.has(key)) next.delete(key); else next.add(key);
+        return next;
+    });
     const toggleManagerGroup = (key) => setClosedManagerGroups((prev) => {
         const next = new Set(prev);
         if (next.has(key)) next.delete(key); else next.add(key);
@@ -192,19 +259,29 @@ const PrintingCostPage = () => {
 
     const loadAnnexures = useCallback(async () => {
         try {
+            const params = new URLSearchParams(
+                Object.entries(filters).filter(([, v]) => String(v).trim())
+            ).toString();
             const [reg, cand] = await Promise.all([
-                fetch('/api/annexures', { headers: authHeaders() }),
-                fetch('/api/annexures/candidates', { headers: authHeaders() }),
+                fetch(`/api/annexures${params ? `?${params}` : ''}`, { headers: authHeaders() }),
+                isTeamViewOnly ? Promise.resolve(null) : fetch('/api/annexures/candidates', { headers: authHeaders() }),
             ]);
-            if (reg.ok) setAnnexures(await reg.json());
-            if (cand.ok) setCandidates(await cand.json());
+            if (reg.ok) {
+                const data = await reg.json();
+                setAnnexures(data.annexures || []);
+                setFilterOptions(data.filters || filterOptions);
+                setTotalCount(data.total_count || 0);
+            }
+            if (cand?.ok) setCandidates(await cand.json());
         } catch (e) { console.warn('annexure load failed', e); }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [getToken]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [getToken, filters, isTeamViewOnly]);
 
     useEffect(() => { if (tab === 'annexures') loadAnnexures(); }, [tab, loadAnnexures]);
 
     const loadPending = useCallback(async () => {
+        if (isTeamViewOnly) return;
         try {
             const res = await fetch('/api/annexures/pending', { headers: authHeaders() });
             if (res.ok) setPending(await res.json());
@@ -364,7 +441,9 @@ const PrintingCostPage = () => {
                     {(canSeeRates
                         ? [['card', 'Rate Card'], ['annexures', 'Annexures'],
                            ['pending', 'Awaiting Approval']]
-                        : [['annexures', 'Annexures'], ['pending', 'Awaiting Approval']])
+                        : isTeamViewOnly
+                            ? [['annexures', 'Annexures']]
+                            : [['annexures', 'Annexures'], ['pending', 'Awaiting Approval']])
                         .map(([key, label]) => {
                         const count = key === 'pending' ? pending.annexures.length : 0;
                         const overdue = key === 'pending' && pending.annexures.some((a) => a.overdue);
@@ -667,6 +746,74 @@ const PrintingCostPage = () => {
 
                 {tab === 'annexures' && (
                     <>
+                        {/* Filtering happens on the server, so the hierarchy and its rollups
+                            always describe exactly the rows on screen. The manager filter is
+                            hidden from a manager: their scope is already fixed to their own
+                            team, and offering it would imply they could widen it. */}
+                        <div className="glass-card" style={{ marginBottom: '1rem' }}>
+                            <div style={{ display: 'grid', gap: '0.6rem',
+                                          gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
+                                <input className="input-field" placeholder="Job no, annexure or project…"
+                                       value={filters.q}
+                                       onChange={(e) => setFilters((f) => ({ ...f, q: e.target.value }))} />
+                                {!isTeamViewOnly && (
+                                    <select className="input-field" value={filters.manager}
+                                            onChange={(e) => setFilters((f) => ({ ...f, manager: e.target.value }))}>
+                                        <option value="">All managers</option>
+                                        {filterOptions.managers.map((m) => (
+                                            <option key={m.value} value={m.value}>{m.label}</option>
+                                        ))}
+                                    </select>
+                                )}
+                                <select className="input-field" value={filters.member}
+                                        onChange={(e) => setFilters((f) => ({ ...f, member: e.target.value }))}>
+                                    <option value="">All team members</option>
+                                    {filterOptions.members.map((m) => (
+                                        <option key={m.value} value={m.value}>{m.label}{m.ps ? ` (${m.ps})` : ''}</option>
+                                    ))}
+                                </select>
+                                <select className="input-field" value={filters.status}
+                                        onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value }))}>
+                                    <option value="">All statuses</option>
+                                    {filterOptions.statuses.map((o) => (
+                                        <option key={o.value} value={o.value}>{o.label}</option>
+                                    ))}
+                                </select>
+                                <select className="input-field" value={filters.department}
+                                        onChange={(e) => setFilters((f) => ({ ...f, department: e.target.value }))}>
+                                    <option value="">All departments</option>
+                                    {filterOptions.departments.map((o) => (
+                                        <option key={o.value} value={o.value}>{o.label}</option>
+                                    ))}
+                                </select>
+                                <select className="input-field" value={filters.debit_code}
+                                        onChange={(e) => setFilters((f) => ({ ...f, debit_code: e.target.value }))}>
+                                    <option value="">All debit codes</option>
+                                    {filterOptions.debit_codes.map((o) => (
+                                        <option key={o.value} value={o.value}>{o.label}</option>
+                                    ))}
+                                </select>
+                                {/* Bound on completion date — a cost report is about when the
+                                    work finished, not when it was requested. */}
+                                <input className="input-field" type="date" title="Completed from"
+                                       value={filters.from}
+                                       onChange={(e) => setFilters((f) => ({ ...f, from: e.target.value }))} />
+                                <input className="input-field" type="date" title="Completed to"
+                                       value={filters.to}
+                                       onChange={(e) => setFilters((f) => ({ ...f, to: e.target.value }))} />
+                            </div>
+                            {activeFilterCount > 0 && (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.7rem' }}>
+                                    <span className="text-muted" style={{ fontSize: '0.82rem' }}>
+                                        Showing {annexures.length} of {totalCount} annexure{totalCount === 1 ? '' : 's'}
+                                    </span>
+                                    <button className="btn btn-sm btn-outline" onClick={() => setFilters(EMPTY_FILTERS)}>
+                                        Clear filters
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+
                         {/* Visible to anyone who can read costing, not just coordinators:
                             a completed job with no annexure is a gap everyone needs to
                             see. Only a coordinator gets the button to issue one. */}
@@ -716,71 +863,121 @@ const PrintingCostPage = () => {
                                 <h3 style={{ marginTop: 0, color: 'var(--text-strong)', fontSize: '1.05rem' }}>
                                     Cost annexures (0)
                                 </h3>
+                                {/* "None exist" and "none match" are different problems with
+                                    different fixes, so they must not share a message. */}
                                 <p className="text-muted" style={{ fontSize: '0.88rem', margin: 0 }}>
-                                    None yet. A completed job with a priceable spec produces one — issue it above.
+                                    {activeFilterCount > 0
+                                        ? `No annexure matches these filters — ${totalCount} exist${totalCount === 1 ? 's' : ''} in total.`
+                                        : 'None yet. A completed job with a priceable spec produces one — issue it above.'}
                                 </p>
                             </div>
                         ) : (
-                            /* Grouped by the requestor's manager — sorted server-side, unassigned
-                               last. Each manager's team is its own collapsible section. */
-                            Object.entries(annexures.reduce((acc, a) => {
-                                const key = a.manager_name || 'Unassigned';
-                                (acc[key] = acc[key] || []).push(a);
-                                return acc;
-                            }, {})).map(([managerLabel, rows]) => {
-                                const open = !closedManagerGroups.has(managerLabel);
-                                const managerPs = rows[0]?.manager_ps;
+                            /* Manager → team member → job. Rows arrive sorted in exactly that
+                               order, so grouping is a walk rather than a sort. A two-level
+                               accordion over one table beats a tree view here: the costs stay
+                               in aligned columns, which is what makes them readable. */
+                            groupByManager(annexures).map((mgrGroup) => {
+                                const open = !closedManagerGroups.has(mgrGroup.key);
                                 return (
-                                    <div className="glass-card" key={managerLabel} style={{ marginBottom: '1rem' }}>
+                                    <div className="glass-card" key={mgrGroup.key} style={{ marginBottom: '1rem' }}>
                                         <h3 style={{ margin: 0, color: 'var(--text-strong)', fontSize: '1.05rem', cursor: 'pointer',
-                                                     display: 'flex', alignItems: 'center', gap: '0.4rem', userSelect: 'none' }}
-                                            onClick={() => toggleManagerGroup(managerLabel)}>
+                                                     display: 'flex', alignItems: 'center', gap: '0.4rem', userSelect: 'none',
+                                                     flexWrap: 'wrap' }}
+                                            onClick={() => toggleManagerGroup(mgrGroup.key)}>
                                             <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>{open ? '▾' : '▸'}</span>
-                                            {managerLabel}{managerPs && <span className="text-muted" style={{ fontWeight: 400 }}> ({managerPs})</span>}
-                                            <span className="text-muted" style={{ fontSize: '0.8rem', fontWeight: 400 }}>
-                                                ({rows.length})
+                                            {mgrGroup.name}
+                                            {mgrGroup.ps && <span className="text-muted" style={{ fontWeight: 400 }}> ({mgrGroup.ps})</span>}
+                                            <span className="text-muted" style={{ fontSize: '0.8rem', fontWeight: 400, marginLeft: 'auto' }}>
+                                                {mgrGroup.members.length} team member{mgrGroup.members.length === 1 ? '' : 's'}
+                                                {' · '}{mgrGroup.jobCount} job{mgrGroup.jobCount === 1 ? '' : 's'}
+                                                {' · '}Print {formatMoney(mgrGroup.totals.printing)}
+                                                {' · '}Bind {formatMoney(mgrGroup.totals.binding)}
+                                                {' · '}Fin {formatMoney(mgrGroup.totals.finishing)}
+                                            </span>
+                                            <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--stat-emerald)',
+                                                           fontSize: '0.95rem' }}>
+                                                {formatMoney(mgrGroup.totals.grand)}
                                             </span>
                                         </h3>
-                                        {open && (
-                                            <div className="table-container" style={{ marginTop: '0.85rem' }}>
-                                                <table className="table">
-                                                    <thead>
-                                                        <tr><th>Job</th><th>Requestor</th><th>D&amp;T Lead</th>
-                                                            <th>Department</th><th>Debit code</th>
-                                                            <th>Status</th>
-                                                            <th style={{ textAlign: 'right' }}>Grand total (₹)</th>
-                                                            <th style={{ textAlign: 'center' }}>Action</th></tr>
-                                                    </thead>
-                                                    <tbody>
-                                                        {rows.map((a) => (
-                                                            <tr key={a.annexure_no}>
-                                                                <td style={{ fontWeight: 700 }}>
-                                                                    {a.job_number || a.request_id}
-                                                                    {a.version > 1 && <span className="text-muted" style={{ fontWeight: 400 }}> v{a.version}</span>}
-                                                                </td>
-                                                                <td>
-                                                                    {a.requestor_name || '—'}
-                                                                    {a.requestor_ps && (
-                                                                        <div className="text-muted" style={{ fontSize: '0.72rem' }}>{a.requestor_ps}</div>
-                                                                    )}
-                                                                </td>
-                                                                <td>{a.lead_name || '—'}</td>
-                                                                <td>{a.department_name || '—'}</td>
-                                                                <td>{a.debit_code || '—'}</td>
-                                                                <td><StatusPill status={a.status} /></td>
-                                                                <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700,
-                                                                             color: 'var(--stat-emerald)' }}>
-                                                                    {a.totals_display?.grand_total}
-                                                                </td>
-                                                                <td style={{ textAlign: 'center' }}>
-                                                                    <button className="btn btn-sm btn-outline" onClick={() => openDetail(a.annexure_no)}>View</button>
-                                                                </td>
-                                                            </tr>
-                                                        ))}
-                                                    </tbody>
-                                                </table>
-                                            </div>
-                                        )}
+
+                                        {open && mgrGroup.members.map((member) => {
+                                            const memberKey = `${mgrGroup.key}|${member.key}`;
+                                            const memberOpen = !closedMemberGroups.has(memberKey);
+                                            return (
+                                                <div key={memberKey} style={{ marginTop: '0.85rem', paddingLeft: '1rem',
+                                                                              borderLeft: '2px solid var(--border)' }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem',
+                                                                  cursor: 'pointer', userSelect: 'none', flexWrap: 'wrap' }}
+                                                         onClick={() => toggleMemberGroup(memberKey)}>
+                                                        <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                                                            {memberOpen ? '▾' : '▸'}
+                                                        </span>
+                                                        <strong style={{ color: 'var(--text-strong)', fontSize: '0.92rem' }}>
+                                                            {member.name}
+                                                        </strong>
+                                                        {member.ps && (
+                                                            <span className="text-muted" style={{ fontSize: '0.75rem' }}>{member.ps}</span>
+                                                        )}
+                                                        <span className="text-muted" style={{ fontSize: '0.78rem', marginLeft: 'auto' }}>
+                                                            {member.rows.length} job{member.rows.length === 1 ? '' : 's'}
+                                                        </span>
+                                                        <span style={{ fontFamily: 'monospace', fontWeight: 700,
+                                                                       color: 'var(--stat-emerald)', fontSize: '0.85rem' }}>
+                                                            {formatMoney(member.totals.grand)}
+                                                        </span>
+                                                    </div>
+
+                                                    {memberOpen && (
+                                                        <div className="table-container" style={{ marginTop: '0.5rem' }}>
+                                                            <table className="table table-compact">
+                                                                <thead>
+                                                                    <tr><th>Job</th><th>Project</th><th>Department</th><th>Debit code</th>
+                                                                        <th>Status</th><th>Completed</th>
+                                                                        <th style={{ textAlign: 'right' }}>Print</th>
+                                                                        <th style={{ textAlign: 'right' }}>Bind</th>
+                                                                        <th style={{ textAlign: 'right' }}>Finish</th>
+                                                                        <th style={{ textAlign: 'right' }}>Total (₹)</th>
+                                                                        <th style={{ textAlign: 'center' }}>Action</th></tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                    {member.rows.map((a) => (
+                                                                        <tr key={a.annexure_no}>
+                                                                            <td style={{ fontWeight: 700 }}>
+                                                                                {a.job_number || a.request_id}
+                                                                                {a.version > 1 && <span className="text-muted" style={{ fontWeight: 400 }}> v{a.version}</span>}
+                                                                            </td>
+                                                                            <td>{a.project_name || '—'}</td>
+                                                                            <td>{a.department_name || '—'}</td>
+                                                                            <td>{a.debit_code || '—'}</td>
+                                                                            <td><StatusPill status={a.status} /></td>
+                                                                            <td className="text-muted" style={{ fontSize: '0.78rem' }}>
+                                                                                {a.completed_at ? formatDate(a.completed_at) : '—'}
+                                                                            </td>
+                                                                            <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                                                                                {formatMoney(a.printing_paise)}
+                                                                            </td>
+                                                                            <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                                                                                {formatMoney(a.binding_paise)}
+                                                                            </td>
+                                                                            <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                                                                                {formatMoney(a.finishing_paise)}
+                                                                            </td>
+                                                                            <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700,
+                                                                                         color: 'var(--stat-emerald)' }}>
+                                                                                {a.totals_display?.grand_total}
+                                                                            </td>
+                                                                            <td style={{ textAlign: 'center' }}>
+                                                                                <button className="btn btn-sm btn-outline" onClick={() => openDetail(a.annexure_no)}>View</button>
+                                                                            </td>
+                                                                        </tr>
+                                                                    ))}
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 );
                             })

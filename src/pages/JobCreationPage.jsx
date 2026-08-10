@@ -2,10 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { useDialog } from '../components/DialogProvider';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { DEPARTMENT_CODES } from '../constants/departments';
 import '../voucher-styles.css';
 
 // Request Information option lists (can be moved to master data later).
-const DEPARTMENT_CODES = ['3559', '3988'];
+// Department codes come from the shared list — the second one was 3988 here, a typo
+// for 3998, and this form was the only place it appeared.
 const CLASSIFICATIONS = ['Restricted', 'Secret', 'Confidential', 'Not Applicable'];
 const VL_REVIEWS = ['Cleared', 'Not Cleared'];
 const PURPOSES = ['Customer Submission for Review', 'Final Dispatch', 'Self Study', 'Rework', 'Training Purpose'];
@@ -70,6 +72,11 @@ const JobCreationPage = () => {
     const navigate = useNavigate();
     const location = useLocation();
     const resumeJobId = location.state?.jobId || null;
+    // Cloning fills the form from a past request but creates nothing until step 1 is
+    // saved, so it stays on step 1 with no jobId — unlike resume, which is editing a
+    // row that already exists.
+    const cloneFromJobId = location.state?.cloneFromJobId || null;
+    const [clonedFrom, setClonedFrom] = useState(null);
 
     const [step, setStep] = useState(1);
     const [jobId, setJobId] = useState(null);
@@ -243,6 +250,50 @@ const JobCreationPage = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [resumeJobId]);
 
+    // Pre-fill from a past request. Form-1 fields only — documents and PDFs are re-added,
+    // and no jobId is set, so saving step 1 creates a brand new request exactly as a
+    // normal one would.
+    useEffect(() => {
+        if (!cloneFromJobId) return;
+        (async () => {
+            try {
+                const res = await fetch(`/api/jobs/${cloneFromJobId}/clone-source`, { headers: authHeaders() });
+                if (!res.ok) return;
+                const { form, cloned_from: source } = await res.json();
+                setClonedFrom(source || null);
+                setForm1((prev) => ({
+                    ...prev,
+                    // Identity stays whoever is signed in, not whoever raised the original.
+                    employee_name: user?.name || prev.employee_name,
+                    employee_id: user?.ps_number || prev.employee_id,
+                    department_name: form.department_name || '',
+                    department_code: form.department_code || '',
+                    debit_code: form.debit_code || '',
+                    project_name: form.project_name || '',
+                    dt_number: form.dt_number || '',
+                    shipset_batch: form.shipset_batch || '',
+                    classification: form.classification || '',
+                    number_of_pages: form.number_of_pages != null ? String(form.number_of_pages) : '',
+                    lead_name: form.lead_name || '',
+                    edc: form.edc || '',
+                    recipient_name: form.recipient_name || '',
+                    recipient_contact: form.recipient_contact || '',
+                    recipient_address: form.recipient_address || '',
+                    vl_review: form.vl_review || '',
+                    drp_remarks: form.drp_remarks || '',
+                    pre_printing_checklist: form.pre_printing_checklist || '',
+                    purpose: form.purpose || '',
+                    printing_form_available: form.printing_form_available || '',
+                    remarks: form.remarks || '',
+                    location_id: form.location_id ? String(form.location_id) : '',
+                }));
+            } catch (e) {
+                console.warn('clone prefill failed', e);
+            }
+        })();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [cloneFromJobId]);
+
     // Step 2 must never show nothing. With no saved documents *and* no open entry
     // row there is nowhere to type — which happened on a request resumed before any
     // document was added, and again after deleting the last saved one. Suppressing
@@ -372,7 +423,10 @@ const JobCreationPage = () => {
             const res = await fetch(url, {
                 method,
                 headers: authHeaders({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify(form1),
+                // cloned_from only rides along on the create, so the audit trail still
+                // records where a copied request came from now that cloning itself
+                // writes nothing.
+                body: JSON.stringify(jobId ? form1 : { ...form1, cloned_from: clonedFrom }),
             });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || 'Failed to save request');

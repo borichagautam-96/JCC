@@ -203,14 +203,29 @@ const JobHistoryPage = () => {
         } catch (e) { console.warn('open version failed', e); }
     };
 
-    const cloneJob = async (job) => {
+    // Opens the new-request form pre-filled. Nothing is created until the user saves
+    // step 1 — clicking Clone by accident now costs nothing, where it used to leave a
+    // permanent draft that could not be removed.
+    const cloneJob = (job) => {
+        navigate('/job-creation', { state: { cloneFromJobId: job.id } });
+    };
+
+    // Only ever offered on a draft. Anything submitted belongs to the workflow and the
+    // server refuses to delete it, so the button is not shown for those.
+    const deleteDraft = async (job) => {
+        const ok = await dialog.confirm(
+            `Discard ${job.request_id}? This cannot be undone.`
+            + (job.document_count ? ` Its ${job.document_count} uploaded document(s) will be removed too.` : ''),
+            { title: 'Discard draft', confirmLabel: 'Yes, discard', variant: 'danger' }
+        );
+        if (!ok) return;
         try {
-            const res = await fetch(`/api/jobs/${job.id}/clone`, { method: 'POST', headers: authHeaders() });
+            const res = await fetch(`/api/jobs/${job.id}`, { method: 'DELETE', headers: authHeaders() });
             const data = await res.json();
-            if (!res.ok) throw new Error(data.error || 'Clone failed');
-            navigate('/job-creation', { state: { jobId: data.id } });
+            if (!res.ok) throw new Error(data.error || 'Could not discard the request');
+            fetchJobs();
         } catch (e) {
-            console.error('clone failed', e);
+            await dialog.alert(e.message, { title: 'Error', variant: 'error' });
         }
     };
 
@@ -557,7 +572,15 @@ const JobHistoryPage = () => {
                                                             {(job.rework_count > 0 || job.current_version > 1) && (
                                                                 <button className="btn btn-sm btn-outline" onClick={() => loadVersions(job.id)}>Versions</button>
                                                             )}
-                                                            <button className="btn btn-sm btn-outline" onClick={() => cloneJob(job)} title="Create a new request copying this one's details">Clone</button>
+                                                            <button className="btn btn-sm btn-outline" onClick={() => cloneJob(job)} title="Open a new request pre-filled from this one — nothing is created until you save it">Clone</button>
+                                                            {/* Drafts only. A submitted request is part of the
+                                                                workflow and the server refuses to delete it. */}
+                                                            {job.status === 'draft' && (
+                                                                <button className="btn btn-sm btn-danger" onClick={() => deleteDraft(job)}
+                                                                        title="Discard this unsubmitted draft">
+                                                                    Discard
+                                                                </button>
+                                                            )}
                                                         </div>
                                                     </td>
                                                 </tr>

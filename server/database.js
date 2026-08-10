@@ -846,21 +846,30 @@ const initDatabase = () => {
     )
   `);
 
-  // Migration: Add description_of_material column to voucher_materials if it doesn't exist
-  try {
-    const tableInfoResult = db.exec("PRAGMA table_info(voucher_materials)");
-    const columns = tableInfoResult.length > 0 ? tableInfoResult[0].values : [];
-    const columnNames = columns.map(col => col[1]);
+  // Later columns on voucher_materials.
+  //
+  // The previous version of this read `db.exec('PRAGMA …')[0].values`, which is the old
+  // sql.js shape — under better-sqlite3 it yields nothing, so the guard never matched and
+  // the ALTER ran every boot, succeeding once and throwing into the catch thereafter. It
+  // worked, but only by accident. A plain try/catch per column says what is meant.
+  //
+  // quantity is DECIMAL like amount, not INTEGER: materials are claimed in units that are
+  // not always whole (2.5 m, 1.75 kg), and an integer column would silently truncate.
+  const voucherMaterialColumns = [
+    'description_of_material TEXT',
+    'quantity DECIMAL(10, 2)',
+  ];
+  voucherMaterialColumns.forEach((col) => {
+    try { db.exec(`ALTER TABLE voucher_materials ADD COLUMN ${col}`); } catch (_) { /* exists */ }
+  });
 
-    if (!columnNames.includes('description_of_material')) {
-      console.log('Adding description_of_material column to voucher_materials table...');
-      db.exec("ALTER TABLE voucher_materials ADD COLUMN description_of_material TEXT");
-      saveDatabase();
-      console.log('✓ description_of_material column added successfully');
-    }
-  } catch (error) {
-    console.error('Error adding description_of_material column:', error);
-  }
+  // The department code cost is booked against.
+  //
+  // It used to be derived from the department name at PDF time, which only worked while
+  // each department had exactly one code. It has two, so the choice has to be recorded
+  // per voucher — a derivation cannot tell 3559 from 3998 for the same department.
+  // Existing vouchers keep deriving it; see the PDF fallback.
+  try { db.exec('ALTER TABLE voucher_requests ADD COLUMN department_code TEXT'); } catch (_) { /* exists */ }
 
   // Asset lifecycle tracking
   db.run(`
@@ -1096,110 +1105,6 @@ const initDatabase = () => {
   try {
     db.exec('ALTER TABLE users ADD COLUMN location_id INTEGER');
   } catch (_) { /* column already exists */ }
-  // Target site where a print job should be handled (defaults from the requester).
-  try {
-    db.exec('ALTER TABLE print_jobs ADD COLUMN location_id INTEGER');
-  } catch (_) { /* column already exists */ }
-
-  // Extended Request Information fields (Initiator / Recipient / Printing Requirement).
-  const printJobExtraColumns = [
-    'shipset_batch TEXT',
-    'classification TEXT',
-    'number_of_pages INTEGER',
-    'lead_name TEXT',
-    'edc TEXT',
-    'recipient_name TEXT',
-    'recipient_contact TEXT',
-    'recipient_address TEXT',
-    'vl_review TEXT',
-    'drp_remarks TEXT',
-    'pre_printing_checklist TEXT',
-    'purpose TEXT',
-    'printing_form_available TEXT',
-  ];
-  printJobExtraColumns.forEach((col) => {
-    try { db.exec(`ALTER TABLE print_jobs ADD COLUMN ${col}`); } catch (_) { /* exists */ }
-  });
-
-  // Rush/priority flag (1 = rush → jumps the queue).
-  try { db.exec('ALTER TABLE print_jobs ADD COLUMN priority INTEGER DEFAULT 0'); } catch (_) { /* exists */ }
-
-  // Dispatch / courier tracking (optional stage after Ready for Collection).
-  const printJobDispatchColumns = [
-    'courier_name TEXT',
-    'docket_no TEXT',
-    'dispatch_books INTEGER',
-    'dispatch_packets TEXT',
-    'dispatch_remarks TEXT',
-    'dispatched_by TEXT',
-    'dispatched_at DATETIME',
-    'received_by TEXT',
-    'delivered_at DATETIME',
-  ];
-  printJobDispatchColumns.forEach((col) => {
-    try { db.exec(`ALTER TABLE print_jobs ADD COLUMN ${col}`); } catch (_) { /* exists */ }
-  });
-
-  // Receipt confirmation. Handover used to close a job on the coordinator's
-  // click alone, so 'completed' recorded who *gave* the materials and nothing
-  // about who got them. Handover now parks the job at 'awaiting_receipt' and
-  // only the requestor's own confirmation completes it, stamping these.
-  const printJobReceiptColumns = [
-    'handed_over_at DATETIME',
-    'handed_over_by TEXT',
-    'received_at DATETIME',
-    'received_by_user_id INTEGER',
-  ];
-  printJobReceiptColumns.forEach((col) => {
-    try { db.exec(`ALTER TABLE print_jobs ADD COLUMN ${col}`); } catch (_) { /* exists */ }
-  });
-
-  // Rework / proof-review cycle. current_version and rework_count are derivable
-  // from print_job_reworks, but the coordinator's job lists render on a 30s poll
-  // and would need a correlated subquery per row; both are written in the same
-  // statement batch as the rework insert so they cannot drift.
-  // Content hash of each document's PDF. Lets a resubmit distinguish "same file,
-  // different specs" from "file replaced", and rescues a rename from looking like a
-  // deletion plus an addition. Null on rows uploaded before this existed.
-  try { db.exec('ALTER TABLE print_job_documents ADD COLUMN pdf_sha256 TEXT'); } catch (_) { /* exists */ }
-  // Some bindings are priced by a variant rather than by paper size — a box file is
-  // charged on its spine thickness (1 inc, 1.5, 2, 2.5, 3). Without this the rate
-  // master cannot be matched and the line reads as unpriced.
-  try { db.exec('ALTER TABLE print_job_documents ADD COLUMN binding_variant TEXT'); } catch (_) { /* exists */ }
-  // Optional extras the rate master prices but that have no dedicated field — pouch
-  // lamination, board stock, scanning, packing. JSON array of
-  // { code, size, gsm, colour, variant, quantity }; the dimensions are stored rather
-  // than a rate-line id so a superseded card never strands a saved document.
-  try { db.exec('ALTER TABLE print_job_documents ADD COLUMN extra_services TEXT'); } catch (_) { /* exists */ }
-
-  // A cost line records the dimensions it was priced at. The requestor's spec is an
-  // estimate — the operator at the machine decides the real A3/A4/colour split — so a
-  // line has to carry its own size/GSM/colour to be re-priced when corrected.
-  for (const col of ['paper_size TEXT', 'paper_gsm TEXT', 'colour_mode TEXT', 'variant TEXT']) {
-    try { db.exec(`ALTER TABLE job_cost_lines ADD COLUMN ${col}`); } catch (_) { /* exists */ }
-  }
-
-  // Which annexure version a line belongs to. NULL means "not yet issued" — the
-  // working set an operator can correct before a coordinator issues the first
-  // annexure. Without this, every version of a job's annexure shared one row set,
-  // so correcting a reissued draft would silently rewrite the superseded version's
-  // frozen line-by-line breakdown too, even though its totals stayed frozen.
-  try { db.exec('ALTER TABLE job_cost_lines ADD COLUMN annexure_id INTEGER'); } catch (_) { /* exists */ }
-
-  const printJobRecallColumns = ['recalled_at DATETIME', 'recall_reason TEXT'];
-  printJobRecallColumns.forEach((col) => {
-    try { db.exec(`ALTER TABLE print_jobs ADD COLUMN ${col}`); } catch (_) { /* exists */ }
-  });
-
-  const printJobReworkColumns = [
-    'current_version INTEGER DEFAULT 1',
-    'rework_count INTEGER DEFAULT 0',
-    'proof_released_at DATETIME',
-    'last_rework_at DATETIME',
-  ];
-  printJobReworkColumns.forEach((col) => {
-    try { db.exec(`ALTER TABLE print_jobs ADD COLUMN ${col}`); } catch (_) { /* exists */ }
-  });
 
   db.run(`
     CREATE TABLE IF NOT EXISTS print_jobs (
@@ -1245,6 +1150,47 @@ const initDatabase = () => {
       FOREIGN KEY (assigned_operator_id) REFERENCES users(id)
     )
   `);
+
+  // Who the requestor reported to WHEN THE JOB WAS SUBMITTED.
+  //
+  // The cost register groups by manager, and that grouping was derived live from
+  // users.manager_id — so the moment somebody moved team, every job they had ever
+  // raised silently re-parented, including annexures already approved and locked.
+  // A report run twice a year apart would show different trees over identical data.
+  //
+  // The name and PS number are stored alongside the id on purpose: they make a
+  // historical row self-describing even if that manager's account is later removed.
+  const printJobManagerColumns = [
+    'manager_id_at_submit INTEGER',
+    'manager_name_at_submit TEXT',
+    'manager_ps_at_submit TEXT',
+  ];
+  printJobManagerColumns.forEach((col) => {
+    try { db.exec(`ALTER TABLE print_jobs ADD COLUMN ${col}`); } catch (_) { /* exists */ }
+  });
+  db.run('CREATE INDEX IF NOT EXISTS idx_print_jobs_manager ON print_jobs(manager_id_at_submit, status)');
+
+  // Backfill jobs that pre-date the stamp with the reporting line as it stands now.
+  // It is the best available answer for history that was never recorded, and it stops
+  // old jobs drifting from this point on. Only rows never stamped are touched.
+  try {
+    const backfilled = db.run(`
+      UPDATE print_jobs
+         SET manager_id_at_submit   = (SELECT u.manager_id FROM users u WHERE u.id = print_jobs.created_by),
+             manager_name_at_submit = (SELECT m.name      FROM users u JOIN users m ON m.id = u.manager_id
+                                        WHERE u.id = print_jobs.created_by),
+             manager_ps_at_submit   = (SELECT m.ps_number FROM users u JOIN users m ON m.id = u.manager_id
+                                        WHERE u.id = print_jobs.created_by)
+       WHERE manager_id_at_submit IS NULL
+         AND EXISTS (SELECT 1 FROM users u WHERE u.id = print_jobs.created_by AND u.manager_id IS NOT NULL)
+    `);
+    if (backfilled?.changes) {
+      console.log(`✓ Stamped reporting manager on ${backfilled.changes} existing print job(s)`);
+    }
+  } catch (e) {
+    console.error('print job manager backfill failed:', e.message);
+  }
+
 
   db.run(`
     CREATE TABLE IF NOT EXISTS print_job_documents (
@@ -1388,6 +1334,126 @@ const initDatabase = () => {
   // listed as "Rate Not Configured" and excluded from the totals, so an unpriced
   // service never blocks the job and never silently costs zero either.
   try { db.exec("ALTER TABLE job_cost_lines ADD COLUMN rate_status TEXT NOT NULL DEFAULT 'priced'"); } catch (_) { /* exists */ }
+
+  // ── Printing-module column migrations ───────────────────────────────────────
+  //
+  // These ALTER TABLEs run AFTER the CREATE TABLEs above, and they have to.
+  //
+  // They used to sit further up the file, before print_jobs, print_job_documents and
+  // job_cost_lines existed. Every one of them threw on a brand-new database and was
+  // swallowed by its own catch, so a first boot produced those three tables missing 42
+  // columns between them — print_jobs alone was short 34. Nobody noticed because the
+  // second start-up found the tables present and added everything, and long-lived
+  // installations restart often. A fresh deployment was broken until someone restarted
+  // it, and any code path touching a missing column failed until then.
+  //
+  // Position is the fix: `try/catch` only makes re-running harmless, it cannot conjure
+  // a table that has not been created yet.
+  // Target site where a print job should be handled (defaults from the requester).
+  try {
+    db.exec('ALTER TABLE print_jobs ADD COLUMN location_id INTEGER');
+  } catch (_) { /* column already exists */ }
+
+  // Extended Request Information fields (Initiator / Recipient / Printing Requirement).
+  const printJobExtraColumns = [
+    'shipset_batch TEXT',
+    'classification TEXT',
+    'number_of_pages INTEGER',
+    'lead_name TEXT',
+    'edc TEXT',
+    'recipient_name TEXT',
+    'recipient_contact TEXT',
+    'recipient_address TEXT',
+    'vl_review TEXT',
+    'drp_remarks TEXT',
+    'pre_printing_checklist TEXT',
+    'purpose TEXT',
+    'printing_form_available TEXT',
+  ];
+  printJobExtraColumns.forEach((col) => {
+    try { db.exec(`ALTER TABLE print_jobs ADD COLUMN ${col}`); } catch (_) { /* exists */ }
+  });
+
+  // Rush/priority flag (1 = rush → jumps the queue).
+  try { db.exec('ALTER TABLE print_jobs ADD COLUMN priority INTEGER DEFAULT 0'); } catch (_) { /* exists */ }
+
+  // Dispatch / courier tracking (optional stage after Ready for Collection).
+  const printJobDispatchColumns = [
+    'courier_name TEXT',
+    'docket_no TEXT',
+    'dispatch_books INTEGER',
+    'dispatch_packets TEXT',
+    'dispatch_remarks TEXT',
+    'dispatched_by TEXT',
+    'dispatched_at DATETIME',
+    'received_by TEXT',
+    'delivered_at DATETIME',
+  ];
+  printJobDispatchColumns.forEach((col) => {
+    try { db.exec(`ALTER TABLE print_jobs ADD COLUMN ${col}`); } catch (_) { /* exists */ }
+  });
+
+  // Receipt confirmation. Handover used to close a job on the coordinator's
+  // click alone, so 'completed' recorded who *gave* the materials and nothing
+  // about who got them. Handover now parks the job at 'awaiting_receipt' and
+  // only the requestor's own confirmation completes it, stamping these.
+  const printJobReceiptColumns = [
+    'handed_over_at DATETIME',
+    'handed_over_by TEXT',
+    'received_at DATETIME',
+    'received_by_user_id INTEGER',
+  ];
+  printJobReceiptColumns.forEach((col) => {
+    try { db.exec(`ALTER TABLE print_jobs ADD COLUMN ${col}`); } catch (_) { /* exists */ }
+  });
+
+  // Rework / proof-review cycle. current_version and rework_count are derivable
+  // from print_job_reworks, but the coordinator's job lists render on a 30s poll
+  // and would need a correlated subquery per row; both are written in the same
+  // statement batch as the rework insert so they cannot drift.
+  // Content hash of each document's PDF. Lets a resubmit distinguish "same file,
+  // different specs" from "file replaced", and rescues a rename from looking like a
+  // deletion plus an addition. Null on rows uploaded before this existed.
+  try { db.exec('ALTER TABLE print_job_documents ADD COLUMN pdf_sha256 TEXT'); } catch (_) { /* exists */ }
+  // Some bindings are priced by a variant rather than by paper size — a box file is
+  // charged on its spine thickness (1 inc, 1.5, 2, 2.5, 3). Without this the rate
+  // master cannot be matched and the line reads as unpriced.
+  try { db.exec('ALTER TABLE print_job_documents ADD COLUMN binding_variant TEXT'); } catch (_) { /* exists */ }
+  // Optional extras the rate master prices but that have no dedicated field — pouch
+  // lamination, board stock, scanning, packing. JSON array of
+  // { code, size, gsm, colour, variant, quantity }; the dimensions are stored rather
+  // than a rate-line id so a superseded card never strands a saved document.
+  try { db.exec('ALTER TABLE print_job_documents ADD COLUMN extra_services TEXT'); } catch (_) { /* exists */ }
+
+  // A cost line records the dimensions it was priced at. The requestor's spec is an
+  // estimate — the operator at the machine decides the real A3/A4/colour split — so a
+  // line has to carry its own size/GSM/colour to be re-priced when corrected.
+  for (const col of ['paper_size TEXT', 'paper_gsm TEXT', 'colour_mode TEXT', 'variant TEXT']) {
+    try { db.exec(`ALTER TABLE job_cost_lines ADD COLUMN ${col}`); } catch (_) { /* exists */ }
+  }
+
+  // Which annexure version a line belongs to. NULL means "not yet issued" — the
+  // working set an operator can correct before a coordinator issues the first
+  // annexure. Without this, every version of a job's annexure shared one row set,
+  // so correcting a reissued draft would silently rewrite the superseded version's
+  // frozen line-by-line breakdown too, even though its totals stayed frozen.
+  try { db.exec('ALTER TABLE job_cost_lines ADD COLUMN annexure_id INTEGER'); } catch (_) { /* exists */ }
+
+  const printJobRecallColumns = ['recalled_at DATETIME', 'recall_reason TEXT'];
+  printJobRecallColumns.forEach((col) => {
+    try { db.exec(`ALTER TABLE print_jobs ADD COLUMN ${col}`); } catch (_) { /* exists */ }
+  });
+
+  const printJobReworkColumns = [
+    'current_version INTEGER DEFAULT 1',
+    'rework_count INTEGER DEFAULT 0',
+    'proof_released_at DATETIME',
+    'last_rework_at DATETIME',
+  ];
+  printJobReworkColumns.forEach((col) => {
+    try { db.exec(`ALTER TABLE print_jobs ADD COLUMN ${col}`); } catch (_) { /* exists */ }
+  });
+
 
   db.run('CREATE INDEX IF NOT EXISTS idx_cost_lines_job ON job_cost_lines(job_id, cost_group)');
   db.run('CREATE INDEX IF NOT EXISTS idx_cost_lines_accrued ON job_cost_lines(accrued_at)');
