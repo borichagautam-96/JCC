@@ -5,18 +5,31 @@ import CostEditor from '../components/CostEditor';
 
 // Printing cost — the entry point for the costing module.
 //
-// Two tabs, because the first question to answer is not "what does this cost" but
-// "what can this card even price". The coverage tab measures that against the specs
-// real jobs actually used, rather than assuming the masters line up.
+// The rate card in force, the annexures issued against it, and what is still waiting
+// on someone. Rate Card is gated to the printing module; Annexures is a separate,
+// broader permission.
 
 // Ordered to mirror the New Printing Job form, so a card can be read top-to-bottom
 // against what a requestor actually fills in.
+// annexure_approvals.role stores the workflow step. Spelled out for the trail, where
+// "returned" on its own reads like a status rather than "the requestor sent it back".
+const APPROVAL_STEP = {
+    prepared: 'Prepared',
+    reviewed: 'Sent for approval',
+    approved: 'Approved',
+    returned: 'Rejected',
+};
+
 const GROUP_LABEL = {
     printing: 'Paper & Printing',
     binding: 'Binding',
     finishing: 'Finishing',
     misc: 'Other services',
 };
+
+// Money is stored as integer paise; only the display divides.
+const formatMoney = (paise) =>
+    `₹${(Number(paise || 0) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const StatusPill = ({ status }) => {
     const tone = status === 'approved' ? 'var(--stat-emerald)'
@@ -28,14 +41,6 @@ const StatusPill = ({ status }) => {
         </span>
     );
 };
-
-const Tile = ({ label, value, sub, tone }) => (
-    <div className="metric-card" style={{ minWidth: '170px' }}>
-        <h3 className="metric-label">{label}</h3>
-        <p className="metric-value" style={{ color: tone || 'var(--stat-blue)', fontSize: '1.6rem' }}>{value}</p>
-        {sub && <span className="text-muted" style={{ fontSize: '0.78rem' }}>{sub}</span>}
-    </div>
-);
 
 // Upload a rate workbook. The spreadsheet fills every rate field automatically; the
 // result always lands as a draft so the figures can be checked (and edited) before
@@ -102,24 +107,32 @@ const ImportPanel = ({ busy, info, onUpload, onClose }) => {
 
 const PrintingCostPage = () => {
     const { user, getToken } = useAuth();
-    // The rate master (Rate Card, Coverage) is seen only by whoever holds the printer
-    // coordinator or operator flag — a JCC admin without either flag does not see it,
-    // matching the server-side canViewRates/canMaintainRates rule. Annexures is a
-    // separate, broader permission and is unaffected.
+    // The rate master (Rate Card) is seen only by whoever holds the printer coordinator
+    // or operator flag — a JCC admin without either flag does not see it, matching the
+    // server-side canViewRates/canMaintainRates rule. Annexures is a separate, broader
+    // permission and is unaffected.
     const canSeeRates = Number(user?.is_printer_coordinator) === 1 || Number(user?.is_printer_operator) === 1;
     // Maintenance (import, edit, approve a card) stays coordinator-only; an operator
     // reads the card to correct cost lines but does not change it.
     const canMaintain = Number(user?.is_printer_coordinator) === 1;
+    // Correcting a job's costing belongs to the printing floor only — the operator who
+    // ran it and the coordinator who owns the queue. An admin, manager or final
+    // approver reaching this page can read the annexures but not restate them, and the
+    // server enforces the same rule.
+    const canCorrect = Number(user?.is_printer_coordinator) === 1 || Number(user?.is_printer_operator) === 1;
     // ProtectedRoute only renders this page once `user` is loaded, so this initial
     // value is accurate from the first render — no flash of the wrong default tab.
     const [tab, setTab] = useState(() => (canSeeRates ? 'card' : 'annexures'));
     const [versions, setVersions] = useState([]);
     const [activeCode, setActiveCode] = useState(null);
     const [card, setCard] = useState(null);
-    const [coverage, setCoverage] = useState(null);
     const [loading, setLoading] = useState(true);
     const [annexures, setAnnexures] = useState([]);
     const [candidates, setCandidates] = useState([]);
+    // Drafts the requestor has not signed off. Loaded on mount rather than on tab
+    // switch so the count sits on the tab itself — the whole point is that these are
+    // easy to miss, and a queue you have to open to discover is no better than none.
+    const [pending, setPending] = useState({ annexures: [], total_paise: 0, with_printing: 0, with_requestor: 0 });
     const [detail, setDetail] = useState(null);
     const [importInfo, setImportInfo] = useState(null);
     const [showImport, setShowImport] = useState(false);
@@ -191,6 +204,16 @@ const PrintingCostPage = () => {
 
     useEffect(() => { if (tab === 'annexures') loadAnnexures(); }, [tab, loadAnnexures]);
 
+    const loadPending = useCallback(async () => {
+        try {
+            const res = await fetch('/api/annexures/pending', { headers: authHeaders() });
+            if (res.ok) setPending(await res.json());
+        } catch (e) { console.warn('pending annexure load failed', e); }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [getToken]);
+
+    useEffect(() => { loadPending(); }, [loadPending]);
+
     const act = async (url, options, onDone) => {
         setBusy(true);
         setError('');
@@ -211,6 +234,15 @@ const PrintingCostPage = () => {
 
     const issueAnnexure = (job) =>
         act(`/api/jobs/${job.id}/annexure`, { method: 'POST', body: '{}' }, async () => {
+            await loadAnnexures();
+            await loadPending();
+        });
+
+    // The handover: the operator has checked the figures against the actual print and
+    // is putting them to the requestor. Until this happens the requestor cannot approve.
+    const sendForApproval = (a) =>
+        act(`/api/annexures/${a.annexure_no}/send-for-approval`, { method: 'POST', body: '{}' }, async () => {
+            await loadPending();
             await loadAnnexures();
         });
 
@@ -299,17 +331,6 @@ const PrintingCostPage = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeCode, canSeeRates]);
 
-    useEffect(() => {
-        if (!canSeeRates || tab !== 'coverage' || !activeCode) return;
-        (async () => {
-            try {
-                const res = await fetch(`/api/rates/coverage?card=${activeCode}`, { headers: authHeaders() });
-                if (res.ok) setCoverage(await res.json());
-            } catch (e) { console.warn('coverage load failed', e); }
-        })();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tab, activeCode, canSeeRates]);
-
     if (loading) {
         return <div className="flex items-center justify-center" style={{ minHeight: '70vh' }}><div className="spinner"></div></div>;
     }
@@ -337,16 +358,42 @@ const PrintingCostPage = () => {
                 )}
 
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1.25rem' }}>
-                    {/* Rate Card and Coverage are only offered to whoever holds the printer
-                        coordinator or operator flag — everyone else lands straight on
-                        Annexures, which is a separate permission. */}
-                    {(canSeeRates ? [['card', 'Rate Card'], ['coverage', 'Coverage'], ['annexures', 'Annexures']]
-                                  : [['annexures', 'Annexures']]).map(([key, label]) => (
-                        <button key={key} className={`btn btn-sm ${tab === key ? 'btn-primary' : 'btn-outline'}`}
-                                onClick={() => setTab(key)}>
-                            {label}
-                        </button>
-                    ))}
+                    {/* Rate Card is only offered to whoever holds the printer coordinator
+                        or operator flag — everyone else lands straight on Annexures,
+                        which is a separate permission. */}
+                    {(canSeeRates
+                        ? [['card', 'Rate Card'], ['annexures', 'Annexures'],
+                           ['pending', 'Awaiting Approval']]
+                        : [['annexures', 'Annexures'], ['pending', 'Awaiting Approval']])
+                        .map(([key, label]) => {
+                        const count = key === 'pending' ? pending.annexures.length : 0;
+                        const overdue = key === 'pending' && pending.annexures.some((a) => a.overdue);
+                        return (
+                            <button key={key} className={`btn btn-sm ${tab === key ? 'btn-primary' : 'btn-outline'}`}
+                                    onClick={() => setTab(key)}>
+                                {label}
+                                {count > 0 && (
+                                    /* Red only when something has passed the escalation
+                                       threshold — a badge that is always red stops being read.
+                                       Colour carries the text, not the fill: --stat-red/amber
+                                       inverts to a pale tint in dark mode, where a solid fill
+                                       with white text would be illegible. On the selected tab
+                                       neither works — the button is already a solid accent —
+                                       so the badge switches to white-on-translucent there. */
+                                    <span style={{
+                                        marginLeft: '0.4rem', padding: '0.05rem 0.45rem', borderRadius: '999px',
+                                        fontSize: '0.72rem', fontWeight: 700, lineHeight: 1.5,
+                                        ...(tab === key
+                                            ? { color: '#fff', background: 'rgba(255,255,255,0.28)' }
+                                            : {
+                                                color: overdue ? 'var(--stat-red)' : 'var(--stat-amber)',
+                                                background: `color-mix(in srgb, ${overdue ? 'var(--stat-red)' : 'var(--stat-amber)'} 18%, transparent)`,
+                                            }),
+                                    }}>{count}</span>
+                                )}
+                            </button>
+                        );
+                    })}
                 </div>
 
                 {/* ── Rate card ──
@@ -416,11 +463,31 @@ const PrintingCostPage = () => {
                                         below before approving — they were transcribed but could not be read with certainty.</>
                                     )}
                                 </p>
-                                {canMaintain && (
+                                {/* Approving is a separate duty from maintaining: whoever imported
+                                    or edited this card cannot be the one who puts it in force,
+                                    because an approved card then prices every job that follows.
+                                    The server decides; this only explains the outcome, since a
+                                    disabled button with no reason reads as a bug. */}
+                                {card.can_approve ? (
                                     <button className="btn btn-sm btn-primary" style={{ marginTop: '0.6rem' }}
                                             disabled={busy} onClick={approveCard}>
                                         Approve card
                                     </button>
+                                ) : (
+                                    <p style={{ fontSize: '0.82rem', margin: '0.6rem 0 0', color: 'var(--text-muted)' }}>
+                                        {card.approval_block === 'you_prepared_it' ? (
+                                            <>You {card.prepared_by?.length > 1 ? 'helped prepare' : 'prepared'} this
+                                            card, so it needs a different rate approver to review and put it in force.
+                                            {card.eligible_approvers === 0 && (
+                                                <strong style={{ color: 'var(--stat-red)' }}>
+                                                    {' '}No other rate approver is set up — ask an administrator to designate one.
+                                                </strong>
+                                            )}</>
+                                        ) : (
+                                            <>Approving a rate card is a designated duty.
+                                            {card.prepared_by?.length > 0 && ` Prepared by ${card.prepared_by.join(', ')}.`}</>
+                                        )}
+                                    </p>
                                 )}
                             </div>
                         )}
@@ -498,80 +565,112 @@ const PrintingCostPage = () => {
                     </>
                 )}
 
-                {/* ── Coverage ── */}
-                {tab === 'coverage' && (
-                    !coverage ? (
-                        <div className="glass-card"><div className="spinner"></div></div>
-                    ) : (
-                        <>
-                            <p className="text-muted" style={{ fontSize: '0.88rem', marginBottom: '1rem', maxWidth: '70ch' }}>
-                                Every paper spec that real job documents have actually used, checked against
-                                this card. A combination with no rate cannot be costed — this is the number
-                                to fix before building any calculation.
+                {/* ── Awaiting approval ──
+                    Every annexure that has not been signed off yet, oldest first. Two
+                    stages share the list because either can stall the job: a draft is
+                    still with the printing team, an under_review is with the requestor. */}
+                {tab === 'pending' && (
+                    pending.annexures.length === 0 ? (
+                        <div className="glass-card">
+                            <h3 style={{ marginTop: 0, color: 'var(--text-strong)', fontSize: '1.05rem' }}>
+                                Awaiting approval (0)
+                            </h3>
+                            <p className="text-muted" style={{ fontSize: '0.88rem', margin: 0 }}>
+                                Nothing is outstanding. Every issued annexure has been checked and signed off.
                             </p>
-
-                            <div className="card-grid mb-xl" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
-                                <Tile label="Specs seen" value={coverage.summary?.combinations_seen ?? 0}
-                                      sub="distinct size / GSM / colour" />
-                                <Tile label="Specs priced" value={coverage.summary?.combinations_priced ?? 0}
-                                      tone="var(--stat-emerald)" />
-                                <Tile label="Spec coverage"
-                                      value={coverage.summary?.combination_coverage_pct != null ? `${coverage.summary.combination_coverage_pct}%` : '—'}
-                                      tone={(coverage.summary?.combination_coverage_pct ?? 0) >= 90 ? 'var(--stat-emerald)' : 'var(--stat-amber)'} />
-                                <Tile label="Volume coverage"
-                                      value={coverage.summary?.volume_coverage_pct != null ? `${coverage.summary.volume_coverage_pct}%` : '—'}
-                                      sub="weighted by page-prints"
-                                      tone={(coverage.summary?.volume_coverage_pct ?? 0) >= 90 ? 'var(--stat-emerald)' : 'var(--stat-amber)'} />
+                        </div>
+                    ) : (
+                        <div className="glass-card">
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+                                          flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.9rem' }}>
+                                <h3 style={{ margin: 0, color: 'var(--text-strong)', fontSize: '1.05rem' }}>
+                                    Awaiting approval ({pending.annexures.length})
+                                </h3>
+                                <span className="text-muted" style={{ fontSize: '0.82rem' }}>
+                                    {pending.with_printing} with the printing team · {pending.with_requestor} with the requestor
+                                    {' · '}{formatMoney(pending.total_paise)} unbooked
+                                </span>
                             </div>
-
-                            <div className="glass-card">
-                                <div className="table-container">
-                                    <table className="table">
-                                        <thead>
-                                            <tr>
-                                                <th>Paper size</th><th>GSM</th><th>Colour</th>
-                                                <th style={{ textAlign: 'right' }}>Docs</th>
-                                                <th style={{ textAlign: 'right' }}>Page-prints</th>
-                                                <th>Priced?</th><th style={{ textAlign: 'right' }}>Rate (₹)</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {coverage.combinations.length === 0 ? (
-                                                <tr><td colSpan="7" className="text-center" style={{ color: 'var(--text-muted)', padding: '2rem' }}>
-                                                    No job documents carry a paper spec yet — nothing to measure.
-                                                </td></tr>
-                                            ) : coverage.combinations.map((c, i) => (
-                                                <tr key={i}>
-                                                    <td style={{ fontWeight: 600 }}>{c.paper_size || '—'}</td>
-                                                    <td>{c.paper_gsm || '—'}</td>
-                                                    <td>{c.color_mode || '—'}</td>
-                                                    <td style={{ textAlign: 'right' }}>{c.documents}</td>
-                                                    <td style={{ textAlign: 'right' }}>{c.page_prints.toLocaleString()}</td>
-                                                    <td>
-                                                        {c.priced ? (
-                                                            <span className="status-pill status-pill-approved">priced</span>
-                                                        ) : (
-                                                            <span className="status-pill" style={{ background: 'var(--stat-red)', color: '#fff' }}>
-                                                                no rate
+                            <div className="table-container">
+                                <table className="table table-compact">
+                                    <thead>
+                                        <tr>
+                                            <th>Annexure</th><th>Job No</th><th>Stage</th><th>Waiting on</th><th>Manager</th>
+                                            <th style={{ textAlign: 'right' }}>Amount</th>
+                                            <th style={{ textAlign: 'center' }}>Waiting</th>
+                                            {canCorrect && <th style={{ textAlign: 'center' }}>Action</th>}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {pending.annexures.map((a) => (
+                                            <tr key={a.id}>
+                                                <td style={{ fontWeight: 600 }}>
+                                                    {a.annexure_no}
+                                                    {a.version > 1 && (
+                                                        <span className="text-muted" style={{ fontSize: '0.75rem' }}> v{a.version}</span>
+                                                    )}
+                                                </td>
+                                                <td>{a.job_number}</td>
+                                                <td>
+                                                    {/* A draft has not reached the requestor yet — the operator
+                                                        still has to check it against the actual print. */}
+                                                    <span style={{
+                                                        padding: '0.1rem 0.5rem', borderRadius: '999px', fontWeight: 700,
+                                                        fontSize: '0.72rem', whiteSpace: 'nowrap',
+                                                        color: a.with_requestor ? 'var(--stat-blue)' : 'var(--stat-amber)',
+                                                        background: `color-mix(in srgb, ${a.with_requestor ? 'var(--stat-blue)' : 'var(--stat-amber)'} 16%, transparent)`,
+                                                    }}>
+                                                        {a.with_requestor ? 'With requestor' : 'Needs your review'}
+                                                    </span>
+                                                </td>
+                                                <td>
+                                                    {a.with_requestor
+                                                        ? (a.requestor_name || '—')
+                                                        : <span className="text-muted">printing team</span>}
+                                                </td>
+                                                <td className="text-muted">{a.manager_name || '—'}</td>
+                                                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                                                    {a.grand_total_display}
+                                                </td>
+                                                <td style={{ textAlign: 'center' }}>
+                                                    <span style={{
+                                                        padding: '0.1rem 0.5rem', borderRadius: '999px', fontWeight: 700,
+                                                        fontSize: '0.75rem', whiteSpace: 'nowrap',
+                                                        color: 'var(--stat-amber)',
+                                                        background: 'color-mix(in srgb, var(--stat-amber) 18%, transparent)',
+                                                    }}>
+                                                        {a.waiting_days === 0 ? 'today' : `${a.waiting_days}d`}
+                                                    </span>
+                                                </td>
+                                                {canCorrect && (
+                                                    <td style={{ textAlign: 'center' }}>
+                                                        {a.with_requestor ? (
+                                                            <span className="text-muted" style={{ fontSize: '0.78rem' }}>
+                                                                Awaiting requestor
                                                             </span>
+                                                        ) : (
+                                                            <button className="btn btn-sm btn-primary" disabled={busy}
+                                                                    onClick={() => sendForApproval(a)}>
+                                                                Send for approval
+                                                            </button>
                                                         )}
                                                     </td>
-                                                    <td style={{ textAlign: 'right', fontFamily: 'monospace' }}>
-                                                        {c.rate_display || '—'}
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
+                                                )}
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
                             </div>
-                        </>
+                        </div>
                     )
                 )}
-                {/* ── Annexures ── */}
+
                 {tab === 'annexures' && (
                     <>
-                        {canMaintain && candidates.length > 0 && (
+                        {/* Visible to anyone who can read costing, not just coordinators:
+                            a completed job with no annexure is a gap everyone needs to
+                            see. Only a coordinator gets the button to issue one. */}
+                        {candidates.length > 0 && (
                             <div className="glass-card" style={{ marginBottom: '1rem' }}>
                                 <h3 style={{ marginTop: 0, color: 'var(--text-strong)', fontSize: '1.05rem' }}>
                                     Completed jobs not yet costed ({candidates.length})
@@ -593,10 +692,16 @@ const PrintingCostPage = () => {
                                                     <td>{j.rework_count || 0}</td>
                                                     <td className="text-muted">{formatDate(j.completed_at)}</td>
                                                     <td style={{ textAlign: 'center' }}>
-                                                        <button className="btn btn-sm btn-primary" disabled={busy}
-                                                                onClick={() => issueAnnexure(j)}>
-                                                            Issue annexure
-                                                        </button>
+                                                        {canMaintain ? (
+                                                            <button className="btn btn-sm btn-primary" disabled={busy}
+                                                                    onClick={() => issueAnnexure(j)}>
+                                                                Issue annexure
+                                                            </button>
+                                                        ) : (
+                                                            <span className="text-muted" style={{ fontSize: '0.78rem' }}>
+                                                                Awaiting coordinator
+                                                            </span>
+                                                        )}
                                                     </td>
                                                 </tr>
                                             ))}
@@ -640,7 +745,8 @@ const PrintingCostPage = () => {
                                             <div className="table-container" style={{ marginTop: '0.85rem' }}>
                                                 <table className="table">
                                                     <thead>
-                                                        <tr><th>Job</th><th>Department</th><th>Debit code</th>
+                                                        <tr><th>Job</th><th>Requestor</th><th>D&amp;T Lead</th>
+                                                            <th>Department</th><th>Debit code</th>
                                                             <th>Status</th>
                                                             <th style={{ textAlign: 'right' }}>Grand total (₹)</th>
                                                             <th style={{ textAlign: 'center' }}>Action</th></tr>
@@ -652,6 +758,13 @@ const PrintingCostPage = () => {
                                                                     {a.job_number || a.request_id}
                                                                     {a.version > 1 && <span className="text-muted" style={{ fontWeight: 400 }}> v{a.version}</span>}
                                                                 </td>
+                                                                <td>
+                                                                    {a.requestor_name || '—'}
+                                                                    {a.requestor_ps && (
+                                                                        <div className="text-muted" style={{ fontSize: '0.72rem' }}>{a.requestor_ps}</div>
+                                                                    )}
+                                                                </td>
+                                                                <td>{a.lead_name || '—'}</td>
                                                                 <td>{a.department_name || '—'}</td>
                                                                 <td>{a.debit_code || '—'}</td>
                                                                 <td><StatusPill status={a.status} /></td>
@@ -678,6 +791,7 @@ const PrintingCostPage = () => {
                                 data={detail}
                                 authHeaders={authHeaders}
                                 onClose={() => setDetail(null)}
+                                canCorrect={canCorrect}
                                 onEdited={() => { openDetail(detail.annexure.annexure_no); loadAnnexures(); }}
                             />
                         )}
@@ -689,8 +803,10 @@ const PrintingCostPage = () => {
 };
 
 // The annexure itself, laid out as the costing sheet it replaces.
-const AnnexureDetail = ({ data, onClose, authHeaders, onEdited }) => {
+const AnnexureDetail = ({ data, onClose, authHeaders, onEdited, canCorrect = false }) => {
     const { annexure: a, totals_display: t, lines, approvals, documents } = data;
+    // Who signed it off, for the confirmation banner below.
+    const approvedBy = approvals?.find((ap) => ap.role === 'approved');
     // A draft annexure can still be corrected to what was actually printed. Once
     // approved it is signed-off evidence and the server refuses any change.
     const [editing, setEditing] = useState(false);
@@ -736,30 +852,59 @@ const AnnexureDetail = ({ data, onClose, authHeaders, onEdited }) => {
                     <p className="text-muted" style={{ fontSize: '0.82rem', margin: 0 }}>
                         Printing Cost Annexure · rate card {a.rate_card || '\u2014'} · <StatusPill status={a.status} />
                     </p>
-                    {a.status === 'draft' && (
-                        <button className="btn btn-sm btn-outline" style={{ marginTop: '0.6rem' }}
-                                onClick={() => setEditing((v) => !v)}>
-                            {editing ? 'Done correcting' : 'Correct to actual print'}
-                        </button>
+                    {a.status === 'draft' && canCorrect && (
+                        <>
+                            <button className="btn btn-sm btn-outline" style={{ marginTop: '0.6rem' }}
+                                    onClick={() => setEditing((v) => !v)}>
+                                {editing ? 'Done correcting' : 'Correct to actual print'}
+                            </button>
+                            <p className="text-muted" style={{ fontSize: '0.8rem', margin: '0.5rem 0 0' }}>
+                                Awaiting the requestor's approval. Saving a correction asks them to review it again.
+                            </p>
+                        </>
+                    )}
+                    {a.status === 'draft' && !canCorrect && (
+                        <p className="text-muted" style={{ fontSize: '0.82rem', marginTop: '0.6rem' }}>
+                            Awaiting the requestor's approval.
+                        </p>
                     )}
                     {a.status === 'approved' && (
-                        <p className="text-muted" style={{ fontSize: '0.82rem', marginTop: '0.6rem' }}>
-                            Approved by the requestor — figures are locked.
-                        </p>
+                        <div style={{ marginTop: '0.6rem', padding: '0.55rem 0.85rem', borderRadius: '8px',
+                                      background: 'var(--surface-2)', borderLeft: '3px solid var(--stat-emerald)' }}>
+                            <strong style={{ color: 'var(--stat-emerald)', fontSize: '0.85rem' }}>
+                                Approved by {approvedBy?.user_name || 'the requestor'}
+                                {approvedBy?.acted_at ? ` on ${formatDate(approvedBy.acted_at)}` : ''}
+                            </strong>
+                            <p className="text-muted" style={{ fontSize: '0.8rem', margin: '0.15rem 0 0' }}>
+                                These figures are locked. Reissue the annexure to correct them.
+                            </p>
+                        </div>
                     )}
                 </div>
 
-                {editing && a.status === 'draft' && (
-                    <div style={{ flex: 'none', marginTop: '0.75rem', borderTop: '1px solid var(--border)' }}>
-                        <CostEditor jobId={a.job_id} authHeaders={authHeaders} canEdit onChanged={onEdited} />
-                    </div>
-                )}
-
+                {/* The editor lives INSIDE the scrolling body, not above it. Sitting
+                    outside with flex:none, a job with a dozen services grew tall enough
+                    to consume the whole modal and squeeze the job details, documents and
+                    totals below it down to nothing. */}
                 <div style={{ overflowY: 'auto', minHeight: 0, flex: '1 1 auto', marginTop: '1rem' }}>
+                    {editing && a.status === 'draft' && (
+                        <div style={{ marginBottom: '1rem', paddingBottom: '1rem', borderBottom: '1px solid var(--border)' }}>
+                            {/* Save and Discard both leave edit mode, so the annexure below is
+                                always showing saved figures rather than a half-edited draft. */}
+                            <CostEditor jobId={a.job_id} authHeaders={authHeaders} canEdit
+                                        onChanged={onEdited} onClose={() => setEditing(false)} />
+                        </div>
+                    )}
+
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: '0.6rem',
                                   background: 'var(--surface-2)', border: '1px solid var(--border)',
                                   borderRadius: '8px', padding: '0.8rem 0.9rem', marginBottom: '1rem', fontSize: '0.82rem' }}>
-                        {[['Job', a.job_number || a.request_id], ['Requestor', a.requestor_name],
+                        {/* Mirrors the workbook's "D&T LEAD / INITIATOR" header block, so an
+                            operator can see whose job this is and who owns it. */}
+                        {[['Job', a.job_number || a.request_id],
+                          ['Initiator', a.requestor_name && `${a.requestor_name}${a.requestor_ps ? ` (${a.requestor_ps})` : ''}`],
+                          ['D&T Lead', a.lead_name],
+                          ['Manager', a.manager_name && `${a.manager_name}${a.manager_ps ? ` (${a.manager_ps})` : ''}`],
                           ['Department', a.department_name], ['Debit code', a.debit_code],
                           ['Project', a.project_name], ['DT No.', a.dt_number],
                           ['Completed', formatDate(a.completed_at)], ['Location', a.location_name]].map(([k, v]) => (
@@ -789,6 +934,10 @@ const AnnexureDetail = ({ data, onClose, authHeaders, onEdited }) => {
                         </div>
                     )}
 
+                    {/* Hidden while correcting: the editor above lists these exact lines
+                        in editable form, so showing both doubles the modal's length for
+                        no gain and buries the job details below. */}
+                    {!editing && (<>
                     <div className="table-container">
                         <table className="table">
                             <thead><tr><th>Service</th><th style={{ textAlign: 'right' }}>Qty</th><th>Unit</th>
@@ -848,6 +997,7 @@ const AnnexureDetail = ({ data, onClose, authHeaders, onEdited }) => {
                     <p className="text-muted" style={{ fontSize: '0.82rem', marginTop: '0.5rem', fontStyle: 'italic' }}>
                         {t.in_words}
                     </p>
+                    </>)}
 
                     {lines.some((l) => l.unpriced) && (
                         <div style={{ marginTop: '0.75rem', padding: '0.6rem 0.9rem', borderRadius: '8px',

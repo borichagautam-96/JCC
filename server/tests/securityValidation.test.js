@@ -31,13 +31,21 @@ test('POST /api/auth/login returns validation error for missing identifier and p
 test('POST /api/invoices/upload returns validation error when assignedTo is missing', async () => {
   const app = createTestApp(invoicesRouter, '/api/invoices');
 
+  // This test is about request validation, not auth, so the token has to clear
+  // authenticateToken deterministically. It carries its own profile claims: the
+  // middleware falls back to them when the id has no row, so the result no longer
+  // depends on which users happen to exist in the database. (It previously passed
+  // only because id 1 was absent — on a freshly seeded database id 1 IS the admin,
+  // whose profile is incomplete, and the request 403'd before reaching validation.)
   const token = jwt.sign(
     {
-      id: 1,
+      id: 999999,
       name: 'Admin User',
       email: 'admin@jcc.com',
       role: 'admin',
       ps_number: '123455',
+      profile_completed: 1,
+      profile_verified_at: '2020-01-01 00:00:00',
     },
     JWT_SECRET,
     { expiresIn: '1h' }

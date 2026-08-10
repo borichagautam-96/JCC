@@ -86,7 +86,16 @@ export const authenticateToken = (req, res, next) => {
             }
         }
 
-        const currentUser = db.prepare('SELECT profile_completed, profile_verified_at FROM users WHERE id = ?').get(verified.id);
+        const currentUser = db.prepare('SELECT profile_completed, profile_verified_at, deleted_at FROM users WHERE id = ?').get(verified.id);
+
+        // Deleting an account has to end its sessions too, not just stop new logins —
+        // otherwise whoever is already signed in keeps working until their token expires.
+        if (currentUser?.deleted_at) {
+            return res.status(401).json({
+                error: 'This account is no longer active. Please contact your administrator.',
+                code: 'ACCOUNT_DEACTIVATED',
+            });
+        }
         const knownProfileCompletion = currentUser
             ? true
             : (verified.profile_completed !== undefined || verified.profile_verified_at !== undefined);

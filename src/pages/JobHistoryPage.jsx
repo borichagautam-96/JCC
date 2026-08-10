@@ -271,6 +271,35 @@ const JobHistoryPage = () => {
         }
     };
 
+    // Rejecting hands the annexure back to the printing team rather than superseding it,
+    // so the reason and the correction stay on one document's history. The reason is
+    // required — without it the operator has nothing to act on.
+    const rejectCostAnnexure = async () => {
+        const a = costReview.annexure;
+        const reason = window.prompt(
+            `What is wrong with ${a.annexure_no}? This goes back to the printing team.`);
+        if (reason === null) return;
+        if (!reason.trim()) {
+            await dialog.alert('Give a reason so the printing team knows what to correct.',
+                { title: 'Reason required', variant: 'error' });
+            return;
+        }
+        try {
+            const res = await fetch(`/api/annexures/${a.annexure_no}/reject`, {
+                method: 'POST',
+                headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reason: reason.trim() }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Could not reject the annexure');
+            await dialog.alert(data.message, { title: 'Sent back', variant: 'success' });
+            setCostReview(null);
+            fetchJobs();
+        } catch (e) {
+            await dialog.alert(e.message, { title: 'Error', variant: 'error' });
+        }
+    };
+
     const approveCostAnnexure = async () => {
         const a = costReview.annexure;
         const ok = await dialog.confirm(
@@ -472,14 +501,22 @@ const JobHistoryPage = () => {
                                                                     Confirm receipt
                                                                 </button>
                                                             )}
-                                                            {job.annexure_status === 'draft' && (
+                                                            {job.annexure_status === 'under_review' && (
                                                                 <button
                                                                     className="btn btn-sm btn-primary"
                                                                     onClick={() => openCostReview(job)}
-                                                                    title="Verify the pages, sizes and amount before approving"
+                                                                    title="Verify the pages, sizes and amount, then approve or reject"
                                                                 >
-                                                                    Review &amp; approve cost
+                                                                    Review cost
                                                                 </button>
+                                                            )}
+                                                            {/* A draft is still with the printing team — the operator has to
+                                                                check it against the actual print before it comes here. */}
+                                                            {job.annexure_status === 'draft' && (
+                                                                <span className="text-muted" style={{ fontSize: '0.75rem', alignSelf: 'center' }}
+                                                                      title="The printer operator is checking the figures against what was actually printed">
+                                                                    Cost being checked
+                                                                </span>
                                                             )}
                                                             {job.annexure_status === 'approved' && (
                                                                 <button
@@ -489,6 +526,15 @@ const JobHistoryPage = () => {
                                                                 >
                                                                     View approved cost
                                                                 </button>
+                                                            )}
+                                                            {/* A completed job with no annexure means costing has not been
+                                                                issued yet. Say so rather than showing nothing, which reads
+                                                                as though the job simply has no cost. */}
+                                                            {job.status === 'completed' && !job.annexure_status && (
+                                                                <span className="text-muted" style={{ fontSize: '0.75rem', alignSelf: 'center' }}
+                                                                      title="The printing team has not issued the cost annexure yet">
+                                                                    Cost pending
+                                                                </span>
                                                             )}
                                                             {isRecallable && (
                                                                 <button
@@ -835,10 +881,15 @@ const JobHistoryPage = () => {
 
                             <div className="app-modal-actions" style={{ flex: 'none' }}>
                                 <button className="btn btn-outline" onClick={() => setCostReview(null)}>Close</button>
-                                {costReview.annexure.status === 'draft' && (
-                                    <button className="btn btn-primary" onClick={approveCostAnnexure}>
-                                        Approve cost
-                                    </button>
+                                {costReview.annexure.status === 'under_review' && (
+                                    <>
+                                        <button className="btn btn-danger" onClick={rejectCostAnnexure}>
+                                            Reject
+                                        </button>
+                                        <button className="btn btn-primary" onClick={approveCostAnnexure}>
+                                            Approve cost
+                                        </button>
+                                    </>
                                 )}
                             </div>
                         </div>

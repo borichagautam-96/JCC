@@ -9,7 +9,7 @@
         "preview": "vite preview",
         "server": "node --env-file=.env server/index.js",
         "start": "concurrently \"npm run server\" \"npm run dev\"",
-        "test": "node --test server/tests/*.test.js"
+        "test": "node scripts/run-tests.js"
     },
     "dependencies": {
         "@napi-rs/canvas": "^1.0.2",

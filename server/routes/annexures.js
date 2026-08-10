@@ -4,6 +4,7 @@ import db from '../database.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { summarise, paiseToRupees, amountInWords, milliToRate, lineAmountPaise } from '../utils/costEngine.js';
 import { itemsForDocument, itemsForRework, priceItems } from '../utils/costPrinting.js';
+import { getPendingAnnexures } from '../services/annexureCostQueue.js';
 
 const router = express.Router();
 
@@ -113,11 +114,17 @@ router.get('/jobs/:id/cost', authenticateToken, (req, res) => {
       return res.status(403).json({ error: 'Only the assigned printer operator or a coordinator can view costing' });
     }
 
+    const scopeId = lineScopeId(job.id);
     const stored = db.prepare('SELECT * FROM job_cost_lines WHERE job_id = ? AND annexure_id IS ? ORDER BY id')
-      .all(job.id, lineScopeId(job.id));
-    if (stored.length) {
+      .all(job.id, scopeId);
+    // Once an annexure is issued, its stored lines ARE the answer — even when that is
+    // an empty list because every line was removed. Falling through to a fresh preview
+    // here would re-derive the removed services from the job's documents and show them
+    // as though they were still on the annexure.
+    if (stored.length || scopeId !== null) {
       const totals = summarise(stored.map((l) => ({
         costGroup: l.cost_group, amountPaise: l.amount_paise, isRework: !!l.rework_id,
+        rateStatus: l.rate_status,
       })));
       return res.json({ source: 'accrued', lines: stored.map(shapeLine), totals, totals_display: {
         ...Object.fromEntries(Object.entries(totals).map(([k, v]) => [k, paiseToRupees(v)])),
@@ -161,16 +168,45 @@ router.get('/jobs/:id/cost', authenticateToken, (req, res) => {
 // Any printer operator may correct any job's costing, not just one assigned to them:
 // the print room works as a team, jobs get handed over mid-run, and whoever knows what
 // actually came off the machine has to be able to record it.
+// Strictly the printing module's own people. No role-based bypass: an admin, manager
+// or final approver has no business restating what came off the machine — only the
+// operator who ran it and the coordinator who owns the queue do. (In this app 'admin'
+// is routinely layered onto other accounts, so a role check would be a wide-open door.)
 const canEditCosting = (req) => {
-  if (req.user.role === 'admin') return true;
   const u = db.prepare('SELECT is_printer_coordinator, is_printer_operator FROM users WHERE id = ?')
     .get(req.user.id) || {};
   return !!(u.is_printer_coordinator || u.is_printer_operator);
 };
 
+const notifyUser = (userId, title, message, type = 'info') => {
+  if (!userId) return;
+  try {
+    db.prepare('INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)')
+      .run(userId, title, message, type);
+  } catch (e) {
+    console.error('[annexures] notifyUser failed:', e);
+  }
+};
+
+// Who to tell when a requestor signs off: the coordinators, plus the operator the job
+// was assigned to. They prepared the figures, so they are the ones waiting on the answer.
+const printingStaffFor = (job) => {
+  const rows = db.prepare('SELECT id FROM users WHERE is_printer_coordinator = 1 AND deleted_at IS NULL').all();
+  const ids = new Set(rows.map((r) => r.id));
+  if (job.assigned_operator_id) ids.add(job.assigned_operator_id);
+  return [...ids];
+};
+
 // Reading the cost annexures follows the same rule — an operator who can correct a
 // line must be able to find it in the first place.
-const canViewCosting = canEditCosting;
+// Reading is deliberately WIDER than correcting. Whoever can correct a line obviously
+// needs to find it, but an admin also has to be able to review cost annexures without
+// being able to restate what came off the machine. Keeping these separate is the point:
+// tying them together silently locked admins out of the register entirely.
+const canViewCosting = (req) => {
+  if (req.user.role === 'admin') return true;
+  return canEditCosting(req);
+};
 
 // Editing stops the moment the annexure is approved — at that point it is signed-off
 // evidence. A draft annexure is fair game and its totals are recomputed after.
@@ -200,10 +236,18 @@ const guardEditable = (req, res, job) => {
 
 // Cost lines are written when the annexure is issued. Correcting before that must
 // still work, so the accrual is materialised on first edit.
+//
+// This ONLY ever runs for the pre-issue working set (annexure_id IS NULL). Once an
+// annexure exists its lines were written at issue time — re-deriving them from the
+// job's documents would resurrect exactly the services someone had just deleted,
+// because accrual rebuilds from the original spec and knows nothing about removals.
+// An issued annexure with zero lines is a legitimate state (everything was removed),
+// not a signal to regenerate.
 const ensureAccrued = (req, job) => {
   const aid = lineScopeId(job.id);
-  const existing = db.prepare('SELECT COUNT(*) AS c FROM job_cost_lines WHERE job_id = ? AND annexure_id IS ?')
-    .get(job.id, aid).c;
+  if (aid !== null) return null;
+  const existing = db.prepare('SELECT COUNT(*) AS c FROM job_cost_lines WHERE job_id = ? AND annexure_id IS NULL')
+    .get(job.id).c;
   if (existing) return null;
   const result = accrueForJob(req, job);
   if (result.error) return result.error;
@@ -397,6 +441,124 @@ router.post('/jobs/:id/cost/lines', authenticateToken, (req, res) => {
   }
 });
 
+// ── Save a whole correction in one go ────────────────────────────────────────
+// The per-line PATCH/POST/DELETE endpoints above each commit immediately, which
+// makes every experimental click permanent — there is nothing to back out of. This
+// replaces the annexure's entire line set atomically instead, so the editor can hold
+// changes locally and the user gets a real Save / Discard choice: discarding simply
+// never calls this.
+//
+// Lines are matched by id. An id that is absent from the payload is a deletion; a
+// line with no id is an addition. Everything is repriced from its dimensions against
+// the card governing this job, so saved figures can never drift from the rate master.
+router.put('/jobs/:id/cost/lines', authenticateToken, (req, res) => {
+  try {
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (!guardEditable(req, res, job)) return;
+
+    const err = ensureAccrued(req, job);
+    if (err) return res.status(409).json({ error: err });
+
+    const incoming = Array.isArray(req.body?.lines) ? req.body.lines : null;
+    if (!incoming) return res.status(400).json({ error: 'Send the full list of lines to save' });
+
+    const scopeId = lineScopeId(job.id);
+    const existing = db.prepare('SELECT * FROM job_cost_lines WHERE job_id = ? AND annexure_id IS ?')
+      .all(job.id, scopeId);
+    const byId = new Map(existing.map((l) => [l.id, l]));
+
+    // Validate everything before writing anything — a half-applied correction would
+    // be worse than a rejected one.
+    const plan = [];
+    for (const row of incoming) {
+      const quantity = Number(row.quantity);
+      if (!Number.isFinite(quantity) || quantity < 0) {
+        return res.status(400).json({ error: 'Every line needs a quantity of zero or more' });
+      }
+      const prior = row.id != null ? byId.get(Number(row.id)) : null;
+      if (row.id != null && !prior) {
+        return res.status(409).json({ error: 'This annexure changed while you were editing it. Reopen and redo the correction.' });
+      }
+      const serviceCode = String(prior?.service_code || row.service_code || '').trim().toUpperCase();
+      const service = db.prepare('SELECT * FROM service_items WHERE code = ?').get(serviceCode);
+      if (!service) return res.status(400).json({ error: `Unknown service ${serviceCode || '(none)'}` });
+
+      const dims = {
+        paper_size: row.paper_size !== undefined ? (row.paper_size || null) : (prior?.paper_size ?? null),
+        paper_gsm: row.paper_gsm !== undefined ? (row.paper_gsm || null) : (prior?.paper_gsm ?? null),
+        colour_mode: row.colour_mode !== undefined ? (row.colour_mode || null) : (prior?.colour_mode ?? null),
+        variant: row.variant !== undefined ? (row.variant || null) : (prior?.variant ?? null),
+      };
+      const priced = repriceLine(job, { service_code: serviceCode, quantity, ...dims });
+      if (priced.error) return res.status(409).json({ error: priced.error });
+
+      // A line counts as manual once its figures differ from what was accrued.
+      const changed = !prior || Number(prior.quantity) !== quantity
+        || (prior.paper_size ?? null) !== dims.paper_size
+        || (prior.paper_gsm ?? null) !== dims.paper_gsm
+        || (prior.colour_mode ?? null) !== dims.colour_mode;
+
+      plan.push({ prior, service, quantity, dims, priced, changed });
+    }
+
+    const keptIds = new Set(plan.filter((p) => p.prior).map((p) => p.prior.id));
+    const reason = String(req.body?.reason || '').trim() || 'Adjusted to actual print';
+
+    db.transaction(() => {
+      for (const l of existing) {
+        if (!keptIds.has(l.id)) db.prepare('DELETE FROM job_cost_lines WHERE id = ?').run(l.id);
+      }
+      for (const p of plan) {
+        if (p.prior) {
+          db.prepare(
+            `UPDATE job_cost_lines
+                SET quantity=?, paper_size=?, paper_gsm=?, colour_mode=?, variant=?, rate_milli=?,
+                    amount_paise=?, rate_status=?, rate_version_id=?,
+                    is_manual=CASE WHEN ? THEN 1 ELSE is_manual END,
+                    manual_reason=CASE WHEN ? THEN ? ELSE manual_reason END,
+                    accrued_by=?, accrued_at=datetime('now')
+              WHERE id=?`
+          ).run(p.quantity, p.dims.paper_size, p.dims.paper_gsm, p.dims.colour_mode, p.dims.variant,
+            p.priced.rate_milli, p.priced.amount_paise, p.priced.rate_status, p.priced.rate_version_id,
+            p.changed ? 1 : 0, p.changed ? 1 : 0, reason, req.user.id, p.prior.id);
+        } else {
+          db.prepare(
+            `INSERT INTO job_cost_lines (job_id, service_code, label, cost_group, quantity, uom,
+               rate_version_id, rate_milli, amount_paise, min_charge_applied, detail, accrued_by,
+               rate_status, paper_size, paper_gsm, colour_mode, variant, is_manual, manual_reason,
+               annexure_id)
+             VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,1,?,?)`
+          ).run(job.id, p.service.code, p.service.label, p.service.cost_group, p.quantity, p.service.uom,
+            p.priced.rate_version_id, p.priced.rate_milli, p.priced.amount_paise,
+            [p.dims.paper_size, p.dims.paper_gsm, p.dims.colour_mode].filter(Boolean).join(' · ') || null,
+            req.user.id, p.priced.rate_status, p.dims.paper_size, p.dims.paper_gsm, p.dims.colour_mode,
+            p.dims.variant, reason, scopeId);
+        }
+      }
+    })();
+
+    recomputeAnnexure(job.id);
+
+    // A correction while the requestor is already reviewing changes the figures under
+    // them, so they are told. A correction on a draft is not announced — the draft is
+    // still the printing team's to work on, and it reaches the requestor when it is
+    // explicitly sent for approval.
+    const open = openAnnexure(job.id);
+    if (open && open.status === 'under_review') {
+      notifyUser(job.created_by, 'Printing cost updated — please review again',
+        `${open.annexure_no} for ${jobLabel(job)} has been corrected to what was actually printed `
+        + `(${paiseToRupees(open.grand_total_paise)}). Review and approve it from My Printing Jobs.`,
+        'info');
+    }
+
+    res.json({ message: 'Costing saved.', ...costingResponse(job.id) });
+  } catch (error) {
+    console.error('Error saving costing:', error);
+    res.status(500).json({ error: 'Failed to save the costing' });
+  }
+});
+
 // Remove a line for work that was not actually done.
 router.delete('/jobs/:id/cost/lines/:lineId', authenticateToken, (req, res) => {
   try {
@@ -418,18 +580,20 @@ router.delete('/jobs/:id/cost/lines/:lineId', authenticateToken, (req, res) => {
 });
 
 // ── Issue the annexure: freeze the lines and number the document ──
-router.post('/jobs/:id/annexure', authenticateToken, (req, res) => {
-  try {
-    if (!isCoordinator(req)) return res.status(403).json({ error: 'Coordinators only' });
-    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
-    if (!job) return res.status(404).json({ error: 'Job not found' });
-    if (job.status !== 'completed') {
-      return res.status(400).json({ error: `Only a completed job can be costed (${jobLabel(job)} is ${job.status})` });
-    }
-    const open = db.prepare(
-      `SELECT annexure_no FROM cost_annexures WHERE job_id = ? AND status != 'superseded'`
-    ).get(job.id);
-    if (open) return res.status(409).json({ error: `${open.annexure_no} already exists for this job.` });
+// Issue the first annexure for a completed job.
+//
+// Returns { error } instead of throwing so callers can decide how loudly to fail:
+// the HTTP route surfaces it, while automatic issuance on job completion logs and
+// moves on rather than blocking the completion itself.
+export const issueAnnexureForJob = (job, actorUserId, actorIp = null) => {
+  if (!job) return { error: 'Job not found' };
+  if (job.status !== 'completed') {
+    return { error: `Only a completed job can be costed (${jobLabel(job)} is ${job.status})` };
+  }
+  const open = db.prepare(
+    `SELECT annexure_no FROM cost_annexures WHERE job_id = ? AND status != 'superseded'`
+  ).get(job.id);
+  if (open) return { error: `${open.annexure_no} already exists for this job.`, existing: open.annexure_no };
 
     // Corrections the operator made to what was actually printed are already stored as
     // cost lines, tagged with annexure_id IS NULL because nothing has been issued for
@@ -442,16 +606,16 @@ router.post('/jobs/:id/annexure', authenticateToken, (req, res) => {
     if (corrected.length) {
       const cardId = corrected.find((l) => l.rate_version_id)?.rate_version_id;
       const card = cardId ? db.prepare('SELECT * FROM rate_versions WHERE id = ?').get(cardId) : null;
-      if (!card) return res.status(409).json({ error: 'The rate card behind these cost lines is missing.' });
+      if (!card) return { error: 'The rate card behind these cost lines is missing.' };
       result = { card, lines: null, corrected };
     } else {
-      result = accrueForJob(req, job);
-      if (result.error) return res.status(409).json({ error: result.error });
+      result = accrueForJob({ user: { id: actorUserId } }, job);
+      if (result.error) return { error: result.error };
       // Unpriced items no longer block. They are carried onto the annexure as
       // "Rate Not Configured" so the work is visible and the job can proceed; finance
       // adds the rate later and reissues if the money matters.
       if (!result.lines.length) {
-        return res.status(409).json({ error: `${jobLabel(job)} has nothing chargeable to cost.` });
+        return { error: `${jobLabel(job)} has nothing chargeable to cost.` };
       }
     }
 
@@ -484,7 +648,7 @@ router.post('/jobs/:id/annexure', authenticateToken, (req, res) => {
       // set, never a version that has actually been issued.
       const info = insertAnnexure.run(annexureNo, job.id, 1, result.card.id,
         totals.printing, totals.binding, totals.finishing, totals.misc, totals.rework,
-        totals.basic, totals.grandTotal, lineCount, req.user.id);
+        totals.basic, totals.grandTotal, lineCount, actorUserId);
       const annexureId = Number(info.lastInsertRowid);
 
       if (corrected.length) {
@@ -498,35 +662,62 @@ router.post('/jobs/:id/annexure', authenticateToken, (req, res) => {
           const d = l.dimensions || {};
           insertLine.run(job.id, l.documentId || null, l.reworkId || null, l.serviceCode, l.label,
             l.costGroup, l.quantity, l.uom, l.rateVersionId, l.rateMilli ?? 0, l.amountPaise,
-            l.minChargeApplied ? 1 : 0, l.detail, req.user.id, l.rateStatus || 'priced',
+            l.minChargeApplied ? 1 : 0, l.detail, actorUserId, l.rateStatus || 'priced',
             d.size || null, d.gsm || null, d.colour || null, d.variant || null, annexureId);
         }
       }
 
       // users carries no designation/department columns; role is the closest thing we
       // have, and the department belongs to the job being costed rather than the actor.
-      const u = db.prepare('SELECT ps_number, role FROM users WHERE id = ?').get(req.user.id) || {};
+      const u = db.prepare('SELECT ps_number, role FROM users WHERE id = ?').get(actorUserId) || {};
       db.prepare(
         `INSERT INTO annexure_approvals (annexure_id, role, user_id, employee_id, designation, department, ip_address)
          VALUES (?, 'prepared', ?, ?, ?, ?, ?)`
-      ).run(annexureId, req.user.id, u.ps_number || null, u.role || null,
-            job.department_name || null, req.ip || null);
+      ).run(annexureId, actorUserId, u.ps_number || null, u.role || null,
+            job.department_name || null, actorIp);
       return annexureId;
     });
     write();
 
-    res.status(201).json({
-      annexure_no: annexureNo,
-      status: 'draft',
-      card: result.card.code,
-      line_count: lineCount,
-      corrected: corrected.length > 0,
-      unconfigured: result.unconfigured || [],
-      totals,
-      grand_total_display: paiseToRupees(totals.grandTotal),
-      message: `${annexureNo} issued as draft — ${paiseToRupees(totals.grandTotal)}`
-             + (totals.unconfigured ? `, ${totals.unconfigured} item(s) awaiting a rate.` : '.'),
-    });
+  // The annexure starts in the printing team's court, not the requestor's. The operator
+  // who ran the job is the only one who knows how the actual print differed from the
+  // spec, so they check it first and send it on. Without this nothing would announce a
+  // new draft and it would sit unreviewed.
+  for (const staffId of printingStaffFor(job)) {
+    notifyUser(staffId, 'New cost annexure ready for your review',
+      `${annexureNo} for ${jobLabel(job)} (${paiseToRupees(totals.grandTotal)}) has been issued as a draft. `
+      + 'Check it against what was actually printed, correct it if needed, then send it to '
+      + `${job.lead_name || 'the requestor'} for approval.`,
+      'info');
+  }
+
+  return {
+    annexure_no: annexureNo,
+    status: 'draft',
+    card: result.card.code,
+    line_count: lineCount,
+    corrected: corrected.length > 0,
+    unconfigured: result.unconfigured || [],
+    totals,
+    grand_total_display: paiseToRupees(totals.grandTotal),
+    message: `${annexureNo} issued as draft — ${paiseToRupees(totals.grandTotal)}`
+           + (totals.unconfigured ? `, ${totals.unconfigured} item(s) awaiting a rate.` : '.'),
+  };
+};
+
+// ── Issue the annexure: freeze the lines and number the document ──
+// Kept for a coordinator who wants to cost a job by hand — completion issues one
+// automatically, so this is now mostly a retry for a job whose automatic attempt
+// failed (no rate card in force at the time, say).
+router.post('/jobs/:id/annexure', authenticateToken, (req, res) => {
+  try {
+    if (!isCoordinator(req)) return res.status(403).json({ error: 'Coordinators only' });
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+
+    const result = issueAnnexureForJob(job, req.user.id, req.ip || null);
+    if (result.error) return res.status(result.existing ? 409 : 400).json({ error: result.error });
+    res.status(201).json(result);
   } catch (error) {
     console.error('Error issuing annexure:', error);
     res.status(500).json({ error: 'Failed to issue the annexure' });
@@ -541,7 +732,9 @@ router.get('/annexures', authenticateToken, (req, res) => {
     if (!canViewCosting(req)) return res.status(403).json({ error: 'Printing coordinators and operators only' });
     const rows = db.prepare(
       `SELECT a.*, j.job_number, j.request_id, j.project_name, j.department_name, j.debit_code,
-              u.name AS requestor_name, iss.name AS issued_by_name, v.code AS rate_card,
+              j.lead_name,
+              u.name AS requestor_name, u.ps_number AS requestor_ps,
+              iss.name AS issued_by_name, v.code AS rate_card,
               mgr.id AS manager_id, mgr.name AS manager_name, mgr.ps_number AS manager_ps
          FROM cost_annexures a
          JOIN print_jobs j ON j.id = a.job_id
@@ -583,18 +776,175 @@ router.get('/annexures/candidates', authenticateToken, (req, res) => {
   }
 });
 
+// ── Stuck queue: drafts the requestor has not signed off ──
+// Registered ahead of '/annexures/:no' — Express matches in declaration order, and
+// after that route this path would arrive as annexure_no = 'pending' and 404.
+//
+// No grace period here. The grace window exists to stop the mailer nagging on the day
+// an annexure was issued; a coordinator looking at the queue wants to see everything
+// outstanding, including what was issued an hour ago.
+router.get('/annexures/pending', authenticateToken, (req, res) => {
+  try {
+    if (!canViewCosting(req)) return res.status(403).json({ error: 'Printing coordinators and operators only' });
+
+    const rows = getPendingAnnexures().map((row) => ({
+      id: row.id,
+      annexure_no: row.annexure_no,
+      job_id: row.job_id,
+      job_number: row.job_number || row.request_id || `Job #${row.job_id}`,
+      project_name: row.project_name,
+      department_name: row.department_name,
+      version: row.version,
+      grand_total_paise: row.grand_total_paise,
+      grand_total_display: row.grand_total_display,
+      requestor_id: row.requestor_id,
+      requestor_name: row.requestor_name,
+      manager_name: row.manager_name,
+      waiting_since: row.waiting_since,
+      waiting_days: row.waiting_days,
+      // Whose desk it is on. A draft still needs the operator to check it and send it;
+      // only an under_review is genuinely waiting on the requestor.
+      status: row.status,
+      with_requestor: row.with_requestor,
+    }));
+
+    res.json({
+      total_paise: rows.reduce((sum, r) => sum + Number(r.grand_total_paise || 0), 0),
+      with_printing: rows.filter((r) => !r.with_requestor).length,
+      with_requestor: rows.filter((r) => r.with_requestor).length,
+      annexures: rows,
+    });
+  } catch (error) {
+    console.error('Error listing pending annexures:', error);
+    res.status(500).json({ error: 'Failed to list annexures awaiting approval' });
+  }
+});
+
+// ── Send a prepared annexure to the requestor ────────────────────────────────
+//
+// The handover point in the workflow. A new annexure lands as a draft in the printing
+// team's court: the operator who ran the job checks it against what actually came off
+// the machine and corrects it. Only when they are satisfied does it go to the
+// requestor, who is being asked to verify pages, services and amount — not to referee
+// figures nobody has checked yet.
+router.post('/annexures/:no/send-for-approval', authenticateToken, (req, res) => {
+  try {
+    if (!canEditCosting(req)) {
+      return res.status(403).json({ error: 'Only the printer operator or a coordinator can send an annexure for approval.' });
+    }
+    const a = db.prepare('SELECT * FROM cost_annexures WHERE annexure_no = ?').get(req.params.no);
+    if (!a) return res.status(404).json({ error: 'Annexure not found' });
+    if (a.status === 'approved') return res.status(400).json({ error: `${a.annexure_no} is already approved.` });
+    if (a.status === 'superseded') {
+      return res.status(400).json({ error: `${a.annexure_no} has been superseded — send the latest version instead.` });
+    }
+    if (a.status === 'under_review') {
+      return res.status(400).json({ error: `${a.annexure_no} is already with the requestor.` });
+    }
+
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(a.job_id) || {};
+    const u = db.prepare('SELECT ps_number, role FROM users WHERE id = ?').get(req.user.id) || {};
+
+    db.transaction(() => {
+      db.prepare("UPDATE cost_annexures SET status = 'under_review' WHERE id = ?").run(a.id);
+      // 'reviewed' is the printing team's signature on these figures — it records who
+      // checked them before the requestor was ever asked.
+      db.prepare(
+        `INSERT INTO annexure_approvals (annexure_id, role, user_id, employee_id, designation, department, remarks, ip_address)
+         VALUES (?, 'reviewed', ?, ?, ?, ?, ?, ?)`
+      ).run(a.id, req.user.id, u.ps_number || null, u.role || null, job.department_name || null,
+            (req.body?.remarks || '').trim() || null, req.ip || null);
+    })();
+
+    notifyUser(job.created_by, 'Printing cost ready for your approval',
+      `${a.annexure_no} for ${jobLabel(job)} (${paiseToRupees(a.grand_total_paise)}) has been checked by `
+      + `${req.user.name} and needs your approval. Review the pages, services and amount from `
+      + 'My Printing Jobs, then approve or reject it.',
+      'info');
+
+    res.json({
+      annexure_no: a.annexure_no, status: 'under_review',
+      message: `${a.annexure_no} sent to the requestor for approval.`,
+    });
+  } catch (error) {
+    console.error('Error sending annexure for approval:', error);
+    res.status(500).json({ error: 'Failed to send the annexure for approval' });
+  }
+});
+
+// ── Reject. Hands the annexure back to the printing team with a reason. ──
+//
+// The counterpart to approve, and the same boundary: only the requestor who raised the
+// job can reject it. The annexure is NOT superseded — it goes back to draft so the same
+// document is corrected and returned, keeping the rejection and the fix on one history.
+router.post('/annexures/:no/reject', authenticateToken, (req, res) => {
+  try {
+    const a = db.prepare('SELECT * FROM cost_annexures WHERE annexure_no = ?').get(req.params.no);
+    if (!a) return res.status(404).json({ error: 'Annexure not found' });
+    const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(a.job_id) || {};
+
+    if (job.created_by !== req.user.id) {
+      return res.status(403).json({ error: 'Only the requestor who raised this job can reject its cost annexure.' });
+    }
+    if (a.status === 'approved') {
+      return res.status(400).json({ error: `${a.annexure_no} is already approved. Ask the printing team to reissue it.` });
+    }
+    if (a.status !== 'under_review') {
+      return res.status(400).json({ error: `${a.annexure_no} has not been sent for your approval yet.` });
+    }
+
+    // A rejection with no reason gives the operator nothing to act on, so it is
+    // required — unlike approval, where silence means the figures were accepted.
+    const reason = String(req.body?.reason || '').trim();
+    if (!reason) {
+      return res.status(400).json({ error: 'Say what is wrong with the annexure so the printing team can correct it.' });
+    }
+
+    const u = db.prepare('SELECT ps_number, role FROM users WHERE id = ?').get(req.user.id) || {};
+    db.transaction(() => {
+      db.prepare("UPDATE cost_annexures SET status = 'draft' WHERE id = ?").run(a.id);
+      db.prepare(
+        `INSERT INTO annexure_approvals (annexure_id, role, user_id, employee_id, designation, department, remarks, ip_address)
+         VALUES (?, 'returned', ?, ?, ?, ?, ?, ?)`
+      ).run(a.id, req.user.id, u.ps_number || null, u.role || null, job.department_name || null, reason, req.ip || null);
+    })();
+
+    for (const staffId of printingStaffFor(job)) {
+      notifyUser(staffId, 'Printing cost rejected by requestor',
+        `${req.user.name} rejected ${a.annexure_no} for ${jobLabel(job)} `
+        + `(${paiseToRupees(a.grand_total_paise)}): "${reason}". `
+        + 'Correct the annexure and send it for approval again.',
+        'warning');
+    }
+
+    res.json({
+      annexure_no: a.annexure_no, status: 'draft',
+      message: `${a.annexure_no} sent back to the printing team.`,
+    });
+  } catch (error) {
+    console.error('Error rejecting annexure:', error);
+    res.status(500).json({ error: 'Failed to reject the annexure' });
+  }
+});
+
 // Shared by both the coordinator-facing lookup (by annexure_no) and the requestor's
 // (by job id, below) — one place building the same {annexure, lines, approvals,
 // documents} shape so the two views can never quietly drift apart.
 const buildAnnexureDetail = (annexureNo) => {
   const a = db.prepare(
+    // lead_name and the requestor's manager mirror the workbook's "D&T LEAD / INITIATOR"
+    // header block: an operator working the annexure needs to see whose job it is and
+    // who owns it, not just the job number.
     `SELECT a.*, j.job_number, j.request_id, j.project_name, j.department_name, j.department_code,
             j.debit_code, j.dt_number, j.submitted_at, j.completed_at, j.created_by,
+            j.lead_name,
             u.name AS requestor_name, u.ps_number AS requestor_ps,
+            mgr.name AS manager_name, mgr.ps_number AS manager_ps,
             v.code AS rate_card, l.name AS location_name
        FROM cost_annexures a
        JOIN print_jobs j ON j.id = a.job_id
        LEFT JOIN users u ON u.id = j.created_by
+       LEFT JOIN users mgr ON mgr.id = u.manager_id
        LEFT JOIN rate_versions v ON v.id = a.rate_version_id
        LEFT JOIN locations l ON l.id = j.location_id
       WHERE a.annexure_no = ?`
@@ -677,11 +1027,21 @@ router.post('/annexures/:no/approve', authenticateToken, (req, res) => {
     if (a.status === 'superseded') {
       return res.status(400).json({ error: `${a.annexure_no} has been superseded — review the latest version instead.` });
     }
+    // A draft is still being worked on by the printing team. Approving one would sign
+    // off figures the operator has not finished checking against the actual print.
+    if (a.status !== 'under_review') {
+      return res.status(409).json({
+        error: `${a.annexure_no} has not been sent for your approval yet — the printing team is still `
+             + 'checking it against what was actually printed.',
+        code: 'NOT_SENT_FOR_APPROVAL',
+      });
+    }
 
     // Scoped to this version's own lines — a job can have a prior superseded version
     // sharing the same job_id, and the hash must attest to exactly what THIS annexure
     // charges, not a mix of two versions' rows.
     const lines = db.prepare('SELECT * FROM job_cost_lines WHERE annexure_id = ? ORDER BY id').all(a.id);
+
     const payload = JSON.stringify({
       annexure_no: a.annexure_no, job_id: a.job_id, version: a.version,
       grand_total_paise: a.grand_total_paise,
@@ -698,6 +1058,16 @@ router.post('/annexures/:no/approve', authenticateToken, (req, res) => {
       ).run(a.id, req.user.id, u.ps_number || null, u.role || null, job.department_name || null,
             (req.body?.remarks || '').trim() || null, req.ip || null);
     })();
+
+    // Close the loop: the coordinator and the operator who prepared these figures are
+    // waiting on this answer, so tell them it came back approved and by whom.
+    const fullJob = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(a.job_id) || {};
+    for (const staffId of printingStaffFor(fullJob)) {
+      notifyUser(staffId, 'Printing cost approved by requestor',
+        `${req.user.name} approved ${a.annexure_no} for ${jobLabel(fullJob)} `
+        + `(${paiseToRupees(a.grand_total_paise)}). The figures are now locked.`,
+        'success');
+    }
 
     res.json({
       annexure_no: a.annexure_no, status: 'approved', payload_sha256: hash,

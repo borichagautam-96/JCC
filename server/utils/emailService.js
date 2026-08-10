@@ -652,6 +652,7 @@ export const notifyPrintJobAssigned = (pj, operatorEmail) => sendToMany(operator
 export const notifyPrintJobReady = (pj, recipients) => sendToMany(recipients, emailTemplates.printJobReady, pj, 'printJobReady');
 export const notifyPrintJobCompleted = (pj, requestorEmail) => sendToMany(requestorEmail, emailTemplates.printJobCompleted, pj, 'printJobCompleted');
 export const notifyPrintJobAwaitingReceipt = (pj, requestorEmail) => sendToMany(requestorEmail, emailTemplates.printJobAwaitingReceipt, pj, 'printJobAwaitingReceipt');
+
 export const notifyPrintJobReceiptConfirmed = (pj, recipients) => sendToMany(recipients, emailTemplates.printJobReceiptConfirmed, pj, 'printJobReceiptConfirmed');
 export const notifyPrintProofReleased = (pj, requestorEmail) => sendToMany(requestorEmail, emailTemplates.printProofReleased, pj, 'printProofReleased');
 export const notifyPrintReworkAssigned = (pj, operatorEmail) => sendToMany(operatorEmail, emailTemplates.printReworkAssigned, pj, 'printReworkAssigned');

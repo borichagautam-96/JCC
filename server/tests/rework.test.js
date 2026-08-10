@@ -26,14 +26,29 @@ app.use('/api/jobs', jobsRouter);
 const tokenFor = (u) => jwt.sign({ id: u.id, name: u.name, role: u.role }, JWT_SECRET);
 const uniq = () => `rwk-${process.pid}-${Number(process.hrtime.bigint() % 1000000n)}`;
 
-// A minimal but genuinely valid single-page PDF, so pdf-parse reads 1 page.
-const PDF_BYTES = Buffer.from(
-  '%PDF-1.4\n' +
-  '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n' +
-  '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
-  '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj\n' +
-  'trailer<</Root 1 0 R>>\n%%EOF\n', 'latin1'
-);
+// A genuinely valid PDF of N pages, with a real xref table so the page count is read
+// rather than guessed. The fixture must have enough pages for the ranges under test:
+// page-range validation is enforced now, so a 1-page fixture would reject "30-36" —
+// which is exactly the mistake this validation exists to catch.
+const makePdf = (numPages) => {
+  const objs = [
+    '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n',
+    `2 0 obj<</Type/Pages/Kids[${Array.from({ length: numPages }, (_, i) => `${i + 3} 0 R`).join(' ')}]/Count ${numPages}>>endobj\n`,
+    ...Array.from({ length: numPages }, (_, i) =>
+      `${i + 3} 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj\n`),
+  ];
+  let body = '%PDF-1.4\n';
+  const offsets = [];
+  for (const o of objs) { offsets.push(body.length); body += o; }
+  const xrefAt = body.length;
+  let xref = `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+  for (const off of offsets) xref += `${String(off).padStart(10, '0')} 00000 n \n`;
+  body += `${xref}trailer<</Size ${objs.length + 1}/Root 1 0 R>>\nstartxref\n${xrefAt}\n%%EOF\n`;
+  return Buffer.from(body, 'latin1');
+};
+
+// 40 pages covers the default "5, 8, 30-36" used across these tests.
+const PDF_BYTES = makePdf(40);
 
 const makeUser = (suffix, flags = {}) => {
   const info = db.prepare(
@@ -562,4 +577,137 @@ test('recall and rework never both apply to the same job state', async () => {
   const res = await recall(tokenFor(requestor), jobId);
   assert.equal(res.status, 400);
   cleanup([jobId], [requestor.id]);
+});
+
+// ── Page-range safety ───────────────────────────────────────────────────────────
+// A rework that names pages the revised PDF does not have is a wasted print run: the
+// operator discovers it standing at the machine. It is caught when the rework is
+// raised, and re-checked at assignment — the last gate before the press.
+
+test('a rework naming pages beyond the PDF is refused when raised', async () => {
+  const user = makeUser('shortreq');
+  const jobId = makeJob(user.id);
+
+  const res = await request(app)
+    .post(`/api/jobs/${jobId}/reworks/request`)
+    .set('Authorization', `Bearer ${tokenFor(user)}`)
+    .attach('pdf', makePdf(10), 'revised.pdf')
+    .field('modified_pages', '12-15')
+    .field('additional_pages', '0')
+    .field('change_description', 'Fixed the drawing on the later pages.');
+
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /Page 12 does not exist.*10 pages/i);
+  assert.equal(reworksFor(jobId).length, 0, 'nothing is stored for an impossible range');
+
+  cleanup([jobId], [user.id]);
+});
+
+test('the last page of the PDF is accepted — the boundary is inclusive', async () => {
+  const user = makeUser('edgereq');
+  const jobId = makeJob(user.id);
+
+  const res = await request(app)
+    .post(`/api/jobs/${jobId}/reworks/request`)
+    .set('Authorization', `Bearer ${tokenFor(user)}`)
+    .attach('pdf', makePdf(10), 'revised.pdf')
+    .field('modified_pages', '8-10')
+    .field('additional_pages', '0')
+    .field('change_description', 'Corrected the final three pages.');
+
+  assert.equal(res.status, 201);
+  assert.equal(reworksFor(jobId)[0].num_pages, 10, 'the real page count is stored, not assumed');
+
+  cleanup([jobId], [user.id]);
+});
+
+test('the page count is read from the file and stored on the rework', async () => {
+  const user = makeUser('countreq');
+  const jobId = makeJob(user.id);
+
+  await request(app)
+    .post(`/api/jobs/${jobId}/reworks/request`)
+    .set('Authorization', `Bearer ${tokenFor(user)}`)
+    .attach('pdf', makePdf(7), 'revised.pdf')
+    .field('modified_pages', '3')
+    .field('additional_pages', '0')
+    .field('change_description', 'One page corrected.');
+
+  assert.equal(reworksFor(jobId)[0].num_pages, 7);
+
+  cleanup([jobId], [user.id]);
+});
+
+test('assignment re-checks the range, catching a rework stored before validation worked', async () => {
+  const user = makeUser('legacyreq');
+  const coordinator = makeUser('legacycoord', { coordinator: true });
+  const operator = makeUser('legacyop', { operator: true });
+  const jobId = makeJob(user.id);
+
+  const created = await createRework(tokenFor(user), jobId, { modified_pages: '5, 8' });
+  assert.equal(created.status, 201);
+  const rw = reworksFor(jobId)[0];
+
+  // Reproduce the state left by the broken page-count reader: a range that overruns a
+  // PDF that was never measured, so nothing rejected it on the way in.
+  db.prepare(
+    "UPDATE print_job_reworks SET num_pages = NULL, modified_pages = '12-15', modified_pages_norm = '12-15' WHERE id = ?"
+  ).run(rw.id);
+  fs.writeFileSync(path.join(uploadDir, rw.pdf_path), makePdf(10));
+
+  const res = await assignRework(tokenFor(coordinator), jobId, rw.id, operator.id);
+
+  assert.equal(res.status, 409);
+  assert.equal(res.body.code, 'PAGE_RANGE_INVALID');
+  assert.equal(res.body.pdf_pages, 10);
+  assert.match(res.body.error, /12-15/);
+  // Nothing reached the press.
+  assert.equal(db.prepare('SELECT assigned_operator_id FROM print_job_reworks WHERE id = ?').get(rw.id).assigned_operator_id, null);
+
+  cleanup([jobId], [user.id, coordinator.id, operator.id]);
+});
+
+test('assignment recovers a missing page count instead of skipping the check', async () => {
+  const user = makeUser('backfillreq');
+  const coordinator = makeUser('backfillcoord', { coordinator: true });
+  const operator = makeUser('backfillop', { operator: true });
+  const jobId = makeJob(user.id);
+
+  const created = await createRework(tokenFor(user), jobId, { modified_pages: '5, 8' });
+  assert.equal(created.status, 201);
+  const rw = reworksFor(jobId)[0];
+  db.prepare('UPDATE print_job_reworks SET num_pages = NULL WHERE id = ?').run(rw.id);
+
+  const res = await assignRework(tokenFor(coordinator), jobId, rw.id, operator.id);
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.warning, null, 'a readable PDF is verified, not waved through');
+  assert.equal(res.body.pdf_pages, 40);
+  // Backfilled, so the next reader does not re-parse the file.
+  assert.equal(db.prepare('SELECT num_pages FROM print_job_reworks WHERE id = ?').get(rw.id).num_pages, 40);
+
+  cleanup([jobId], [user.id, coordinator.id, operator.id]);
+});
+
+test('an unreadable PDF warns rather than blocking a legitimate rework', async () => {
+  const user = makeUser('unreadreq');
+  const coordinator = makeUser('unreadcoord', { coordinator: true });
+  const operator = makeUser('unreadop', { operator: true });
+  const jobId = makeJob(user.id);
+
+  const created = await createRework(tokenFor(user), jobId, { modified_pages: '5, 8' });
+  assert.equal(created.status, 201);
+  const rw = reworksFor(jobId)[0];
+  db.prepare('UPDATE print_job_reworks SET num_pages = NULL WHERE id = ?').run(rw.id);
+  fs.writeFileSync(path.join(uploadDir, rw.pdf_path), Buffer.from('not a pdf at all', 'latin1'));
+
+  const res = await assignRework(tokenFor(coordinator), jobId, rw.id, operator.id);
+
+  // A parser limitation is not evidence of a bad range, so the work still goes out —
+  // but the coordinator is told the range was never verified.
+  assert.equal(res.status, 200);
+  assert.match(res.body.warning, /could not be read/i);
+  assert.match(res.body.message, /could not be read/i);
+
+  cleanup([jobId], [user.id, coordinator.id, operator.id]);
 });

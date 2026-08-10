@@ -303,6 +303,7 @@ router.get('/', authenticateToken, authorizeRoles(['admin']), (req, res) => {
             'account_limit',
             'is_printer_operator',
             'is_printer_coordinator',
+            'is_rate_approver',
             'location_id',
         ];
 
@@ -319,6 +320,9 @@ router.get('/', authenticateToken, authorizeRoles(['admin']), (req, res) => {
                    ${qualifiedOptionalColumns.join(',\n                   ')}
             FROM users u
             LEFT JOIN users m ON m.id = u.manager_id
+            -- Soft-deleted accounts stay in the database for history but must not
+            -- appear in the roster, the manager picker, or anything built from it.
+            WHERE u.deleted_at IS NULL
             ORDER BY u.created_at DESC
         `).all();
 
@@ -345,7 +349,7 @@ router.get('/me', authenticateToken, (req, res) => {
     try {
         const user = db.prepare(`
             SELECT u.id, u.ps_number, u.name, u.email, u.role, u.manager_id, u.profile_completed,
-                   u.is_printer_operator, u.is_printer_coordinator, u.location_id,
+                   u.is_printer_operator, u.is_printer_coordinator, u.is_rate_approver, u.location_id,
                    m.name as manager_name, l.name as location_name
             FROM users u
             LEFT JOIN users m ON u.manager_id = m.id
@@ -366,6 +370,7 @@ router.get('/me', authenticateToken, (req, res) => {
             profile_completed: Number(user.profile_completed || 0),
             is_printer_operator: Number(user.is_printer_operator || 0),
             is_printer_coordinator: Number(user.is_printer_coordinator || 0),
+            is_rate_approver: Number(user.is_rate_approver || 0),
             location_id: user.location_id || null,
             location_name: user.location_name || null,
             manager_id: user.manager_id,
@@ -725,9 +730,23 @@ router.delete('/:id', authenticateToken, authorizeRoles(['admin']), (req, res) =
             }
         }
 
-        // Also clean up device binding data and sessions
+        // Soft delete. Removing the row left every reference to it dangling — jobs
+        // pointed at a creator/operator that no longer existed, and audit logs,
+        // notifications and annexure approvals lost the person who acted. Keeping the
+        // row preserves all of that; access is revoked instead:
+        //   - login rejects a deleted account (auth.js, local and LDAP)
+        //   - authenticateToken kills any session already issued
+        //   - the session and device binding are cleared here so nothing lingers
+        // Contact details are kept because historical records display them.
         db.prepare('DELETE FROM active_sessions WHERE user_id = ?').run(id);
-        db.prepare('DELETE FROM users WHERE id = ?').run(id);
+        db.prepare(
+            `UPDATE users
+                SET deleted_at = datetime('now'), deleted_by = ?,
+                    registered_device_id = NULL, device_bound_at = NULL,
+                    device_user_agent = NULL, device_bound_ip = NULL,
+                    is_printer_operator = 0, is_printer_coordinator = 0
+              WHERE id = ?`
+        ).run(req.user.id, id);
 
         res.json({ message: 'User deleted successfully' });
     } catch (error) {
@@ -913,6 +932,34 @@ router.post('/:id/printer-coordinator', authenticateToken, authorizeRoles(['admi
     } catch (error) {
         console.error('Error updating printing coordinator flag:', error);
         res.status(500).json({ error: 'Failed to update printing coordinator flag' });
+    }
+});
+
+// Toggle whether a user may approve rate cards (printing module).
+//
+// Held apart from the coordinator flag on purpose: coordinators import and edit rate
+// cards, and an approved card prices every job that follows it. Granting both to the
+// same person removes the second pair of eyes entirely, so the warning below is worth
+// surfacing rather than silently allowing it.
+router.post('/:id/rate-approver', authenticateToken, authorizeRoles(['admin']), (req, res) => {
+    try {
+        const userId = req.params.id;
+        const enabled = req.body?.enabled ? 1 : 0;
+        const user = db.prepare('SELECT id, name, is_printer_coordinator FROM users WHERE id = ?').get(userId);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+
+        db.prepare('UPDATE users SET is_rate_approver = ? WHERE id = ?').run(enabled, userId);
+        res.json({
+            message: `${user.name} ${enabled ? 'can now approve' : 'can no longer approve'} rate cards`,
+            is_rate_approver: enabled,
+            warning: enabled && user.is_printer_coordinator
+                ? `${user.name} is also a printing coordinator. They still cannot approve a card they `
+                  + 'imported or edited, but consider separating the two duties.'
+                : null,
+        });
+    } catch (error) {
+        console.error('Error updating rate approver flag:', error);
+        res.status(500).json({ error: 'Failed to update rate approver flag' });
     }
 });
 

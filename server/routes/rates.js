@@ -24,7 +24,7 @@ const rateUpload = multer({
 
 // Rate master, read-only for now. Maintenance and the pricing engine come later; the
 // first useful thing is simply being able to see the card and — more importantly —
-// see what it cannot price. See the coverage endpoint at the bottom.
+// see what it cannot price.
 
 // Printing capability is a module flag, independent of the JCC role. Rates are
 // finance-adjacent, so this is coordinator/admin territory rather than every
@@ -47,6 +47,27 @@ const canMaintainRates = (req) => {
   const row = db.prepare('SELECT is_printer_coordinator FROM users WHERE id = ?').get(req.user.id);
   return !!(row && row.is_printer_coordinator);
 };
+
+// Approving a card is a separate right from maintaining one, and deliberately not the
+// coordinator flag: whoever imports or edits the figures must not be the person who
+// puts them in force. No role bypass — 'admin' is routinely layered onto coordinator
+// accounts here, so allowing it would hand the card straight back to its preparer.
+const canApproveRates = (req) => {
+  const row = db.prepare('SELECT is_rate_approver FROM users WHERE id = ?').get(req.user.id);
+  return !!(row && row.is_rate_approver);
+};
+
+// Every touch on a draft is recorded, so approval can exclude everyone who shaped it.
+const recordRateActivity = (versionId, userId, action, detail = null) => {
+  db.prepare('INSERT INTO rate_card_activity (version_id, user_id, action, detail) VALUES (?,?,?,?)')
+    .run(versionId, userId, action, detail);
+};
+
+const preparersOf = (versionId) => db.prepare(
+  `SELECT DISTINCT a.user_id, u.name
+     FROM rate_card_activity a LEFT JOIN users u ON u.id = a.user_id
+    WHERE a.version_id = ?`
+).all(versionId);
 
 const rupees = (milli) => (milli / 1000).toFixed(3);
 
@@ -248,9 +269,25 @@ router.get('/versions/:code/lines', authenticateToken, (req, res) => {
                  l.paper_size, l.colour_mode, l.variant`
     ).all(version.id);
 
+    // The UI needs to say WHY approval is unavailable — "you prepared this card" and
+    // "you are not a rate approver" are different problems with different fixes, and a
+    // disabled button that explains neither is what makes a control feel arbitrary.
+    const preparers = preparersOf(version.id);
+    const isApprover = canApproveRates(req);
+    const isPreparer = preparers.some((p) => p.user_id === req.user.id);
+    const otherApprovers = db.prepare(
+      `SELECT COUNT(*) AS c FROM users
+        WHERE is_rate_approver = 1 AND deleted_at IS NULL
+          AND id NOT IN (SELECT user_id FROM rate_card_activity WHERE version_id = ?)`
+    ).get(version.id).c;
+
     res.json({
       version,
       lines: lines.map((l) => ({ ...l, rate_display: rupees(l.rate_milli) })),
+      prepared_by: preparers.map((p) => p.name).filter(Boolean),
+      can_approve: isApprover && !isPreparer,
+      approval_block: !isApprover ? 'not_an_approver' : isPreparer ? 'you_prepared_it' : null,
+      eligible_approvers: otherApprovers,
     });
   } catch (error) {
     console.error('Error fetching rate lines:', error);
@@ -289,13 +326,16 @@ router.post('/import', authenticateToken, rateUpload.single('workbook'), (req, r
     });
     if (result.skipped) return res.status(409).json({ error: result.skipped });
 
+    const imported = db.prepare('SELECT id FROM rate_versions WHERE code = ?').get(code);
+    if (imported) recordRateActivity(imported.id, req.user.id, 'import', req.file.originalname);
+
     res.status(201).json({
       code,
       services: result.services,
       lines: result.lines,
       warnings: result.warnings || [],
       message: `${code} imported as a draft — ${result.lines} rate(s) from ${req.file.originalname}. `
-             + 'Review the figures, then approve the card to put it in force.',
+             + 'Review the figures, then have a rate approver put the card in force.',
     });
   } catch (error) {
     console.error('Error importing rate workbook:', error);
@@ -334,6 +374,9 @@ router.patch('/versions/:code/lines/:id', authenticateToken, (req, res) => {
 
     db.prepare('UPDATE rate_lines SET rate_milli = ?, needs_review = 0 WHERE id = ?')
       .run(rateMilli, line.id);
+    // Editing a rate makes you a preparer of this card, even if someone else imported
+    // it — otherwise rewriting every figure and then approving would pass the check.
+    recordRateActivity(version.id, req.user.id, 'edit', `${line.service_code} → ₹${rupees(rateMilli)}`);
 
     res.json({
       id: line.id,
@@ -377,6 +420,7 @@ router.post('/versions/:code/duplicate', authenticateToken, (req, res) => {
                 min_charge_paise, needs_review, note
            FROM rate_lines WHERE version_id = ?`
       ).run(id, source.id);
+      recordRateActivity(id, req.user.id, 'duplicate', `Copied from ${source.code}`);
       return id;
     })();
 
@@ -444,10 +488,26 @@ const resolveLine = (versionId, { service, size, gsm, colour, variant }) => {
 // ── Approve a card. Until this happens the card prices nothing (BR-01). ──
 router.post('/versions/:code/approve', authenticateToken, (req, res) => {
   try {
-    if (!canMaintainRates(req)) return res.status(403).json({ error: 'Not authorized to approve rate cards' });
+    if (!canApproveRates(req)) {
+      return res.status(403).json({
+        error: 'Only a designated rate approver can put a rate card in force. '
+             + 'Importing and editing cards is a separate right.',
+      });
+    }
     const v = db.prepare('SELECT * FROM rate_versions WHERE code = ?').get(req.params.code);
     if (!v) return res.status(404).json({ error: 'Rate card not found' });
     if (v.status === 'approved') return res.status(400).json({ error: `${v.code} is already approved.` });
+
+    // Segregation of duties. An approved card prices every job that follows it, so the
+    // person who typed the figures cannot be the one who makes them chargeable.
+    const preparers = preparersOf(v.id);
+    if (preparers.some((p) => p.user_id === req.user.id)) {
+      return res.status(403).json({
+        error: `You imported or edited ${v.code}, so you cannot approve it. `
+             + 'Another designated rate approver has to review and approve this card.',
+        code: 'SEGREGATION_OF_DUTIES',
+      });
+    }
 
     const unresolved = db.prepare(
       'SELECT COUNT(*) AS c FROM rate_lines WHERE version_id = ? AND needs_review = 1'
@@ -492,65 +552,6 @@ router.post('/versions/:code/approve', authenticateToken, (req, res) => {
   } catch (error) {
     console.error('Error approving rate card:', error);
     res.status(500).json({ error: 'Failed to approve the rate card' });
-  }
-});
-
-// ── Coverage: what can this card actually price? ───────────────────────────────
-// The report worth building first. It compares every spec combination that exists in
-// real job documents against what the card can resolve, so the gap is measured rather
-// than assumed.
-router.get('/coverage', authenticateToken, (req, res) => {
-  try {
-    if (!canViewRates(req)) return res.status(403).json({ error: 'Not authorized' });
-    const version = db.prepare('SELECT * FROM rate_versions WHERE code = ?').get(req.query.card || 'RC-2026-08')
-      || db.prepare("SELECT * FROM rate_versions ORDER BY effective_from DESC LIMIT 1").get();
-    if (!version) return res.json({ version: null, combinations: [], summary: null });
-
-    // Distinct spec combinations actually requested, with how much work each represents.
-    const combos = db.prepare(
-      `SELECT paper_size, paper_gsm, color_mode,
-              COUNT(*) AS documents,
-              COALESCE(SUM(COALESCE(num_pages,0) * COALESCE(quantity,1)), 0) AS page_prints
-         FROM print_job_documents
-        WHERE paper_size IS NOT NULL OR paper_gsm IS NOT NULL
-        GROUP BY paper_size, paper_gsm, color_mode
-        ORDER BY page_prints DESC`
-    ).all();
-
-    const combinations = combos.map((c) => {
-      const colour = /colour|color/i.test(c.color_mode || '') && !/black/i.test(c.color_mode || '') ? 'COLOUR' : 'BW';
-      const line = resolveLine(version.id, {
-        service: 'PRINT', size: c.paper_size, gsm: c.paper_gsm, colour, variant: null,
-      });
-      return {
-        paper_size: c.paper_size, paper_gsm: c.paper_gsm, color_mode: c.color_mode,
-        resolved_colour: colour,
-        documents: c.documents, page_prints: c.page_prints,
-        priced: !!line,
-        rate_display: line ? rupees(line.rate_milli) : null,
-        needs_review: line ? !!line.needs_review : false,
-      };
-    });
-
-    const priced = combinations.filter((c) => c.priced);
-    const totalPrints = combinations.reduce((n, c) => n + c.page_prints, 0);
-    const pricedPrints = priced.reduce((n, c) => n + c.page_prints, 0);
-
-    res.json({
-      version: { code: version.code, status: version.status, effective_from: version.effective_from },
-      combinations,
-      summary: {
-        combinations_seen: combinations.length,
-        combinations_priced: priced.length,
-        combination_coverage_pct: combinations.length ? Math.round((priced.length / combinations.length) * 100) : null,
-        page_prints_seen: totalPrints,
-        page_prints_priced: pricedPrints,
-        volume_coverage_pct: totalPrints ? Math.round((pricedPrints / totalPrints) * 100) : null,
-      },
-    });
-  } catch (error) {
-    console.error('Error building coverage report:', error);
-    res.status(500).json({ error: 'Failed to build coverage report' });
   }
 });
 

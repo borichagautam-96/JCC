@@ -25,12 +25,28 @@ app.use('/api/jobs', jobsRouter);
 const tokenFor = (u) => jwt.sign({ id: u.id, name: u.name, role: u.role }, JWT_SECRET);
 const uniq = () => `sub-${process.pid}-${Number(process.hrtime.bigint() % 1000000n)}`;
 
-const pdf = (marker) => Buffer.from(
-  `%PDF-1.4\n% ${marker}\n` +
-  '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n' +
-  '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
-  '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj\n' +
-  'trailer<</Root 1 0 R>>\n%%EOF\n', 'latin1');
+// `marker` only varies the bytes so two uploads hash differently.
+//
+// The page count has to match the num_pages these tests declare on the document (40).
+// The upload route now reads the real count off the file, so a 1-page fixture claiming
+// 40 pages would register as a genuine page-count change on every replace — the diff
+// would report "modified" where the test means "same specs, new file".
+const pdf = (marker, numPages = 40) => {
+  const objs = [
+    '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n',
+    `2 0 obj<</Type/Pages/Kids[${Array.from({ length: numPages }, (_, i) => `${i + 3} 0 R`).join(' ')}]/Count ${numPages}>>endobj\n`,
+    ...Array.from({ length: numPages }, (_, i) =>
+      `${i + 3} 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj\n`),
+  ];
+  let body = `%PDF-1.4\n% ${marker}\n`;
+  const offsets = [];
+  for (const o of objs) { offsets.push(body.length); body += o; }
+  const xrefAt = body.length;
+  let xref = `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+  for (const off of offsets) xref += `${String(off).padStart(10, '0')} 00000 n \n`;
+  body += `${xref}trailer<</Size ${objs.length + 1}/Root 1 0 R>>\nstartxref\n${xrefAt}\n%%EOF\n`;
+  return Buffer.from(body, 'latin1');
+};
 
 const makeUser = (suffix, flags = {}) => {
   const info = db.prepare(

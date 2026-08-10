@@ -365,6 +365,16 @@ const authenticateWithLocalPassword = ({ user, password, identifier, deviceId, i
         return null;
     }
 
+    // A soft-deleted account must not authenticate. Its row is kept so audit trails,
+    // job history and annexure approvals still resolve to a name, but it is no longer
+    // a usable login. Deliberately answers exactly like an unknown user so the response
+    // does not reveal that the account exists.
+    if (user.deleted_at) {
+        logLoginFailure({ statusCode: 400, reason: 'user_deleted', metadata: { identifier }, deviceId, ipAddress, userAgent });
+        res.status(400).json({ error: 'Invalid credentials' });
+        return null;
+    }
+
     if (!enforceAccountLockPolicy({ user, deviceId, ipAddress, userAgent, identifier, res })) {
         return null;
     }
@@ -417,6 +427,12 @@ const authenticateWithLdapMode = async ({
                 userAgent,
                 res,
             });
+        }
+
+        if (ldapUser.deleted_at) {
+            logLoginFailure({ statusCode: 400, reason: 'user_deleted', metadata: { identifier }, deviceId, ipAddress, userAgent });
+            res.status(400).json({ error: 'Invalid credentials' });
+            return null;
         }
 
         return ldapUser;
@@ -806,6 +822,7 @@ router.post('/login', validateRequest(loginSchema), async (req, res) => {
             profile_verified_at: user.profile_verified_at || null,
             is_printer_operator: user.is_printer_operator || 0,
             is_printer_coordinator: user.is_printer_coordinator || 0,
+            is_rate_approver: user.is_rate_approver || 0,
             location_id: user.location_id || null,
             session_token: sessionToken  // Embed session token in JWT for validation
         };

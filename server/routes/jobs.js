@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import db from '../database.js';
 import { authenticateToken, authorizeRoles } from '../middleware/auth.js';
+import { issueAnnexureForJob } from './annexures.js';
 import {
   notifyPrintJobSubmitted,
   notifyPrintJobAccepted,
@@ -119,7 +120,7 @@ const cleanStr = (v) => {
 // Printing coordinators = users with the module flag (independent of JCC role).
 const coordinatorContacts = () => {
   try {
-    return db.prepare('SELECT id, name, email FROM users WHERE is_printer_coordinator = 1').all();
+    return db.prepare('SELECT id, name, email FROM users WHERE is_printer_coordinator = 1 AND deleted_at IS NULL').all();
   } catch (e) {
     console.error('[jobs] coordinator lookup failed:', e);
     return [];
@@ -644,7 +645,7 @@ const isCoordinator = (req) => {
   return !!(row && row.is_printer_coordinator);
 };
 const isOperatorUser = (userId) => {
-  const row = db.prepare('SELECT is_printer_operator FROM users WHERE id = ?').get(userId);
+  const row = db.prepare('SELECT is_printer_operator FROM users WHERE id = ? AND deleted_at IS NULL').get(userId);
   return !!(row && row.is_printer_operator);
 };
 
@@ -927,7 +928,8 @@ router.get('/stats', authenticateToken, (req, res) => {
           `SELECT u.id, u.name,
                   (SELECT COUNT(*) FROM print_jobs j WHERE j.assigned_operator_id = u.id AND j.status IN ('assigned','printing','paused')) AS active,
                   (SELECT COUNT(*) FROM print_jobs j WHERE j.assigned_operator_id = u.id AND j.status = 'completed') AS completed
-           FROM users u WHERE u.is_printer_operator = 1 AND ${locScopeSql('u.location_id')} ORDER BY u.name`
+           FROM users u WHERE u.is_printer_operator = 1 AND u.deleted_at IS NULL
+             AND ${locScopeSql('u.location_id')} ORDER BY u.name`
         )
         .all(loc, loc);
       // Jobs per department (excludes drafts — not yet in the pipeline).
@@ -1168,14 +1170,29 @@ router.post('/:id/ready', authenticateToken, (req, res) => {
 
 // Total pages in an uploaded PDF, or null if it can't be read. Needed so page
 // numbers can be validated against the document the operator will actually print.
+// Page count of an uploaded PDF, or null if it genuinely cannot be read.
+//
+// pdf-parse v2 replaced the v1 callable default export with a PDFParse class, so the
+// old `(await import('pdf-parse')).default(buffer)` resolved to undefined and threw on
+// every call. The catch swallowed it and returned null, which reads as "unknown page
+// count" — and every caller treats unknown as "skip validation". The result was that
+// page-range checking silently did nothing at all.
 const readPdfPageCount = async (absPath) => {
+  let parser = null;
   try {
-    const pdfParse = (await import('pdf-parse')).default;
-    const parsed = await pdfParse(fs.readFileSync(absPath));
-    return Number.isFinite(parsed?.numpages) ? parsed.numpages : null;
+    const { PDFParse } = await import('pdf-parse');
+    parser = new PDFParse({ data: new Uint8Array(fs.readFileSync(absPath)) });
+    const info = await parser.getInfo();
+    // v2 reports the count as `total`; keep the v1 spellings as a fallback so a future
+    // bump that restores them does not silently disable validation again.
+    const total = info?.total ?? info?.numPages ?? info?.numpages;
+    return Number.isInteger(total) && total > 0 ? total : null;
   } catch (e) {
     console.warn('[jobs] could not read PDF page count:', e.message);
     return null;
+  } finally {
+    // The parser holds the decoded document; without this the worker leaks per upload.
+    try { await parser?.destroy?.(); } catch (_) { /* nothing useful to do */ }
   }
 };
 
@@ -1188,6 +1205,41 @@ const sha256OfFile = (absPath) => {
 };
 
 const reworkLabel = (rw) => rw.rework_id || `Rework #${rw.id}`;
+
+/**
+ * Check a stored rework's page range against the PDF it will actually be printed from.
+ *
+ * The range is validated when the rework is raised, but that check is only as good as
+ * the page count available at the time: if the PDF could not be read the count is NULL
+ * and validation is skipped entirely. Reworks created while that was happening are
+ * sitting in the database unchecked, so the count is recovered from the file here
+ * rather than trusted to be present.
+ *
+ * Assignment is the right place for the re-check — it is the last point before the job
+ * reaches the press, and a range that overruns the document is otherwise discovered by
+ * the operator standing at the machine.
+ */
+const verifyReworkPages = async (rw) => {
+  let numPages = Number.isInteger(rw.num_pages) && rw.num_pages > 0 ? rw.num_pages : null;
+
+  if (numPages === null && rw.pdf_path) {
+    numPages = await readPdfPageCount(path.join(uploadDir, rw.pdf_path));
+    // Backfill so the next reader does not pay to parse it again.
+    if (numPages !== null) {
+      db.prepare('UPDATE print_job_reworks SET num_pages = ? WHERE id = ?').run(numPages, rw.id);
+    }
+  }
+
+  // An unreadable PDF is not proof of a bad range. Say so and let it through rather
+  // than blocking a legitimate rework on a parser limitation.
+  if (numPages === null) {
+    return { ok: true, numPages: null, warning: 'Page count could not be read from the PDF, so the page range was not verified.' };
+  }
+
+  const parsed = parsePageList(rw.modified_pages_norm || rw.modified_pages, { maxPage: numPages });
+  if (!parsed.ok) return { ok: false, numPages, error: parsed.error };
+  return { ok: true, numPages };
+};
 
 // A rework replaces printed output, so it only makes sense once something has been
 // printed. Drafts and queued jobs are edited normally instead.
@@ -1238,6 +1290,11 @@ router.get('/proof-review', authenticateToken, (req, res) => {
                 WHERE r.job_id = j.id AND r.status IN ('pending','in_progress')) AS open_rework_status,
               (SELECT r.assigned_operator_id FROM print_job_reworks r
                 WHERE r.job_id = j.id AND r.status IN ('pending','in_progress')) AS open_rework_operator_id,
+              -- Who the rework went to. Without this the queue could only say "queued",
+              -- never to whom, which is why an assigned rework read as unfinished.
+              (SELECT ro.name FROM print_job_reworks r
+                 JOIN users ro ON ro.id = r.assigned_operator_id
+                WHERE r.job_id = j.id AND r.status IN ('pending','in_progress')) AS open_rework_operator_name,
               (SELECT r.created_by FROM print_job_reworks r
                 WHERE r.job_id = j.id AND r.status IN ('pending','in_progress')) AS open_rework_created_by
          FROM print_jobs j
@@ -1566,7 +1623,7 @@ router.post('/:id/reworks/request', authenticateToken, upload.single('pdf'), asy
 });
 
 // ── Coordinator assigns (or re-assigns) an operator to a rework ──
-router.post('/:id/reworks/:rid/assign', authenticateToken, (req, res) => {
+router.post('/:id/reworks/:rid/assign', authenticateToken, async (req, res) => {
   try {
     if (!isCoordinator(req)) return res.status(403).json({ error: 'Coordinators only' });
     const job = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(req.params.id);
@@ -1579,6 +1636,24 @@ router.post('/:id/reworks/:rid/assign', authenticateToken, (req, res) => {
     const operatorId = req.body?.operator_id ? Number(req.body.operator_id) : null;
     if (!operatorId || !isOperatorUser(operatorId)) {
       return res.status(400).json({ error: 'Pick an active printer operator' });
+    }
+
+    // Last gate before the press: a range like 12-15 against a 10-page PDF is caught
+    // here rather than by the operator at the machine.
+    const pageCheck = await verifyReworkPages(rw);
+    if (!pageCheck.error && pageCheck.ok === false) {
+      return res.status(409).json({ error: 'The rework page range could not be verified.' });
+    }
+    if (pageCheck.error) {
+      return res.status(409).json({
+        error: `${reworkLabel(rw)} cannot be assigned — ${pageCheck.error} `
+             + `It says "${rw.modified_pages_norm || rw.modified_pages}" but the revised PDF has `
+             + `${pageCheck.numPages} page${pageCheck.numPages === 1 ? '' : 's'}. `
+             + 'Ask for a corrected page range, or cancel and re-raise the rework.',
+        code: 'PAGE_RANGE_INVALID',
+        modified_pages: rw.modified_pages_norm || rw.modified_pages,
+        pdf_pages: pageCheck.numPages,
+      });
     }
 
     db.prepare(
@@ -1601,7 +1676,14 @@ router.post('/:id/reworks/:rid/assign', authenticateToken, (req, res) => {
       }),
       operator.email
     ));
-    res.json({ message: `${reworkLabel(rw)} assigned to ${operator.name || 'the operator'}.` });
+    res.json({
+      message: `${reworkLabel(rw)} assigned to ${operator.name || 'the operator'}.`
+             + (pageCheck.warning ? ` Note: ${pageCheck.warning}` : ''),
+      // Distinguished from `message` so the UI can flag an unverified assignment
+      // rather than letting it read as a clean pass.
+      warning: pageCheck.warning || null,
+      pdf_pages: pageCheck.numPages,
+    });
   } catch (error) {
     console.error('Error assigning rework:', error);
     res.status(500).json({ error: 'Failed to assign rework' });
@@ -1793,6 +1875,32 @@ router.get('/reworks/assigned', authenticateToken, (req, res) => {
   }
 });
 
+// A completed job must have its cost annexure straight away — that is what makes the
+// cost visible to the requestor, the operator and the coordinator at all. It used to
+// wait for a coordinator to press "Issue annexure", so until someone remembered, a
+// finished job showed no cost to anybody.
+//
+// Deliberately never throws: costing must not be able to fail a job's completion. If
+// no rate card covers the completion date, the job still completes and a coordinator
+// can issue it by hand once the card is in place.
+const autoIssueAnnexure = (req, jobId) => {
+  try {
+    const fresh = db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(jobId);
+    const result = issueAnnexureForJob(fresh, req.user.id, req.ip || null);
+    if (result.error) {
+      if (!result.existing) console.warn(`[jobs] auto-issue annexure for job ${jobId}: ${result.error}`);
+      return null;
+    }
+    notifyUser(fresh.created_by, 'Printing cost ready for your approval',
+      `${result.annexure_no} for ${jobLabel(fresh)} — ${result.grand_total_display}. `
+      + 'Review and approve it from My Printing Jobs.', 'info');
+    return result;
+  } catch (e) {
+    console.error(`[jobs] auto-issue annexure for job ${jobId} failed:`, e);
+    return null;
+  }
+};
+
 // ── Phase 10: coordinator hands over → awaits the requestor's confirmation ──
 // The coordinator can only record that they *gave* the materials; whether they
 // were received is the requestor's to state, so this stops at 'awaiting_receipt'
@@ -1851,7 +1959,11 @@ router.post('/:id/confirm-receipt', authenticateToken, (req, res) => {
       buildEmailJob(job, { receivedBy: req.user.name }),
       coordinatorContacts().map((c) => c.email)
     ));
-    res.json({ message: `Receipt confirmed for ${jobLabel(job)}. Thank you.` });
+    const annexure = autoIssueAnnexure(req, job.id);
+    res.json({
+      message: `Receipt confirmed for ${jobLabel(job)}. Thank you.`,
+      annexure_no: annexure?.annexure_no || null,
+    });
   } catch (error) {
     console.error('Error confirming receipt:', error);
     res.status(500).json({ error: 'Failed to confirm receipt' });
@@ -1905,7 +2017,11 @@ router.post('/:id/deliver', authenticateToken, (req, res) => {
     const detail = `Delivered${receivedBy ? `, received by ${receivedBy}` : ''}`;
     writeAudit(req, 'DELIVER_PRINT_JOB', job.id, detail);
     notifyUser(job.created_by, 'Printing Job Delivered', `${jobLabel(job)} — ${detail}`, 'success');
-    res.json({ message: `${jobLabel(job)} marked delivered & completed.` });
+    const annexure = autoIssueAnnexure(req, job.id);
+    res.json({
+      message: `${jobLabel(job)} marked delivered & completed.`,
+      annexure_no: annexure?.annexure_no || null,
+    });
   } catch (error) {
     console.error('Error delivering job:', error);
     res.status(500).json({ error: 'Failed to mark delivered' });

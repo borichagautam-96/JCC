@@ -142,6 +142,18 @@ const PrintCoordinatorPage = () => {
         act(`/api/jobs/${job.id}/assign`, { method: 'POST', body: JSON.stringify({ operatorId: Number(operatorId) }) });
     };
 
+    // Assigning the open rework is a different endpoint from assigning the job itself,
+    // and its dropdown is keyed `rw-<jobId>` so the two selects on the same row cannot
+    // collide. Note the payload key is operator_id here, not operatorId.
+    const assignRework = async (job) => {
+        const operatorId = assignChoice[`rw-${job.id}`];
+        if (!operatorId) { await dialog.alert('Pick an operator first.', { title: 'No operator', variant: 'warning' }); return; }
+        // open_rework_row_id is the rework's numeric primary key; open_rework_id is the
+        // human reference ("RWK0013"), which this route does not accept.
+        act(`/api/jobs/${job.id}/reworks/${job.open_rework_row_id}/assign`,
+            { method: 'POST', body: JSON.stringify({ operator_id: Number(operatorId) }) });
+    };
+
     const collect = async (job) => {
         const ok = await dialog.confirm(
             `Confirm you handed ${job.job_number} to ${job.requestor_name}? It moves to Awaiting Receipt until they confirm they got it.`,
@@ -668,6 +680,9 @@ const PrintCoordinatorPage = () => {
                                                             <button className="btn btn-sm btn-outline" disabled={busy} onClick={() => proofVerdict(job, false)}>Corrections required</button>
                                                         </>
                                                     )}
+                                                    {/* The picker is only for a rework that still needs an operator.
+                                                        Once assigned it is replaced by who it went to — an editable
+                                                        control left sitting there reads as work still to be done. */}
                                                     {job.open_rework_id && job.open_rework_status === 'pending' && !job.open_rework_operator_id && (
                                                         <>
                                                             <select
@@ -681,6 +696,13 @@ const PrintCoordinatorPage = () => {
                                                             </select>
                                                             <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => assignRework(job)}>Assign</button>
                                                         </>
+                                                    )}
+                                                    {job.open_rework_id && job.open_rework_operator_id && (
+                                                        <span className="text-muted" style={{ fontSize: '0.78rem', whiteSpace: 'nowrap' }}>
+                                                            Assigned to <strong style={{ color: 'var(--text-strong)' }}>
+                                                                {job.open_rework_operator_name || 'operator'}
+                                                            </strong>
+                                                        </span>
                                                     )}
                                                     {job.open_rework_id && job.open_rework_status === 'pending' && (
                                                         <button className="btn btn-sm btn-outline" disabled={busy} onClick={() => cancelRework(job)}>Cancel rework</button>

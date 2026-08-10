@@ -394,6 +394,7 @@ const UserManagementPage = () => {
             manager_id: '',
             account_limit: user.account_limit || 1,
             is_printer_coordinator: Number(user.is_printer_coordinator) === 1,
+            is_rate_approver: Number(user.is_rate_approver) === 1,
             is_printer_operator: Number(user.is_printer_operator) === 1,
             location_id: user.location_id ? String(user.location_id) : '',
         });
@@ -435,6 +436,13 @@ const UserManagementPage = () => {
                 await fetch(`/api/users/${editingUser.id}/printer-coordinator`, {
                     method: 'POST', headers: authHeaders(),
                     body: JSON.stringify({ enabled: formData.is_printer_coordinator ? 1 : 0 }),
+                });
+            }
+            const rateApproverChanged = Number(editingUser.is_rate_approver) === 1 !== !!formData.is_rate_approver;
+            if (rateApproverChanged) {
+                await fetch(`/api/users/${editingUser.id}/rate-approver`, {
+                    method: 'POST', headers: authHeaders(),
+                    body: JSON.stringify({ enabled: formData.is_rate_approver ? 1 : 0 }),
                 });
             }
             if (opChanged) {
@@ -1632,6 +1640,20 @@ const UserManagementPage = () => {
                                     />
                                     <span><strong>Printer Operator</strong> — prints and finishes assigned jobs</span>
                                 </label>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', fontSize: '0.9rem', color: 'var(--text-body)' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={!!formData.is_rate_approver}
+                                        onChange={(e) => setFormData({ ...formData, is_rate_approver: e.target.checked })}
+                                    />
+                                    <span><strong>Rate Approver</strong> — puts rate cards in force; cannot approve a card they prepared</span>
+                                </label>
+                                {formData.is_rate_approver && formData.is_printer_coordinator && (
+                                    <small style={{ color: 'var(--stat-amber)', fontSize: '0.82rem' }}>
+                                        This person can also import and edit rate cards. They still cannot approve a
+                                        card they touched, but keeping the two duties on separate people is stronger.
+                                    </small>
+                                )}
                             </div>
                             <small style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
                                 Independent of the JCC role above.

@@ -4,14 +4,17 @@ import React, { useEffect, useState } from 'react';
 //
 // The requestor's spec is an estimate. Printing a manual, the operator decides how many
 // pages really run A3 vs A4 and which are colour, so this is where that reality is
-// recorded. Editing is offered to the assigned operator and to coordinators; the server
+// recorded. Editing is offered to printer operators and coordinators; the server
 // enforces the same rule and refuses once the annexure is approved.
+//
+// Edits are held LOCALLY until saved. Every change used to commit the moment it was
+// made, which meant an experimental click could not be taken back — so this keeps a
+// working copy and offers a real Save / Discard choice. Discard simply throws the
+// working copy away without ever calling the server.
 
 const CELL = { padding: '0.25rem 0.4rem', fontSize: '0.82rem' };
+const NOT_SET = '__unset__';
 
-// A small, square, danger-toned icon button — an inline text "Remove" button was
-// wide enough, across seven other columns, to push itself off the edge of the
-// modal on anything narrower than a very wide screen.
 const RemoveButton = ({ onClick, disabled }) => (
     <button
         type="button"
@@ -31,8 +34,11 @@ const RemoveButton = ({ onClick, disabled }) => (
     </button>
 );
 
-const CostEditor = ({ jobId, authHeaders, canEdit = false, onChanged }) => {
-    const [data, setData] = useState(null);
+const money = (paise) => (paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const CostEditor = ({ jobId, authHeaders, canEdit = false, onChanged, onClose }) => {
+    const [serverLines, setServerLines] = useState(null);  // last known saved state
+    const [rows, setRows] = useState([]);                  // the working copy being edited
     const [options, setOptions] = useState(null);
     const [error, setError] = useState(null);
     const [busy, setBusy] = useState(false);
@@ -47,13 +53,15 @@ const CostEditor = ({ jobId, authHeaders, canEdit = false, onChanged }) => {
             // A preview has no row identity, so nothing on it can be corrected. When the
             // viewer is allowed to edit, turn it into real rows straight away — otherwise
             // the table looks editable-ish but every field is dead.
+            let data = body;
             if (canEdit && body.source === 'preview') {
                 const acc = await fetch(`/api/jobs/${jobId}/cost/accrue`, {
                     method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' }, body: '{}',
                 });
-                if (acc.ok) return setData(await acc.json());
+                if (acc.ok) data = await acc.json();
             }
-            setData(body);
+            setServerLines(data.lines || []);
+            setRows((data.lines || []).map((l) => ({ ...l })));
         } catch (e) {
             setError(e.message);
         }
@@ -77,41 +85,67 @@ const CostEditor = ({ jobId, authHeaders, canEdit = false, onChanged }) => {
         .filter((c) => c.size === size && (!c.colour || !colour || c.colour === colour))
         .map((c) => String(c.gsm)))].sort((a, b) => Number(a) - Number(b));
 
-    const send = async (url, options_) => {
+    // Local edits only — nothing reaches the server until Save.
+    const patchRow = (key, patch) =>
+        setRows((prev) => prev.map((r) => (rowKey(r) === key ? { ...r, ...patch, _dirty: true } : r)));
+    const dropRow = (key) => setRows((prev) => prev.filter((r) => rowKey(r) !== key));
+    const rowKey = (r) => (r.id != null ? `id:${r.id}` : `new:${r._tmp}`);
+
+    const addRow = () => {
+        const qty = Number(draft.quantity);
+        if (!Number.isFinite(qty) || qty <= 0) return;
+        setRows((prev) => [...prev, {
+            _tmp: Date.now(), _dirty: true, service_code: draft.service_code, label: 'Printing',
+            cost_group: 'printing', uom: 'page', quantity: qty,
+            paper_size: draft.paper_size, paper_gsm: draft.paper_gsm, colour_mode: draft.colour_mode,
+            rate_display: '—', amount_display: '—',
+        }]);
+        setAdding(false);
+        setDraft({ ...draft, quantity: '' });
+    };
+
+    const dirty = JSON.stringify(rows.map((r) => [r.id ?? null, Number(r.quantity), r.paper_size ?? null, r.paper_gsm ?? null, r.colour_mode ?? null]))
+        !== JSON.stringify((serverLines || []).map((r) => [r.id ?? null, Number(r.quantity), r.paper_size ?? null, r.paper_gsm ?? null, r.colour_mode ?? null]));
+
+    const save = async () => {
         setBusy(true); setError(null);
         try {
-            const res = await fetch(url, { headers: { ...authHeaders(), 'Content-Type': 'application/json' }, ...options_ });
+            const payload = rows.map((r) => ({
+                id: r.id ?? undefined, service_code: r.service_code, quantity: Number(r.quantity),
+                paper_size: r.paper_size ?? null, paper_gsm: r.paper_gsm ?? null, colour_mode: r.colour_mode ?? null,
+            }));
+            const res = await fetch(`/api/jobs/${jobId}/cost/lines`, {
+                method: 'PUT', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+                body: JSON.stringify({ lines: payload }),
+            });
             const body = await res.json();
-            if (!res.ok) throw new Error(body.error || 'Update failed');
-            setData(body);
+            if (!res.ok) throw new Error(body.error || 'Could not save');
+            setServerLines(body.lines || []);
+            setRows((body.lines || []).map((l) => ({ ...l })));
             if (onChanged) onChanged(body);
-            return true;
+            if (onClose) onClose();
         } catch (e) {
             setError(e.message);
-            return false;
         } finally {
             setBusy(false);
         }
     };
 
-    const patchLine = (line, patch) =>
-        send(`/api/jobs/${jobId}/cost/lines/${line.id}`, { method: 'PATCH', body: JSON.stringify(patch) });
-
-    const removeLine = (line) =>
-        send(`/api/jobs/${jobId}/cost/lines/${line.id}`, { method: 'DELETE' });
-
-    const addLine = async () => {
-        const ok = await send(`/api/jobs/${jobId}/cost/lines`, { method: 'POST', body: JSON.stringify(draft) });
-        if (ok) { setAdding(false); setDraft({ ...draft, quantity: '' }); }
+    const discard = () => {
+        setRows((serverLines || []).map((l) => ({ ...l })));
+        setAdding(false);
+        setError(null);
+        if (onClose) onClose();
     };
 
-    if (error && !data) return <div style={{ padding: '0.6rem', color: 'var(--stat-red)' }}>{error}</div>;
-    if (!data) return <div className="text-muted" style={{ padding: '0.6rem' }}>Loading costing…</div>;
+    if (error && !serverLines) return <div style={{ padding: '0.6rem', color: 'var(--stat-red)' }}>{error}</div>;
+    if (!serverLines) return <div className="text-muted" style={{ padding: '0.6rem' }}>Loading costing…</div>;
 
-    const lines = data.lines || [];
-    // Lines only become editable once they exist as rows. A preview has no ids yet — the
-    // first edit materialises them server-side, so adding a line is always available.
     const editable = canEdit && !busy;
+    // Totals are recomputed by the server on save; until then show the last saved
+    // figure for untouched rows and leave edited ones to be re-priced.
+    const total = rows.reduce((sum, r) => sum + (r._dirty ? 0 : (r.amount_paise || 0)), 0);
+    const hasDirty = rows.some((r) => r._dirty);
 
     return (
         <div style={{ marginTop: '0.75rem' }}>
@@ -119,7 +153,7 @@ const CostEditor = ({ jobId, authHeaders, canEdit = false, onChanged }) => {
                 <strong style={{ color: 'var(--text-strong)', fontSize: '0.9rem' }}>Printing cost — as actually printed</strong>
                 {canEdit && (
                     <span className="text-muted" style={{ fontSize: '0.78rem' }}>
-                        Adjust the pages, size and colour to what really ran. ✱ marks a corrected line.
+                        Adjust the pages, size and colour to what really ran, then Save. ✱ marks a corrected line.
                     </span>
                 )}
             </div>
@@ -136,45 +170,57 @@ const CostEditor = ({ jobId, authHeaders, canEdit = false, onChanged }) => {
                         </tr>
                     </thead>
                     <tbody>
-                        {lines.map((l) => {
+                        {rows.map((l) => {
                             const isPrint = l.service_code === 'PRINT';
-                            const rowEditable = editable && !!l.id;
+                            const key = rowKey(l);
+                            // A legacy line can have no stored size/GSM/colour at all. Offer an
+                            // explicit "not set" option so the select shows the truth instead of
+                            // silently falling back to displaying its first option (A1), which
+                            // reads as a real spec the line does not actually have.
+                            const sizeOpts = [...new Set([...sizes, l.paper_size].filter(Boolean))];
+                            const gsmOpts = [...new Set([...gsmsFor(l.paper_size, l.colour_mode), l.paper_gsm].filter(Boolean))];
                             return (
-                                <tr key={l.id || `${l.service_code}-${l.detail}`}>
+                                <tr key={key}>
                                     <td style={{ fontWeight: 600 }}>
-                                        {!!l.is_manual && <span style={{ color: 'var(--stat-amber)', marginRight: '0.3rem' }} title={l.manual_reason}>✱</span>}
+                                        {(!!l.is_manual || l._dirty) && (
+                                            <span style={{ color: 'var(--stat-amber)', marginRight: '0.3rem' }}
+                                                  title={l._dirty ? 'Edited — not saved yet' : l.manual_reason}>✱</span>
+                                        )}
                                         {l.label}
                                     </td>
                                     <td>
-                                        {rowEditable ? (
+                                        {editable ? (
                                             <input className="input-field" type="number" min="0" style={{ ...CELL, width: '4rem' }}
-                                                   defaultValue={l.quantity} disabled={busy}
-                                                   onBlur={(e) => Number(e.target.value) !== Number(l.quantity)
-                                                       && patchLine(l, { quantity: e.target.value })}
-                                                   onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }} />
+                                                   value={l.quantity ?? ''}
+                                                   onChange={(e) => patchRow(key, { quantity: e.target.value })} />
                                         ) : l.quantity}
                                     </td>
                                     <td>
-                                        {rowEditable && isPrint && sizes.length ? (
-                                            <select className="input-field" style={{ ...CELL, width: '3.8rem' }} value={l.paper_size || ''}
-                                                    disabled={busy} onChange={(e) => patchLine(l, { paper_size: e.target.value })}>
-                                                {[...new Set([...sizes, l.paper_size].filter(Boolean))].map((s) => <option key={s}>{s}</option>)}
+                                        {editable && isPrint ? (
+                                            <select className="input-field" style={{ ...CELL, width: '3.8rem' }}
+                                                    value={l.paper_size || NOT_SET}
+                                                    onChange={(e) => patchRow(key, { paper_size: e.target.value === NOT_SET ? null : e.target.value })}>
+                                                {!l.paper_size && <option value={NOT_SET}>—</option>}
+                                                {sizeOpts.map((s) => <option key={s} value={s}>{s}</option>)}
                                             </select>
                                         ) : (l.paper_size || '—')}
                                     </td>
                                     <td>
-                                        {rowEditable && isPrint ? (
-                                            <select className="input-field" style={{ ...CELL, width: '3.8rem' }} value={l.paper_gsm || ''}
-                                                    disabled={busy} onChange={(e) => patchLine(l, { paper_gsm: e.target.value })}>
-                                                {[...new Set([...gsmsFor(l.paper_size, l.colour_mode), l.paper_gsm].filter(Boolean))]
-                                                    .map((g) => <option key={g}>{g}</option>)}
+                                        {editable && isPrint ? (
+                                            <select className="input-field" style={{ ...CELL, width: '3.8rem' }}
+                                                    value={l.paper_gsm || NOT_SET}
+                                                    onChange={(e) => patchRow(key, { paper_gsm: e.target.value === NOT_SET ? null : e.target.value })}>
+                                                {!l.paper_gsm && <option value={NOT_SET}>—</option>}
+                                                {gsmOpts.map((g) => <option key={g} value={g}>{g}</option>)}
                                             </select>
                                         ) : (l.paper_gsm || '—')}
                                     </td>
                                     <td>
-                                        {rowEditable && isPrint ? (
-                                            <select className="input-field" style={{ ...CELL, width: '4.2rem' }} value={l.colour_mode || ''}
-                                                    disabled={busy} onChange={(e) => patchLine(l, { colour_mode: e.target.value })}>
+                                        {editable && isPrint ? (
+                                            <select className="input-field" style={{ ...CELL, width: '4.2rem' }}
+                                                    value={l.colour_mode || NOT_SET}
+                                                    onChange={(e) => patchRow(key, { colour_mode: e.target.value === NOT_SET ? null : e.target.value })}>
+                                                {!l.colour_mode && <option value={NOT_SET}>—</option>}
                                                 <option value="BW">B/W</option>
                                                 <option value="COLOUR">Colour</option>
                                             </select>
@@ -182,21 +228,28 @@ const CostEditor = ({ jobId, authHeaders, canEdit = false, onChanged }) => {
                                     </td>
                                     <td style={{ textAlign: 'right', fontFamily: 'monospace',
                                                  color: l.unpriced ? 'var(--stat-amber)' : 'var(--text-strong)' }}>
-                                        {l.rate_display}
+                                        {l._dirty ? <span className="text-muted">on save</span> : l.rate_display}
                                     </td>
-                                    <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 600 }}>{l.amount_display}</td>
+                                    <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 600 }}>
+                                        {l._dirty ? <span className="text-muted">on save</span> : l.amount_display}
+                                    </td>
                                     {editable && (
                                         <td style={{ textAlign: 'center' }}>
-                                            {!!l.id && <RemoveButton disabled={busy} onClick={() => removeLine(l)} />}
+                                            <RemoveButton onClick={() => dropRow(key)} />
                                         </td>
                                     )}
                                 </tr>
                             );
                         })}
+                        {rows.length === 0 && (
+                            <tr><td colSpan={editable ? 8 : 7} className="text-muted" style={{ textAlign: 'center', padding: '1.2rem' }}>
+                                No lines. Add what was printed, or discard to restore.
+                            </td></tr>
+                        )}
                         <tr>
                             <td colSpan={editable ? 6 : 5} style={{ textAlign: 'right', fontWeight: 700 }}>Total</td>
                             <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: 'var(--text-strong)' }}>
-                                {data.totals_display?.grandTotal ?? data.totals_display?.grand_total}
+                                {hasDirty ? <span className="text-muted" style={{ fontWeight: 400 }}>on save</span> : money(total)}
                             </td>
                             {editable && <td />}
                         </tr>
@@ -236,12 +289,29 @@ const CostEditor = ({ jobId, authHeaders, canEdit = false, onChanged }) => {
                         <label className="input-label">Colour</label>
                         <select className="input-field" style={{ ...CELL, width: '7rem' }} value={draft.colour_mode}
                                 onChange={(e) => setDraft({ ...draft, colour_mode: e.target.value })}>
-                            <option value="BW">BW</option>
-                            <option value="COLOUR">COLOUR</option>
+                            <option value="BW">B/W</option>
+                            <option value="COLOUR">Colour</option>
                         </select>
                     </div>
-                    <button className="btn btn-sm btn-primary" disabled={busy || !draft.quantity} onClick={addLine}>Add</button>
-                    <button className="btn btn-sm btn-outline" disabled={busy} onClick={() => setAdding(false)}>Cancel</button>
+                    <button className="btn btn-sm btn-primary" disabled={!draft.quantity} onClick={addRow}>Add</button>
+                    <button className="btn btn-sm btn-outline" onClick={() => setAdding(false)}>Cancel</button>
+                </div>
+            )}
+
+            {editable && (
+                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', marginTop: '1rem',
+                              paddingTop: '0.85rem', borderTop: '1px solid var(--border)' }}>
+                    <button className="btn btn-sm btn-primary" disabled={busy || !dirty} onClick={save}>
+                        {busy ? 'Saving…' : 'Save & exit'}
+                    </button>
+                    <button className="btn btn-sm btn-outline" disabled={busy} onClick={discard}>
+                        Discard changes
+                    </button>
+                    <span className="text-muted" style={{ fontSize: '0.78rem' }}>
+                        {dirty
+                            ? 'Unsaved changes — Save writes them to the annexure, Discard throws them away.'
+                            : 'No changes yet.'}
+                    </span>
                 </div>
             )}
         </div>

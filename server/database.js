@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -1061,6 +1062,13 @@ const initDatabase = () => {
   try {
     db.exec('ALTER TABLE users ADD COLUMN is_printer_coordinator INTEGER DEFAULT 0');
   } catch (_) { /* column already exists */ }
+  // Segregation of duties on the rate master. Held separately from the coordinator
+  // flag ON PURPOSE: a coordinator imports and edits rate cards, so if approving used
+  // the same flag there would be no second pair of eyes. An approved card prices every
+  // job that follows, which makes this a higher-value control than annexure sign-off.
+  try {
+    db.exec('ALTER TABLE users ADD COLUMN is_rate_approver INTEGER DEFAULT 0');
+  } catch (_) { /* column already exists */ }
 
   // ── Multi-site locations ────────────────────────────────────────────────────
   // A site/branch (e.g. Talegaon, Powai). Jobs are routed to coordinators/operators
@@ -1305,6 +1313,23 @@ const initDatabase = () => {
     )
   `);
 
+  // Who touched a draft card, so approval can exclude them. Checking only the creator
+  // would not be enough: one coordinator can create a draft and another rewrite every
+  // rate in it, and the rewriter must not then be able to approve their own figures.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS rate_card_activity (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      version_id INTEGER NOT NULL,
+      user_id    INTEGER NOT NULL,
+      action     TEXT NOT NULL,        -- import | duplicate | edit
+      detail     TEXT,
+      acted_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (version_id) REFERENCES rate_versions(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id)    REFERENCES users(id)
+    )
+  `);
+  db.run('CREATE INDEX IF NOT EXISTS idx_rate_card_activity ON rate_card_activity(version_id, user_id)');
+
   db.run(`
     CREATE TABLE IF NOT EXISTS rate_lines (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1433,6 +1458,46 @@ const initDatabase = () => {
     ON cost_annexures
     WHEN OLD.status = 'approved'
     BEGIN SELECT RAISE(ABORT, 'An approved annexure cannot be modified'); END
+  `);
+
+  // The header trigger above guards the totals, but the totals are only a summary —
+  // the figures the requestor actually signed off are the LINES. Without these an
+  // approved annexure's header stays frozen while its lines can still be rewritten,
+  // which is the same lie told more quietly: the stored SHA-256 would then no longer
+  // match the rows it was computed from.
+  //
+  // The route guard (guardEditable) already refuses this, but it is one `if` on one
+  // path. These make it true of the database itself, so a new endpoint, a script or a
+  // migration cannot quietly undo a sign-off.
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS trg_cost_line_locked_update
+    BEFORE UPDATE ON job_cost_lines
+    WHEN (SELECT status FROM cost_annexures WHERE id = OLD.annexure_id) = 'approved'
+    BEGIN SELECT RAISE(ABORT, 'Cost lines on an approved annexure cannot be changed'); END
+  `);
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS trg_cost_line_locked_delete
+    BEFORE DELETE ON job_cost_lines
+    WHEN (SELECT status FROM cost_annexures WHERE id = OLD.annexure_id) = 'approved'
+    BEGIN SELECT RAISE(ABORT, 'Cost lines on an approved annexure cannot be deleted'); END
+  `);
+  // Insert matters too: adding a line to a signed annexure inflates a total that has
+  // already been agreed, without touching any existing row.
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS trg_cost_line_locked_insert
+    BEFORE INSERT ON job_cost_lines
+    WHEN (SELECT status FROM cost_annexures WHERE id = NEW.annexure_id) = 'approved'
+    BEGIN SELECT RAISE(ABORT, 'Cost lines cannot be added to an approved annexure'); END
+  `);
+
+  // Approval is the end of the line for this version. It may only be superseded by a
+  // reissue, which creates a new draft — it can never quietly drop back to draft or
+  // under_review, because that would reopen figures the requestor has already signed.
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS trg_annexure_status_final
+    BEFORE UPDATE OF status ON cost_annexures
+    WHEN OLD.status = 'approved' AND NEW.status NOT IN ('approved', 'superseded')
+    BEGIN SELECT RAISE(ABORT, 'An approved annexure can only be superseded by a reissue'); END
   `);
 
   // ── Submission history ─────────────────────────────────────────────────────
@@ -1841,6 +1906,22 @@ const initDatabase = () => {
       saveDatabase();
     }
 
+    // Soft delete. Removing a user row left every reference to it dangling — jobs
+    // pointing at a creator who no longer exists, audit trails losing the actor. These
+    // columns were present on some databases but had no migration, so a fresh install
+    // did not get them and any query filtering on deleted_at failed outright.
+    if (!userColumnNames.includes('deleted_at')) {
+      console.log('Adding deleted_at column to users table...');
+      db.exec('ALTER TABLE users ADD COLUMN deleted_at DATETIME');
+      saveDatabase();
+    }
+
+    if (!userColumnNames.includes('deleted_by')) {
+      console.log('Adding deleted_by column to users table...');
+      db.exec('ALTER TABLE users ADD COLUMN deleted_by INTEGER');
+      saveDatabase();
+    }
+
     console.log('✓ User management columns checked/added');
   } catch (error) {
     console.error('Error adding user management columns:', error);
@@ -2052,10 +2133,22 @@ const initDatabase = () => {
     console.log('✓ Letter management tables created');
 
     // ===== Seed single Admin user (PS-based login) =====
+    // The bootstrap password is NOT hardcoded. It comes from ADMIN_SEED_PASSWORD, or
+    // is randomly generated when that is unset. A fixed, well-known default (the old
+    // 'Admin@123') is a standing invitation on any deployment where nobody changed it,
+    // and it was doubly bad here because must_change_password was 0 — so nothing ever
+    // forced it to be replaced.
+    //
+    // The generated password is printed exactly once, at the moment of creation, because
+    // otherwise the account is unreachable. must_change_password is 1, so it only works
+    // long enough to set a real one.
     try {
-      const adminPsNumber = '123455';
-      const adminEmail = 'admin@jcc.com';
-      const passwordPlain = 'Admin@123';
+      const adminPsNumber = process.env.ADMIN_SEED_PS_NUMBER || '123455';
+      const adminEmail = process.env.ADMIN_SEED_EMAIL || 'admin@jcc.com';
+      const suppliedPassword = process.env.ADMIN_SEED_PASSWORD;
+      // 18 bytes of base64url ≈ 144 bits; no ambiguous-character trimming, since this
+      // is copied once and immediately replaced.
+      const passwordPlain = suppliedPassword || `${crypto.randomBytes(18).toString('base64url')}aA1!`;
 
       // Check if the admin already exists
       const existingAdmin = db.prepare(`
@@ -2080,14 +2173,19 @@ const initDatabase = () => {
           adminEmail,
           passwordHash,
           'admin',
-          0
+          1
         ]);
 
         saveDatabase();
 
         console.log('✓ Admin user seeded');
         console.log('  PS Number:', adminPsNumber);
-        console.log('  Password :', passwordPlain);
+        if (suppliedPassword) {
+          console.log('  Password : (from ADMIN_SEED_PASSWORD)');
+        } else {
+          console.log('  Password :', passwordPlain);
+          console.log('  ^ shown once only. Sign in and change it — this account is flagged must-change-password.');
+        }
       } else {
         console.log('✓ Admin user already exists, skipping seed');
       }
