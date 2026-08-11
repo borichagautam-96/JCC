@@ -5,6 +5,12 @@ import { authenticateToken } from '../middleware/auth.js';
 import { summarise, paiseToRupees, amountInWords, milliToRate, lineAmountPaise } from '../utils/costEngine.js';
 import { itemsForDocument, itemsForRework, priceItems } from '../utils/costPrinting.js';
 import { getPendingAnnexures } from '../services/annexureCostQueue.js';
+import { buildMonthlyReport } from '../services/monthlyPrintingReport.js';
+import {
+  generateMonthlyWorkbook, workbookFilename, classifyPaperRows, describeUnmapped,
+} from '../services/monthlyPrintingExcel.js';
+import { writeReportAudit, ACTIONS } from '../services/monthlyReportAudit.js';
+import { currentMonthKeyIST } from '../utils/reportingMonth.js';
 
 const router = express.Router();
 
@@ -907,6 +913,111 @@ router.get('/annexures/pending', authenticateToken, (req, res) => {
   }
 });
 
+// ── Monthly printing report ──────────────────────────────────────────────────
+//
+// Registered before '/annexures/:no' — after it, 'monthly-report' would be read as an
+// annexure number and 404.
+//
+// The month is the IST month an annexure was APPROVED in, so a job completed on 31 July
+// and signed off on 1 August is reported in August. Superseded and unapproved versions
+// never contribute. Scope is applied before filters, so a manager clearing the filters
+// still sees only their own team.
+router.get('/annexures/monthly-report', authenticateToken, async (req, res) => {
+  try {
+    const scope = costingScope(req);
+    if (!scope) return res.status(403).json({ error: 'Printing coordinators and operators only' });
+
+    const q = req.query || {};
+    const filters = {
+      manager: q.manager, member: q.member, department: q.department,
+      debit_code: q.debit_code, project: q.project,
+    };
+    const report = buildMonthlyReport({
+      monthKey: q.month || currentMonthKeyIST(), filters, scope,
+    });
+    if (report.error) return res.status(400).json({ error: report.error });
+
+    // Which rows the template can price is decided here, not in the browser, so the
+    // preview warns about exactly what the Excel will exclude.
+    const { unmapped } = await classifyPaperRows(report.paper_rows);
+    report.unmapped_rows = unmapped.map((u) => ({ ...u, reason: 'RATE NOT CONFIGURED' }));
+    report.has_unmapped = unmapped.length > 0;
+
+    // A preview is a disclosure of costing data across a manager's team, so it is
+    // recorded — but only when it returned something, to keep the trail readable.
+    if (report.counts.jobs > 0) {
+      writeReportAudit(req, ACTIONS.PREVIEWED, report, { filters, unmapped });
+    }
+
+    res.json(report);
+  } catch (error) {
+    console.error('Error building monthly report:', error);
+    res.status(500).json({ error: 'Failed to build the monthly report' });
+  }
+});
+
+// ── Monthly report → Excel ───────────────────────────────────────────────────
+//
+// Same scope, same filters and the same buildMonthlyReport call as the preview, so the
+// file and the screen cannot disagree. Scope is resolved from the signed-in user, never
+// from the query string — changing ?manager= to somebody else's id returns their own
+// team, not theirs.
+router.get('/annexures/monthly-report/export', authenticateToken, async (req, res) => {
+  try {
+    const scope = costingScope(req);
+    if (!scope) return res.status(403).json({ error: 'Printing coordinators and operators only' });
+
+    const q = req.query || {};
+    const filters = {
+      manager: q.manager, member: q.member, department: q.department,
+      debit_code: q.debit_code, project: q.project,
+    };
+    const report = buildMonthlyReport({ monthKey: q.month || currentMonthKeyIST(), filters, scope });
+    if (report.error) return res.status(400).json({ error: report.error });
+
+    // An empty workbook would look like a month that cost nothing. Say what happened.
+    if (report.counts.jobs === 0) {
+      return res.status(404).json({
+        error: `No approved printing jobs found for ${report.month.label}.`,
+        code: 'NO_APPROVED_JOBS',
+      });
+    }
+
+    const { workbook, unmapped, jobCount } = await generateMonthlyWorkbook(report);
+
+    // Names come from the report, not the query, so a filtered file is labelled by what
+    // it actually contains.
+    const managerName = report.counts.managers === 1 ? report.managers[0]?.manager_name : null;
+    const memberName = report.counts.members === 1
+      ? report.managers[0]?.members[0]?.requestor_name : null;
+    const filename = workbookFilename(report, { managerName, memberName });
+
+    // A paper/size combination with no row in the template is reported in a header
+    // rather than dropped in silence — the file would otherwise under-report and look
+    // complete. Header values must be ASCII-safe.
+    if (unmapped.length) {
+      res.setHeader('X-Unmapped-Paper-Rows', unmapped.map(describeUnmapped)
+        .join('; ').replace(/[^\x20-\x7E]/g, '').slice(0, 400));
+    }
+
+    // Written BEFORE the response streams: once bytes are on the wire the download has
+    // happened, and a failure part-way through must not leave it unrecorded.
+    writeReportAudit(req, ACTIONS.EXPORTED, report, { filters, filename, unmapped });
+    void jobCount;
+
+    res.setHeader('Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    console.error('Error exporting monthly report:', error);
+    // Headers may already be sent once the stream starts; only respond if not.
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to generate the monthly report' });
+    else res.end();
+  }
+});
+
 // ── Send a prepared annexure to the requestor ────────────────────────────────
 //
 // The handover point in the workflow. A new annexure lands as a draft in the printing
@@ -1144,7 +1255,14 @@ router.post('/annexures/:no/approve', authenticateToken, (req, res) => {
 
     const u = db.prepare('SELECT ps_number, role FROM users WHERE id = ?').get(req.user.id) || {};
     db.transaction(() => {
-      db.prepare(`UPDATE cost_annexures SET status = 'approved', payload_sha256 = ? WHERE id = ?`).run(hash, a.id);
+      // approved_at is the reporting month's anchor, so it is written in the same
+      // transaction as the status — the two must never disagree. datetime('now') is
+      // naive UTC here, as everywhere else in this schema; the shift to IST happens at
+      // read time in monthWindowIST(), not by storing a local time.
+      db.prepare(
+        `UPDATE cost_annexures SET status = 'approved', payload_sha256 = ?, approved_at = datetime('now')
+          WHERE id = ?`
+      ).run(hash, a.id);
       db.prepare(
         `INSERT INTO annexure_approvals (annexure_id, role, user_id, employee_id, designation, department, remarks, ip_address)
          VALUES (?, 'approved', ?, ?, ?, ?, ?, ?)`

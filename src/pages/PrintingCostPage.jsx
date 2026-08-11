@@ -3,6 +3,7 @@ import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { formatDate } from '../utils/datetime';
 import CostEditor from '../components/CostEditor';
 import DatePicker from '../components/DatePicker';
+import MonthlyReportPanel from '../components/MonthlyReportPanel';
 
 // Printing cost — the entry point for the costing module.
 //
@@ -441,10 +442,11 @@ const PrintingCostPage = () => {
                         which is a separate permission. */}
                     {(canSeeRates
                         ? [['card', 'Rate Card'], ['annexures', 'Annexures'],
-                           ['pending', 'Awaiting Approval']]
+                           ['pending', 'Awaiting Approval'], ['monthly', 'Monthly Report']]
                         : isTeamViewOnly
-                            ? [['annexures', 'Annexures']]
-                            : [['annexures', 'Annexures'], ['pending', 'Awaiting Approval']])
+                            ? [['annexures', 'Annexures'], ['monthly', 'Monthly Report']]
+                            : [['annexures', 'Annexures'], ['pending', 'Awaiting Approval'],
+                               ['monthly', 'Monthly Report']])
                         .map(([key, label]) => {
                         const count = key === 'pending' ? pending.annexures.length : 0;
                         const overdue = key === 'pending' && pending.annexures.some((a) => a.overdue);
@@ -744,6 +746,10 @@ const PrintingCostPage = () => {
                         </div>
                     )
                 )}
+
+                {/* Approved work for one IST month, ready to export. The panel owns its
+                    own fetching so switching tabs does not re-query the register. */}
+                {tab === 'monthly' && <MonthlyReportPanel authHeaders={authHeaders} />}
 
                 {tab === 'annexures' && (
                     <>

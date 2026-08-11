@@ -1498,6 +1498,38 @@ const initDatabase = () => {
   db.run('CREATE INDEX IF NOT EXISTS idx_annexure_job ON cost_annexures(job_id, version)');
   db.run('CREATE INDEX IF NOT EXISTS idx_annexure_status ON cost_annexures(status, issued_at)');
 
+  // When the requestor signed the annexure off.
+  //
+  // This is what decides which month a job is reported in — not when it was raised,
+  // printed or completed. A job finished on 31 July and approved on 1 August belongs
+  // to August, because August is when the cost was agreed.
+  //
+  // The moment already exists in annexure_approvals as the row with role='approved',
+  // but reading it means a correlated subquery over a table that holds several rows
+  // per annexure (a reject-and-resend writes reviewed, returned, reviewed, approved).
+  // Denormalised here so the month filter is an indexed column comparison.
+  try { db.exec('ALTER TABLE cost_annexures ADD COLUMN approved_at DATETIME'); } catch (_) { /* exists */ }
+
+  // Backfilled from the approval trail rather than invented. MAX() picks the latest
+  // 'approved' row, which is the one that stuck if an annexure went round more than once.
+  try {
+    const filled = db.run(`
+      UPDATE cost_annexures
+         SET approved_at = (SELECT MAX(ap.acted_at) FROM annexure_approvals ap
+                             WHERE ap.annexure_id = cost_annexures.id AND ap.role = 'approved')
+       WHERE status = 'approved'
+         AND approved_at IS NULL
+         AND EXISTS (SELECT 1 FROM annexure_approvals ap
+                      WHERE ap.annexure_id = cost_annexures.id AND ap.role = 'approved')
+    `);
+    if (filled?.changes) console.log(`✓ Backfilled approved_at on ${filled.changes} annexure(s)`);
+  } catch (e) {
+    console.error('annexure approved_at backfill failed:', e.message);
+  }
+
+  // Reporting reads by approval month, so the index leads with it.
+  db.run('CREATE INDEX IF NOT EXISTS idx_annexure_approved ON cost_annexures(approved_at, status)');
+
   db.run(`
     CREATE TABLE IF NOT EXISTS annexure_approvals (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,

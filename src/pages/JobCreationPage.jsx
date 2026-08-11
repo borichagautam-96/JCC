@@ -157,6 +157,16 @@ const JobCreationPage = () => {
         return list.length ? list : FALLBACK_GSMS;
     };
 
+    // Weights the card prices for this size in the OTHER colour mode. Without this the
+    // dropdown just looks short — 300 GSM is priced for A4 in colour only, so someone
+    // on A4 B&W sees three weights and reasonably concludes the rest are missing.
+    const gsmElsewhereFor = (doc) => {
+        if (!combinations.length) return [];
+        const here = gsmOptionsFor(doc);
+        const other = colourCodeOf(doc.color_mode) === 'COLOUR' ? 'BW' : 'COLOUR';
+        return gsmsFor(combinations, doc.paper_size, other).filter((g) => !here.includes(g));
+    };
+
     const [form1, setForm1] = useState({
         employee_name: user?.name || '',
         employee_id: user?.ps_number || '',
@@ -898,6 +908,14 @@ const JobCreationPage = () => {
                                             <select className="input-field" name="paper_gsm" value={e.paper_gsm} onChange={on}>
                                                 {withLegacy(gsmOptionsFor(e), e.paper_gsm).map((o) => <option key={o} value={o}>{o}</option>)}
                                             </select>
+                                            {/* The list is filtered by size AND colour, so say what the other
+                                                mode would add. A short list otherwise reads as missing data. */}
+                                            {gsmElsewhereFor(e).length > 0 && (
+                                                <small className="text-muted" style={{ fontSize: '0.72rem', display: 'block', marginTop: '0.25rem' }}>
+                                                    {gsmElsewhereFor(e).join(', ')} GSM available in{' '}
+                                                    {colourCodeOf(e.color_mode) === 'COLOUR' ? 'B&W' : 'Colour'}
+                                                </small>
+                                            )}
                                         </div>
                                         <div className="input-group">
                                             <label className="input-label">Colour / B&amp;W</label>
