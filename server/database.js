@@ -871,6 +871,15 @@ const initDatabase = () => {
   // Existing vouchers keep deriving it; see the PDF fallback.
   try { db.exec('ALTER TABLE voucher_requests ADD COLUMN department_code TEXT'); } catch (_) { /* exists */ }
 
+  // The GST rate this claim actually carries, derived from (gross - basic) / basic.
+  //
+  // Recorded rather than recomputed on read so a reviewer sees what was charged without
+  // doing the arithmetic, and so the figure survives even if the amounts are later
+  // corrected. It is NOT an input — the invoice states basic and gross, and the rate
+  // falls out of them. Vendors charge 6%, 7.5% and other values, so nothing here
+  // validates against the statutory 0/5/12/18/28 list.
+  try { db.exec('ALTER TABLE voucher_requests ADD COLUMN gst_rate DECIMAL(6, 2)'); } catch (_) { /* exists */ }
+
   // Asset lifecycle tracking
   db.run(`
     CREATE TABLE IF NOT EXISTS assets (

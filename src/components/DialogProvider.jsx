@@ -44,6 +44,17 @@ const icons = {
             <line x1="12" y1="17" x2="12.01" y2="17" />
         </svg>
     ),
+    // A bin, for confirmations that destroy something. Every key in accentColors needs
+    // one here too — a missing entry renders no icon at all, silently.
+    danger: (
+        <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="#DC2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 6h18" />
+            <path d="M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2" />
+            <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
+            <line x1="10" y1="11" x2="10" y2="17" />
+            <line x1="14" y1="11" x2="14" y2="17" />
+        </svg>
+    ),
 };
 
 const accentColors = {
@@ -52,9 +63,20 @@ const accentColors = {
     warning: '#F59E0B',
     info: '#3B82F6',
     confirm: '#6366F1',
+    // Destructive confirmations. Without this, variant:'danger' looked up undefined and
+    // produced `linear-gradient(135deg, undefined, undefinedd)` — an invalid gradient,
+    // so the confirm button rendered with no background and white-on-white text. The
+    // dialog appeared to have a Cancel button only, making the action impossible.
+    danger: '#DC2626',
 };
 
+// Any variant the palette does not know falls back to 'confirm' rather than producing
+// `undefined` inside a CSS gradient. A mistyped variant should look wrong, not erase
+// the button someone needs to click.
+const toneOf = (variant) => (accentColors[variant] ? variant : 'confirm');
+
 const bgTints = {
+    danger: 'rgba(220,38,38,0.08)',
     success: 'rgba(16,185,129,0.08)',
     error: 'rgba(239,68,68,0.08)',
     warning: 'rgba(245,158,11,0.08)',
@@ -224,9 +246,9 @@ const DialogBox = ({ dialog, onClose }) => {
     const isConfirm = dialog.type === 'confirm';
     // Prompt shares the confirm two-button layout; cancel resolves to null.
     const twoButton = isConfirm || isPrompt;
-    const visualType = isConfirm ? (dialog.variant || 'confirm')
+    const visualType = toneOf(isConfirm ? (dialog.variant || 'confirm')
         : isPrompt ? (dialog.variant || 'confirm')
-        : (dialog.variant || detectAlertType(dialog.message));
+        : (dialog.variant || detectAlertType(dialog.message)));
 
     const titleText = dialog.title || (isConfirm ? 'Confirm Action' :
         visualType === 'success' ? 'Success' :

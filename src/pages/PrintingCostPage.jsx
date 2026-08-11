@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth, getDeviceId } from '../contexts/AuthContext';
 import { formatDate } from '../utils/datetime';
 import CostEditor from '../components/CostEditor';
+import DatePicker from '../components/DatePicker';
 
 // Printing cost — the entry point for the costing module.
 //
@@ -127,8 +128,8 @@ const ImportPanel = ({ busy, info, onUpload, onClose }) => {
                 </div>
                 <div className="input-group">
                     <label className="input-label">Effective from</label>
-                    <input className="input-field" type="date"
-                           value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} />
+                    <DatePicker name="effective_from" value={effectiveFrom}
+                                onChange={(e) => setEffectiveFrom(e.target.value)} />
                 </div>
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.85rem' }}>
@@ -794,13 +795,16 @@ const PrintingCostPage = () => {
                                     ))}
                                 </select>
                                 {/* Bound on completion date — a cost report is about when the
-                                    work finished, not when it was requested. */}
-                                <input className="input-field" type="date" title="Completed from"
-                                       value={filters.from}
-                                       onChange={(e) => setFilters((f) => ({ ...f, from: e.target.value }))} />
-                                <input className="input-field" type="date" title="Completed to"
-                                       value={filters.to}
-                                       onChange={(e) => setFilters((f) => ({ ...f, to: e.target.value }))} />
+                                    work finished, not when it was requested.
+                                    DatePicker rather than <input type="date">: the native
+                                    popup cannot be styled, so it looked nothing like the
+                                    rest of the app. It emits the same
+                                    { target: { name, value } } shape, so the handlers below
+                                    are unchanged. */}
+                                <DatePicker name="from" value={filters.from} placeholder="Completed from"
+                                            onChange={(e) => setFilters((f) => ({ ...f, from: e.target.value }))} />
+                                <DatePicker name="to" value={filters.to} placeholder="Completed to"
+                                            onChange={(e) => setFilters((f) => ({ ...f, to: e.target.value }))} />
                             </div>
                             {activeFilterCount > 0 && (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.7rem' }}>

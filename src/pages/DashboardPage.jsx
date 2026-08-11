@@ -454,7 +454,7 @@ const DashboardPage = () => {
                             {isAdmin ? 'All Assigned Invoices' : 'Invoices Assigned to You'}
                         </h3>
 
-                        <div className="table-container">
+                        <div className="table-container table-scroll">
                             <table className="table">
                                 <thead>
                                     <tr>
@@ -540,7 +540,7 @@ const DashboardPage = () => {
                         </select>
                     </div>
 
-                    <div className="table-container">
+                    <div className="table-container table-scroll">
                         <table className="table">
                             <thead>
                                 <tr>
@@ -582,7 +582,7 @@ const DashboardPage = () => {
                 <div className="glass-card" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
                     <h3 className="mb-lg" style={{ color: 'var(--text-strong)', fontSize: '1.25rem', fontWeight: 600 }}>PO Budget Tracking</h3>
 
-                    <div className="table-container">
+                    <div className="table-container table-scroll">
                         <table className="table">
                             <thead>
                                 <tr>

@@ -9,7 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import db from '../database.js';
-import { parseVoucherMaterials } from '../routes/jcc.js';
+import { parseVoucherMaterials, deriveGstRate } from '../routes/jcc.js';
 
 const uniq = () => `vm-${process.pid}-${Number(process.hrtime.bigint() % 1000000n)}`;
 
@@ -126,4 +126,62 @@ test('both codes are accepted, and only those two', () => {
   const allowed = ['3559', '3998'];
   assert.deepEqual(allowed.filter((c) => ['3559', '3998'].includes(c)), allowed);
   assert.equal(['3559', '3998'].includes('3988'), false, '3988 was a typo and is not a real code');
+});
+
+// ── GST rate ────────────────────────────────────────────────────────────────────
+// The rate is arithmetic over the two amounts the invoice states, never an input.
+// It used to be hardcoded: typing Basic overwrote Gross with Basic × 1.18, which
+// silently corrupted every invoice not taxed at 18%.
+
+test('the rate is derived from the two amounts, whatever the vendor charged', () => {
+  // 6% and 7.5% are the cases the old fixed-18% behaviour destroyed, and that a
+  // statutory 0/5/12/18/28 dropdown would have rejected outright.
+  assert.equal(deriveGstRate('10000', '10600'), 6);
+  assert.equal(deriveGstRate('10000', '10750'), 7.5);
+  assert.equal(deriveGstRate('10000', '11800'), 18);
+  assert.equal(deriveGstRate('10000', '12800'), 28);
+});
+
+test('a fractional rate keeps two decimals rather than rounding to a whole number', () => {
+  // 7.5 must not become 8, and 2.25 must not become 2 — both misreport the tax.
+  assert.equal(deriveGstRate('400', '409'), 2.25);
+  assert.equal(deriveGstRate('1000', '1075'), 7.5);
+});
+
+test('a zero-rated invoice derives 0, not null', () => {
+  // Exempt purchases are real. 0 means "no tax charged"; null means "cannot tell".
+  assert.equal(deriveGstRate('5000', '5000'), 0);
+});
+
+test('missing or nonsensical amounts derive null rather than a wrong number', () => {
+  assert.equal(deriveGstRate('', '11800'), null);
+  assert.equal(deriveGstRate('10000', ''), null);
+  assert.equal(deriveGstRate('0', '11800'), null, 'dividing by a zero basic must not yield Infinity');
+  assert.equal(deriveGstRate('abc', 'def'), null);
+  assert.equal(deriveGstRate(null, null), null);
+});
+
+test('amounts with currency formatting still derive correctly', () => {
+  // OCR and pasted values arrive with symbols and separators attached.
+  assert.equal(deriveGstRate('₹10,000.00', '₹11,800.00'), 18);
+});
+
+test('a swapped pair derives a negative rate rather than pretending it is valid', () => {
+  // Gross below Basic is a user error. Surfacing it as negative lets the UI warn;
+  // silently clamping to 0 would hide the mistake.
+  assert.ok(deriveGstRate('11800', '10000') < 0);
+});
+
+test('the derived rate is stored on the voucher', () => {
+  const uid = db.prepare('SELECT id FROM users WHERE deleted_at IS NULL LIMIT 1').get().id;
+  const voucherId = Number(db.prepare(
+    `INSERT INTO voucher_requests (user_id, claimed_by, department, supplier, description, status,
+                                   basic_amount, gross_amount, gst_rate)
+     VALUES (?, ?, 'Eng', 'ACME', 'test', 'draft', '10000', '10600', ?)`
+  ).run(uid, `Test ${uniq()}`, deriveGstRate('10000', '10600')).lastInsertRowid);
+
+  const row = db.prepare('SELECT gst_rate FROM voucher_requests WHERE id = ?').get(voucherId);
+  assert.equal(Number(row.gst_rate), 6);
+
+  db.prepare('DELETE FROM voucher_requests WHERE id = ?').run(voucherId);
 });

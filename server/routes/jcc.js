@@ -193,6 +193,18 @@ const normalizeDuplicateCsvPair = (value) => {
 // Exported for tests. This parser is where descriptionOfMaterial was once lost: it
 // accepts several body shapes, and a field missing from any one of them disappears
 // without an error. Testing it directly is the only way to pin every shape.
+// The GST rate a claim carries, derived from the two amounts rather than accepted
+// from the form. Basic and gross are what the invoice states; the rate is arithmetic
+// over them, so taking it as an input would allow a stored rate that contradicts the
+// figures it is supposed to describe. Returns null when it cannot be computed.
+export const deriveGstRate = (basic, gross) => {
+  const b = Number(String(basic ?? '').replace(/[^0-9.-]/g, ''));
+  const g = Number(String(gross ?? '').replace(/[^0-9.-]/g, ''));
+  if (!Number.isFinite(b) || !Number.isFinite(g) || b <= 0 || g <= 0) return null;
+  // Two decimals: 7.5% and 2.25% are real rates and must not round to 8% or 2%.
+  return Math.round(((g - b) / b) * 10000) / 100;
+};
+
 // Department codes cost may be booked against. Mirrors src/constants/departments.js —
 // the server must not trust whatever the form posts, since this routes real money.
 const VALID_DEPARTMENT_CODES = ['3559', '3998'];
@@ -1664,7 +1676,7 @@ router.post('/create-voucher', authenticateToken, authorizeRoles('initiator', 'u
     // Insert into voucher_requests table with sequential approval
     const result = db.prepare(`
         INSERT INTO voucher_requests (
-          user_id, claimed_by, department, department_code, claimed_date,
+          user_id, claimed_by, department, department_code, gst_rate, claimed_date,
           supplier, buyer_name, buyer_email, expense_booking_location, description,
           invoice_number, invoice_date, basic_amount, gross_amount,
           nature_of_expenses, po_number, project_code, project_name,
@@ -1673,7 +1685,7 @@ router.post('/create-voucher', authenticateToken, authorizeRoles('initiator', 'u
           approver1_name, approver2_name,
           approver1_status, approver2_status,
           current_approval_level, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_approval_1')
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_approval_1')
       `).run(
       req.user.id,
       claimedBy,
@@ -1683,6 +1695,7 @@ router.post('/create-voucher', authenticateToken, authorizeRoles('initiator', 'u
       VALID_DEPARTMENT_CODES.includes(String(departmentCode ?? '').trim())
         ? String(departmentCode).trim()
         : null,
+      deriveGstRate(basicAmount, grossAmount),
       normalizedClaimedDate,
       supplier,
       buyerName,
@@ -3082,6 +3095,9 @@ router.post('/vouchers/:id/resubmit', authenticateToken, (req, res) => {
         description = ?,
         gross_amount = ?,
         basic_amount = ?,
+        -- Recomputed alongside the amounts. A stored rate that still described the
+        -- previous figures would be worse than none at all.
+        gst_rate = ?,
         po_number = ?,
         invoice_number = ?,
         payment_status = 'awaiting_approval',
@@ -3108,6 +3124,7 @@ router.post('/vouchers/:id/resubmit', authenticateToken, (req, res) => {
       description,
       gross_amount || voucher.gross_amount,
       basic_amount || voucher.basic_amount,
+      deriveGstRate(basic_amount || voucher.basic_amount, gross_amount || voucher.gross_amount),
       po_number || voucher.po_number,
       invoice_number || voucher.invoice_number,
       voucherId
@@ -3259,11 +3276,15 @@ router.post('/vouchers/:id/respond-info', authenticateToken, (req, res) => {
     };
 
     if (returnLevel === 2) {
-      db.prepare(`UPDATE voucher_requests SET description=?, gross_amount=?, basic_amount=?, po_number=?, invoice_number=?, info_response_note=?, status='pending_approval_2', current_approval_level=2, approver2_status='pending', approver2_remark=NULL, approver2_date=NULL, approval_nonce=COALESCE(approval_nonce,0)+1 WHERE id=?`)
-        .run(merged.description, merged.gross_amount, merged.basic_amount, merged.po_number, merged.invoice_number, note, voucherId);
+      db.prepare(`UPDATE voucher_requests SET description=?, gross_amount=?, basic_amount=?, gst_rate=?, po_number=?, invoice_number=?, info_response_note=?, status='pending_approval_2', current_approval_level=2, approver2_status='pending', approver2_remark=NULL, approver2_date=NULL, approval_nonce=COALESCE(approval_nonce,0)+1 WHERE id=?`)
+        .run(merged.description, merged.gross_amount, merged.basic_amount,
+             deriveGstRate(merged.basic_amount, merged.gross_amount),
+             merged.po_number, merged.invoice_number, note, voucherId);
     } else {
-      db.prepare(`UPDATE voucher_requests SET description=?, gross_amount=?, basic_amount=?, po_number=?, invoice_number=?, info_response_note=?, status='pending_approval_1', current_approval_level=1, approver1_status='pending', approver1_remark=NULL, approver1_date=NULL, approval_nonce=COALESCE(approval_nonce,0)+1 WHERE id=?`)
-        .run(merged.description, merged.gross_amount, merged.basic_amount, merged.po_number, merged.invoice_number, note, voucherId);
+      db.prepare(`UPDATE voucher_requests SET description=?, gross_amount=?, basic_amount=?, gst_rate=?, po_number=?, invoice_number=?, info_response_note=?, status='pending_approval_1', current_approval_level=1, approver1_status='pending', approver1_remark=NULL, approver1_date=NULL, approval_nonce=COALESCE(approval_nonce,0)+1 WHERE id=?`)
+        .run(merged.description, merged.gross_amount, merged.basic_amount,
+             deriveGstRate(merged.basic_amount, merged.gross_amount),
+             merged.po_number, merged.invoice_number, note, voucherId);
     }
 
     const approverName = returnLevel === 2 ? voucher.approver2_name : voucher.approver1_name;

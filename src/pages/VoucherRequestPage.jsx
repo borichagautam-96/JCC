@@ -295,13 +295,36 @@ const VoucherRequestPage = () => {
         }
     };
 
-    const deleteDraft = async (id) => {
+    // Two callers, and only one of them should ask.
+    //
+    // The user clicking the bin is discarding work they may still want, and the draft
+    // is the only copy — so it confirms. The post-submit cleanup is housekeeping on a
+    // draft that has already become a real claim; prompting there would ask someone to
+    // approve deleting something they just successfully submitted.
+    const deleteDraft = async (id, { confirm = false } = {}) => {
+        if (!id) return;
+        if (confirm) {
+            const ok = await dialog.confirm(
+                'Discard this saved draft? Anything not yet submitted will be lost.',
+                { title: 'Delete draft', confirmLabel: 'Yes, delete', variant: 'danger' }
+            );
+            if (!ok) return;
+        }
         try {
-            await fetch(`/api/jcc/drafts/${id}`, { method: 'DELETE', headers: authHeaders() });
+            const res = await fetch(`/api/jcc/drafts/${id}`, { method: 'DELETE', headers: authHeaders() });
+            if (!res.ok) throw new Error('The draft could not be deleted.');
             if (id === draftId) { draftIdRef.current = null; setDraftId(null); }
             loadDrafts();
+            // Only speak up when a person asked; silent success after submit is correct.
+            if (confirm) {
+                setDraftStatus('Draft deleted');
+                setTimeout(() => setDraftStatus(''), 4000);
+            }
         } catch (err) {
             console.error('Delete draft error:', err);
+            // The old version swallowed every failure, so a draft that was still on the
+            // server looked gone until the next reload brought it back.
+            if (confirm) await dialog.alert(err.message, { title: 'Could not delete', variant: 'error' });
         }
     };
 
@@ -349,19 +372,18 @@ const VoucherRequestPage = () => {
     };
 
     // GST auto-split: when a GST rate is chosen, derive Basic from Gross (or Gross from Basic)
-    const applyGstRate = (rate) => {
-        setGstRate(rate);
-        const r = parseFloat(rate);
-        if (!(r > 0)) return;
+    // One direction: Basic + rate → Gross.
+    //
+    // Basic is the required field and the one people have, so the reverse calculation
+    // was answering a question nobody asked. It fires only on click — applying as the
+    // rate is typed would overwrite Gross mid-keystroke ("1" before "18"), which is the
+    // same class of bug as the old automatic 1.18 fill.
+    const applyGstToGross = () => {
+        const r = parseFloat(gstRate);
         const basic = parseFloat(formData.basicAmount);
-        const gross = parseFloat(formData.grossAmount);
-        if (gross > 0) {
-            const derivedBasic = gross / (1 + r / 100);
-            setFormData(prev => ({ ...prev, basicAmount: derivedBasic.toFixed(2) }));
-        } else if (basic > 0) {
-            const derivedGross = basic * (1 + r / 100);
-            setFormData(prev => ({ ...prev, grossAmount: derivedGross.toFixed(2) }));
-        }
+        if (!(r >= 0) || !(basic > 0)) return;
+        formTouched.current = true;
+        setFormData(prev => ({ ...prev, grossAmount: (basic * (1 + r / 100)).toFixed(2) }));
     };
 
 
@@ -565,16 +587,14 @@ const VoucherRequestPage = () => {
             setFormData({ ...formData, [name]: checked });
             return;
         }
-        // Auto-apply 18% GST: typing the Basic Amount fills Gross = Basic + 18%.
-        if (name === 'basicAmount') {
-            const b = parseFloat(value);
-            setFormData(prev => ({
-                ...prev,
-                basicAmount: value,
-                grossAmount: b > 0 ? (b * 1.18).toFixed(2) : '',
-            }));
-            return;
-        }
+        // Basic no longer rewrites Gross.
+        //
+        // It used to fill Gross = Basic × 1.18 on every keystroke, which silently
+        // corrupted any invoice not taxed at 18%: a vendor charging 6% had their Gross
+        // replaced the moment Basic was touched, and unless the user noticed and retyped
+        // it the claim was submitted misstating the tax. Both figures are printed on the
+        // invoice — the form's job is to record them, not to guess one from the other.
+        // The rate is derived from the two amounts and shown below the fields.
         setFormData({ ...formData, [name]: value });
     };
 
@@ -1175,7 +1195,7 @@ const VoucherRequestPage = () => {
                             ))}
                         </select>
                         {draftId && (
-                            <button type="button" className="btn btn-outline btn-sm" title="Delete the current draft" onClick={() => deleteDraft(draftId)}>
+                            <button type="button" className="btn btn-outline btn-sm" title="Delete the current draft" onClick={() => deleteDraft(draftId, { confirm: true })}>
                                 🗑
                             </button>
                         )}
@@ -1529,28 +1549,40 @@ const VoucherRequestPage = () => {
                             </div>
                         </div>
 
-                        {/* GST @ 18% — Gross auto-fills as you type Basic. Button also
-                            works the other way (fills Basic from a typed Gross). */}
-                        <div style={{ marginTop: '0.75rem', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
-                            <span style={{ fontSize: '0.82rem', color: 'var(--text-body)' }}>GST @</span>
-                            <button
-                                type="button"
-                                onClick={() => applyGstRate('18')}
-                                className="btn btn-sm"
-                                style={{
-                                    padding: '3px 12px',
-                                    fontSize: '0.8rem',
-                                    border: '1px solid var(--border-strong)',
-                                    background: '#0066CC',
-                                    color: '#FFFFFF',
-                                    borderRadius: '6px',
-                                }}
-                            >
-                                18%
-                            </button>
-                            <span style={{ fontSize: '0.76rem', color: 'var(--text-faint)' }}>
-                                Gross fills automatically as you type Basic. (Click 18% to fill Basic from a Gross you entered.)
+                        {/* An optional calculator, not a rule. For someone whose invoice
+                            shows only the pre-tax figure. The rate is typed rather than
+                            picked from a list, because vendors charge 6%, 7.5% and other
+                            values a statutory list would reject. Applying on click rather
+                            than on change is deliberate: filling as the rate is typed
+                            would write Gross at 1% on the way to 18%. */}
+                        <div style={{ marginTop: '0.9rem', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ fontSize: '0.82rem', color: 'var(--text-body)' }}>
+                                No Gross on the invoice? Add GST @
                             </span>
+                            <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                max="100"
+                                value={gstRate}
+                                onChange={(e) => setGstRate(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyGstToGross(); } }}
+                                placeholder="18"
+                                aria-label="GST rate percent"
+                                style={{
+                                    width: '72px', padding: '4px 8px', fontSize: '0.82rem',
+                                    border: '1px solid var(--border-strong)', borderRadius: '6px',
+                                    background: 'var(--surface)', color: 'var(--text-body)',
+                                }}
+                            />
+                            <span style={{ fontSize: '0.82rem', color: 'var(--text-body)' }}>%</span>
+                            <button type="button" className="btn btn-sm btn-primary"
+                                    style={{ padding: '3px 14px', fontSize: '0.78rem' }}
+                                    disabled={!(parseFloat(gstRate) >= 0) || !(parseFloat(formData.basicAmount) > 0)}
+                                    title="Fills Gross Amount with Basic + GST"
+                                    onClick={applyGstToGross}>
+                                Apply
+                            </button>
                         </div>
 
                         {/* Live tax hint — reassures the user they filled the two amounts the right way round */}
@@ -1572,10 +1604,20 @@ const VoucherRequestPage = () => {
                                 );
                             }
                             const tax = gross - basic;
-                            const pct = ((tax / basic) * 100).toFixed(1);
+                            // Two decimals, not one: 7.5% and 2.25% are real rates, and
+                            // rounding them to 8% or 2% would misreport what was charged.
+                            const pct = (tax / basic) * 100;
+                            // Implausible, not merely unusual. 6% and 7.5% are ordinary;
+                            // 340% is a typo. Flagged, never blocked — real invoices carry
+                            // cess, mixed rates and rounding that no rule should reject.
+                            const implausible = pct > 100;
                             return (
-                                <p style={{ marginTop: '0.75rem', fontSize: '0.82rem', color: '#047857', fontWeight: 500 }}>
-                                    ✓ GST / Tax = Gross − Basic = ₹{tax.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({pct}% of Basic)
+                                <p style={{ marginTop: '0.75rem', fontSize: '0.82rem', fontWeight: 500,
+                                            color: implausible ? '#B45309' : '#047857' }}>
+                                    {implausible ? '⚠' : '✓'} GST / Tax = Gross − Basic = ₹
+                                    {tax.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    {' '}({pct.toFixed(2)}% of Basic)
+                                    {implausible && ' — that is unusually high; check the two amounts are the right way round.'}
                                 </p>
                             );
                         })()}
